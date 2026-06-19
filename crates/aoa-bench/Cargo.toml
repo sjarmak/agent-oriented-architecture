@@ -1,0 +1,15 @@
+[package]
+name = "aoa-bench"
+description = "Loader that turns codeprobe-mined task dirs into AOA task inputs (contamination-free held-out substrate)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aoa-gap = { path = "../aoa-gap" }
+aoa-metrics = { path = "../aoa-metrics" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+toml = { version = "1.1.2", default-features = false, features = ["parse", "serde"] }
