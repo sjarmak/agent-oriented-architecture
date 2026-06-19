@@ -1,10 +1,12 @@
 mod audit;
+mod codeprobe;
 mod eval;
 mod eval_run;
 mod falsify;
 mod lint;
 mod observe;
 mod policy;
+mod r0b;
 
 pub use audit::run as run_audit;
 pub use eval::run as run_eval;

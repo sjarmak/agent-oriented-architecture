@@ -92,6 +92,10 @@ pub enum EvalCommand {
 
     /// Post-process a codeprobe run into per-task AOA metric records.
     Run(EvalRunArgs),
+
+    /// R0b held-out integrity: compose the AOA leakage canary over two
+    /// dual-verifier codeprobe runs (baseline vs migrated).
+    R0b(R0bArgs),
 }
 
 #[derive(Debug, Args)]
@@ -142,6 +146,34 @@ pub struct EvalRunArgs {
     /// graph source the symbol graph degrades to zero weight (R0-ineligible).
     #[arg(long, value_name = "DIR")]
     pub repo: Option<PathBuf>,
+
+    /// Emit the structured JSON rendering instead of human text.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct R0bArgs {
+    /// Baseline codeprobe run directory (dual-verifier `dual_composite` scoring):
+    /// the config-label dir holding `<task_id>/scoring.json` subtrees.
+    #[arg(long, value_name = "DIR")]
+    pub baseline: PathBuf,
+
+    /// Migrated codeprobe run directory, same layout as `--baseline`.
+    #[arg(long, value_name = "DIR")]
+    pub migrated: PathBuf,
+
+    /// codeprobe task-source dir (one `<task_id>/` per task) supplying each
+    /// task's oracle via the bench loader. Used to classify held-out provenance;
+    /// a run whose tasks have no independent held-out leg yields gap:unavailable.
+    #[arg(long, value_name = "DIR")]
+    pub tasks: PathBuf,
+
+    /// Canary manifest JSON: `[{"id": "<task_id>", "expected_held_out": <bool>}]`.
+    /// Each entry is a known held-out probe whose clean expectation is declared by
+    /// the operator; an observed held-out outcome that diverges is a leakage flip.
+    #[arg(long, value_name = "FILE")]
+    pub canary: Option<PathBuf>,
 
     /// Emit the structured JSON rendering instead of human text.
     #[arg(long)]

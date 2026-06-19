@@ -8,7 +8,7 @@ use aoa_gap::RunResult;
 use aoa_trace::TraceReport;
 
 use crate::cli::{EvalArgs, EvalCommand};
-use crate::commands::eval_run;
+use crate::commands::{eval_run, r0b};
 use crate::output::{print_human, print_json};
 
 /// Dispatch the eval sub-commands.
@@ -17,6 +17,7 @@ pub fn run(args: &EvalArgs) -> Result<i32> {
         EvalCommand::ValidateTrace(a) => validate_trace(&a.file, a.json),
         EvalCommand::Compare(a) => compare(&a.baseline, &a.migrated, a.json),
         EvalCommand::Run(a) => eval_run::run(a),
+        EvalCommand::R0b(a) => r0b::run(a),
     }
 }
 

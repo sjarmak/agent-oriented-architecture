@@ -31,7 +31,7 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use aoa_bench::load_task;
@@ -47,6 +47,7 @@ use aoa_scip_graph::{build_symbol_graph, degraded, IndexSource, IndexedRepo};
 use aoa_trace::{SpanType, Trace};
 
 use crate::cli::EvalRunArgs;
+use crate::commands::codeprobe::discover_tasks;
 use crate::output::{print_human, print_json};
 
 /// Mutation-surface reachability depth and retrieval cutoff. Fixed to the value
@@ -175,46 +176,6 @@ fn build_graph(args: &EvalRunArgs) -> IndexedRepo {
                 .to_string(),
         )),
     }
-}
-
-/// List the `<task_id>` subdirectories of the run dir that look like trials.
-///
-/// A trial dir is identified by EITHER per-trial artifact: codeprobe always
-/// writes `scoring.json` but writes `agent_output.txt` only when the agent
-/// produced stdout. Keying on either means a trial that is missing its
-/// transcript is still discovered — and then fails loud in [`process_task`] —
-/// rather than being silently skipped.
-fn discover_tasks(run_dir: &Path) -> Result<Vec<String>> {
-    let entries = std::fs::read_dir(run_dir)
-        .with_context(|| format!("failed to read codeprobe run dir {}", run_dir.display()))?;
-
-    let mut task_ids: Vec<String> = Vec::new();
-    for entry in entries {
-        let entry =
-            entry.with_context(|| format!("failed to read entry in {}", run_dir.display()))?;
-        // `DirEntry::file_type` does NOT follow symlinks: a symlinked directory
-        // must not pull in per-trial artifacts from outside the run tree.
-        let file_type = entry
-            .file_type()
-            .with_context(|| format!("failed to stat entry in {}", run_dir.display()))?;
-        if !file_type.is_dir() {
-            continue;
-        }
-        let dir = entry.path();
-        if dir.join("scoring.json").is_file() || dir.join("agent_output.txt").is_file() {
-            task_ids.push(entry.file_name().to_string_lossy().into_owned());
-        }
-    }
-    task_ids.sort();
-
-    if task_ids.is_empty() {
-        bail!(
-            "no task trials found under {}: expected <task_id>/ subdirs with scoring.json \
-             or agent_output.txt (point --codeprobe-run at a run's config-label directory)",
-            run_dir.display()
-        );
-    }
-    Ok(task_ids)
 }
 
 /// Build one task's metric record, or fail loud for this trial.

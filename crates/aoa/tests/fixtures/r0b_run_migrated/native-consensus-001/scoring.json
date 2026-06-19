@@ -1,0 +1,1 @@
+{"score":1.0,"reward":1.0,"status":"completed","passed":true,"scorer_family":"dual_composite","score_direct":1.0,"score_artifact":1.0,"passed_direct":true,"passed_artifact":true,"scoring_policy":"min","sub_scores":{"composite":1.0,"score_direct":1.0,"score_artifact":1.0,"scoring_policy":"min"}}
