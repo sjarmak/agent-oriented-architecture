@@ -152,6 +152,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "aoa-scip-graph"
+version = "0.1.0"
+dependencies = [
+ "aoa-metrics",
+ "aoa-trace",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "aoa-trace"
 version = "0.1.0"
 dependencies = [
