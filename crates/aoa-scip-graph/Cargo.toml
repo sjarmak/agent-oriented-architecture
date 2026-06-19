@@ -1,5 +1,6 @@
 [package]
 name = "aoa-scip-graph"
+description = "Index a target repo into an aoa_metrics::SymbolGraph (SCIP high-confidence, AST best-effort, or degraded) with R15 confidence tiering."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

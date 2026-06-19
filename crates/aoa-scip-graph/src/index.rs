@@ -16,6 +16,12 @@ pub struct IndexedRepo {
     pub graph: SymbolGraph,
     pub gold_set: BTreeSet<String>,
     pub invariant_set: BTreeSet<String>,
+    /// Why the repo degraded, when it did. `Some(reason)` carries the rendered
+    /// root-cause [`crate::ScipGraphError`] for a read/parse failure; `None`
+    /// means the source succeeded, or degraded only because it produced no
+    /// nodes. Lets a caller distinguish a misconfigured index from a legitimately
+    /// empty repo without re-running the source-specific entry point.
+    pub degrade_reason: Option<String>,
 }
 
 /// Which index source to read for a repo.
@@ -32,9 +38,11 @@ pub enum IndexSource<'a> {
 /// On a read or parse failure — or a source that produces no nodes — the repo is
 /// reported as [`IndexQuality::Degraded`] rather than erroring, so a broken index
 /// silently lowers weight and loses its R0 vote instead of aborting scoring. The
-/// degraded outcome is the explicit fallback contract of this entry point; the
-/// source-specific functions still surface their errors for callers that need
-/// them.
+/// degraded outcome is the explicit fallback contract of this entry point, but the
+/// root cause is not discarded: a failure is rendered into
+/// [`IndexedRepo::degrade_reason`] so a misconfigured index is distinguishable from
+/// a legitimately empty repo. The source-specific functions still surface the typed
+/// error for callers that need it.
 pub fn build_symbol_graph(source: IndexSource<'_>) -> IndexedRepo {
     let indexed = match source {
         IndexSource::Scip { index_path } => index_with_scip(index_path),
@@ -43,15 +51,20 @@ pub fn build_symbol_graph(source: IndexSource<'_>) -> IndexedRepo {
 
     match indexed {
         Ok(repo) if !repo.graph.nodes.is_empty() => repo,
-        _ => degraded(),
+        // Empty graph from a source that read cleanly: degraded, but no error.
+        Ok(_) => degraded(None),
+        // Read/parse failure: degrade, but preserve the root cause for diagnostics.
+        Err(e) => degraded(Some(e.to_string())),
     }
 }
 
 /// The degraded sentinel: an empty graph marked [`IndexQuality::Degraded`].
 ///
 /// Per R15 this weighs zero and is ineligible for R0; `aoa-metrics` enforces
-/// those consequences from the `quality` field alone.
-pub fn degraded() -> IndexedRepo {
+/// those consequences from the `quality` field alone. `reason` records the
+/// root-cause error when the degradation came from a failure (see
+/// [`IndexedRepo::degrade_reason`]).
+pub fn degraded(reason: Option<String>) -> IndexedRepo {
     IndexedRepo {
         graph: SymbolGraph {
             nodes: Vec::new(),
@@ -61,5 +74,6 @@ pub fn degraded() -> IndexedRepo {
         },
         gold_set: BTreeSet::new(),
         invariant_set: BTreeSet::new(),
+        degrade_reason: reason,
     }
 }

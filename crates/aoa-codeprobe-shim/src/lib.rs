@@ -6,8 +6,9 @@
 //! `assistant` events carry `tool_use` content blocks and `user` events carry
 //! `tool_result` blocks. codeprobe's own reader only *counts* tool calls — this
 //! shim instead preserves their **order** and **targets**, emitting an
-//! [`aoa_trace::Trace`] of `source = native` spans that passes
-//! [`aoa_trace::validate_trace`].
+//! [`aoa_trace::Trace`] of `source = native` spans. The strictly increasing
+//! `seq` is what [`aoa_trace::validate_trace`] requires; the crate's integration
+//! tests assert the emitted trace validates.
 //!
 //! # Tool -> span mapping
 //!

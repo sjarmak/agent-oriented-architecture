@@ -106,7 +106,7 @@ fn best_effort_scan_produces_low_confidence_graph() {
 
 #[test]
 fn degraded_sentinel_is_zero_weight_and_r0_ineligible() {
-    let indexed = degraded();
+    let indexed = degraded(None);
     assert_eq!(indexed.graph.quality, IndexQuality::Degraded);
     assert_eq!(indexed.graph.quality.weight(), 0.0);
     assert!(!indexed.graph.quality.eligible_for_r0());
@@ -120,6 +120,15 @@ fn build_symbol_graph_degrades_on_a_missing_index() {
     });
     assert_eq!(indexed.graph.quality, IndexQuality::Degraded);
     assert!(!indexed.graph.quality.eligible_for_r0());
+    // The root cause is preserved rather than silently swallowed: a missing index
+    // is distinguishable from a legitimately empty repo.
+    let reason = indexed
+        .degrade_reason
+        .expect("a read failure must record its root cause");
+    assert!(
+        reason.contains("/nonexistent/index.scip.json"),
+        "reason should name the failed path, got: {reason}"
+    );
 }
 
 #[test]
@@ -127,6 +136,9 @@ fn build_symbol_graph_degrades_on_an_empty_repo() {
     let empty = tempdir_with_no_py_files();
     let indexed = build_symbol_graph(IndexSource::BestEffort { repo_dir: &empty });
     assert_eq!(indexed.graph.quality, IndexQuality::Degraded);
+    // A clean read that simply found no symbols carries no error reason — the
+    // signal that separates "broken index" from "empty repo".
+    assert!(indexed.degrade_reason.is_none());
     std::fs::remove_dir_all(&empty).ok();
 }
 
@@ -177,7 +189,7 @@ fn produced_graph_drives_metric_extractors_across_tiers() {
     // Swapping in a degraded graph zeroes the weight and drops the R0 vote,
     // and never raises the mutation surface.
     let degraded_input = MetricInput {
-        graph: degraded().graph,
+        graph: degraded(None).graph,
         ..input.clone()
     };
     let degraded_record = compute_metrics(&degraded_input).expect("compute on degraded");

@@ -48,6 +48,7 @@ pub fn index_best_effort(repo_dir: &Path) -> Result<IndexedRepo, ScipGraphError>
         graph,
         gold_set: BTreeSet::new(),
         invariant_set: BTreeSet::new(),
+        degrade_reason: None,
     })
 }
 

@@ -10,9 +10,11 @@ use crate::mapping::{classify, Mapping};
 
 /// Outcome of parsing one transcript.
 ///
-/// `trace` is always emittable (it passes `validate_trace`). `warnings` records
-/// every non-fatal event the parser chose not to turn into a span — chiefly
-/// unmapped tool names — so unknown tools are logged, never silently swallowed.
+/// `trace` is built with a strictly increasing `seq`, the invariant
+/// `validate_trace` checks (asserted by the crate's integration tests).
+/// `warnings` records every non-fatal event the parser chose not to turn into a
+/// span — chiefly unmapped tool names — so unknown tools are logged, never
+/// silently swallowed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShimResult {
     pub trace: Trace,

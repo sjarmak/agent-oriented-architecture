@@ -81,6 +81,7 @@ pub fn index_with_scip(index_path: &Path) -> Result<IndexedRepo, ScipGraphError>
         graph,
         gold_set: index.gold.into_iter().collect(),
         invariant_set: index.invariants.into_iter().collect(),
+        degrade_reason: None,
     })
 }
 
