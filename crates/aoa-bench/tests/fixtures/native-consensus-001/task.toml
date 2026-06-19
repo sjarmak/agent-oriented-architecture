@@ -1,0 +1,16 @@
+version = "1.0"
+
+[metadata]
+name = "native-consensus-001"
+difficulty = "medium"
+task_type = "sdlc_code_change"
+
+[task]
+id = "native-consensus-001"
+name = "native-consensus-001"
+repo = "sample/widget"
+category = "change-scope-audit"
+
+[verification]
+type = "test"
+command = "bash tests/test.sh"

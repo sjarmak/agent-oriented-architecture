@@ -1,0 +1,16 @@
+version = "1.0"
+
+[metadata]
+name = "no-heldout-002"
+difficulty = "easy"
+task_type = "micro_probe"
+
+[task]
+id = "no-heldout-002"
+name = "no-heldout-002"
+repo = "sample/widget"
+category = "probe_comprehend"
+
+[verification]
+type = "test"
+command = "bash tests/test.sh"
