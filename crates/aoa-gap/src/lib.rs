@@ -23,7 +23,6 @@ mod compare;
 mod construct;
 mod error;
 mod gap;
-mod metric_link;
 mod provenance;
 mod run;
 
@@ -33,6 +32,5 @@ pub use construct::{
 };
 pub use error::GapError;
 pub use gap::{compute_gap, GapOutcome};
-pub use metric_link::classify_record;
 pub use provenance::HeldOutProvenance;
 pub use run::{CanaryItem, RunResult, TaskOutcome};

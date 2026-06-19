@@ -7,9 +7,4 @@ pub enum MetricError {
     /// intersection floor and a union ceiling.
     #[error("edit-locality needs >=2 accepted solutions, got {0}")]
     InsufficientAcceptedSolutions(usize),
-
-    /// Mutation-surface depth `k` must be non-negative; the type enforces this,
-    /// but a zero-node graph with a positive depth is reported explicitly.
-    #[error("mutation-surface graph has no nodes")]
-    EmptyGraph,
 }

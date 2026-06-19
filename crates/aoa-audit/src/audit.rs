@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use aoa_budget::{count_budget, resolve_closure, Config};
 use aoa_metrics::{
-    compute_mutation_surface, compute_retrieval_locality, IndexQuality, MetricInput, SymbolGraph,
+    compute_mutation_surface, IndexQuality, MetricInput, SymbolGraph,
     TransformMap,
 };
 use aoa_trace::Trace;
@@ -112,10 +112,9 @@ fn context_budget_item(repo: &Path, cfg: &AuditConfig) -> Result<Option<PunchIte
     }))
 }
 
-/// Emit the mutation-surface punch item. The retrieval-locality proxy is
-/// computed alongside to ground the same MetricInput; its cost contribution is
-/// folded into the mutation surface (the writable blast radius is the actionable
-/// number). Cost = count of writable files reachable within depth k.
+/// Emit the mutation-surface punch item. Cost = count of writable files
+/// reachable within depth k (the writable blast radius is the actionable
+/// number).
 fn mutation_surface_item(cfg: &AuditConfig) -> PunchItem {
     let input = MetricInput {
         trace: cfg.trace.clone(),
@@ -129,7 +128,6 @@ fn mutation_surface_item(cfg: &AuditConfig) -> PunchItem {
         held_out_success: true,
     };
 
-    let _retrieval = compute_retrieval_locality(&input);
     let surface = compute_mutation_surface(&input);
 
     PunchItem {
