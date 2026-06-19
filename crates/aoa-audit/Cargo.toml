@@ -1,0 +1,18 @@
+[package]
+name = "aoa-audit"
+description = "Zero-write telemetry install (observe) and read-only trace-grounded tiered audit punch-list for the AOA Toolkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aoa-trace = { path = "../aoa-trace" }
+aoa-budget = { path = "../aoa-budget" }
+aoa-metrics = { path = "../aoa-metrics" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.10.1"

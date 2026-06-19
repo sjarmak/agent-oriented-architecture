@@ -1,0 +1,6 @@
+{
+  "base_to_migrated": {
+    "OrderService": "orders::Service",
+    "PaymentGateway": "payments::Gateway"
+  }
+}

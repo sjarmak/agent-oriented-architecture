@@ -1,0 +1,48 @@
+{
+  "spans": [
+    {
+      "type": "retrieval.search",
+      "source": "native",
+      "seq": 0,
+      "attributes": { "query": "validate_trace" }
+    },
+    {
+      "type": "file.read",
+      "source": "native",
+      "seq": 1,
+      "attributes": { "path": "src/lib.rs" }
+    },
+    {
+      "type": "symbol.lookup",
+      "source": "native",
+      "seq": 1,
+      "attributes": { "symbol": "validate_trace" }
+    },
+    {
+      "type": "write.attempt",
+      "source": "native",
+      "seq": 2
+    },
+    {
+      "type": "write.blocked",
+      "source": "native",
+      "seq": 2,
+      "attributes": { "reason": "policy" }
+    },
+    {
+      "type": "test.run",
+      "source": "native",
+      "seq": 3
+    },
+    {
+      "type": "gateway.invoke",
+      "source": "native",
+      "seq": 4
+    },
+    {
+      "type": "abstain",
+      "source": "native",
+      "seq": 5
+    }
+  ]
+}

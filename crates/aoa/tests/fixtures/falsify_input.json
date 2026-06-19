@@ -1,0 +1,60 @@
+{
+  "repos": [
+    {
+      "repo_id": "repo-a",
+      "eligibility": { "confidence": "High", "native_span": "native_composed", "calibrated": true },
+      "holdout_size": 10,
+      "runs": [
+        { "seed": 1, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "edit_locality": 0.5, "mutation_depth": 1 } ] },
+        { "seed": 2, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "edit_locality": 0.5, "mutation_depth": 1 } ] },
+        { "seed": 3, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "edit_locality": 0.5, "mutation_depth": 1 } ] }
+      ]
+    },
+    {
+      "repo_id": "repo-b",
+      "eligibility": { "confidence": "High", "native_span": "native_composed", "calibrated": true },
+      "holdout_size": 10,
+      "runs": [
+        { "seed": 1, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "edit_locality": 0.5, "mutation_depth": 1 } ] },
+        { "seed": 2, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "edit_locality": 0.5, "mutation_depth": 1 } ] },
+        { "seed": 3, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "edit_locality": 0.5, "mutation_depth": 1 } ] }
+      ]
+    },
+    {
+      "repo_id": "repo-c",
+      "eligibility": { "confidence": "High", "native_span": "native_composed", "calibrated": true },
+      "holdout_size": 10,
+      "runs": [
+        { "seed": 1, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "edit_locality": 0.5, "mutation_depth": 1 } ] },
+        { "seed": 2, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "edit_locality": 0.5, "mutation_depth": 1 } ] },
+        { "seed": 3, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "edit_locality": 0.5, "mutation_depth": 1 } ] }
+      ]
+    },
+    {
+      "repo_id": "repo-d",
+      "eligibility": { "confidence": "High", "native_span": "native_composed", "calibrated": true },
+      "holdout_size": 10,
+      "runs": [
+        { "seed": 1, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "edit_locality": 0.5, "mutation_depth": 1 } ] },
+        { "seed": 2, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "edit_locality": 0.5, "mutation_depth": 1 } ] },
+        { "seed": 3, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "edit_locality": 0.5, "mutation_depth": 1 } ] }
+      ]
+    },
+    {
+      "repo_id": "repo-e",
+      "eligibility": { "confidence": "High", "native_span": "native_composed", "calibrated": true },
+      "holdout_size": 10,
+      "runs": [
+        { "seed": 1, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "edit_locality": 0.5, "mutation_depth": 1 } ] },
+        { "seed": 2, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "edit_locality": 0.5, "mutation_depth": 1 } ] },
+        { "seed": 3, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "edit_locality": 0.5, "mutation_depth": 1 } ] }
+      ]
+    }
+  ],
+  "config": {
+    "k_runs": 3,
+    "min_holdout_size": 20,
+    "min_effect_size": 0.0,
+    "conventions": []
+  }
+}

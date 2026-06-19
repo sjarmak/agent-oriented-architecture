@@ -1,0 +1,7 @@
+{
+  "spans": [
+    { "type": "retrieval.search", "source": "native", "seq": 0 },
+    { "type": "file.read", "source": "native", "seq": 5 },
+    { "type": "symbol.lookup", "source": "native", "seq": 2 }
+  ]
+}

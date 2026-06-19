@@ -1,0 +1,13 @@
+[package]
+name = "aoa-lint"
+description = "Context-file linting for the AOA Toolkit (mechanical config-smell detectors mapped to the 2606.15828 taxonomy, composed with the aoa-budget closure)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aoa-budget = { path = "../aoa-budget" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

@@ -1,0 +1,9 @@
+{
+  "spans": [
+    { "type": "retrieval.search", "source": "native", "seq": 1, "attributes": {} },
+    { "type": "file.read", "source": "native", "seq": 2, "attributes": {} },
+    { "type": "file.read", "source": "native", "seq": 3, "attributes": {} },
+    { "type": "write.attempt", "source": "native", "seq": 4, "attributes": {} },
+    { "type": "test.run", "source": "native", "seq": 5, "attributes": {} }
+  ]
+}

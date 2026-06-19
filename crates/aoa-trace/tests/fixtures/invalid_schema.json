@@ -1,0 +1,5 @@
+{
+  "spans": [
+    { "type": "not.a.real.span", "source": "native", "seq": 0 }
+  ]
+}

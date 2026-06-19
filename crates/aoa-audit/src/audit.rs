@@ -1,0 +1,158 @@
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+
+use aoa_budget::{count_budget, resolve_closure, Config};
+use aoa_metrics::{
+    compute_mutation_surface, compute_retrieval_locality, IndexQuality, MetricInput, SymbolGraph,
+    TransformMap,
+};
+use aoa_trace::Trace;
+
+use crate::error::AuditError;
+use crate::planes::missing_planes;
+use crate::punch::{rank, MeasuredCost, PunchItem};
+use crate::report::AuditReport;
+use crate::tier::Tier;
+
+/// The reference encoding used for the context-budget probe. o200k_base loads
+/// without network access and is the pinned reference encoding of aoa-budget.
+const AUDIT_TARGET_TOKENIZER: &str = "o200k_base";
+
+/// Default context-file token ceiling. Closures over this contribute an
+/// oversized-context punch item whose cost is the measured overflow.
+const DEFAULT_CONTEXT_CEILING: usize = 2_000;
+
+/// Default mutation-surface reachability depth.
+const DEFAULT_MUTATION_K: u32 = 2;
+
+/// Configuration for a read-only audit run. Every field is data the caller
+/// supplies; the audit makes no semantic judgments of its own.
+#[derive(Debug, Clone)]
+pub struct AuditConfig {
+    /// Root context document to resolve the token closure from, relative to the
+    /// repo (e.g. `AGENTS.md`). `None` skips the context-budget probe.
+    pub context_root: Option<PathBuf>,
+    /// Token ceiling for the context closure.
+    pub ceiling: usize,
+    /// Target tokenizer name passed to aoa-budget.
+    pub target: String,
+    /// The symbol graph used for the mutation-surface proxy. Modeled in-crate;
+    /// the audit never shells out to a real SCIP indexer.
+    pub graph: SymbolGraph,
+    /// Mutation-surface reachability depth.
+    pub k: u32,
+    /// Trace used to ground the retrieval-locality proxy.
+    pub trace: Trace,
+    /// Gold artifact symbols anchoring the retrieval-locality proxy.
+    pub gold_set: BTreeSet<String>,
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            context_root: Some(PathBuf::from("AGENTS.md")),
+            ceiling: DEFAULT_CONTEXT_CEILING,
+            target: AUDIT_TARGET_TOKENIZER.to_string(),
+            graph: SymbolGraph {
+                nodes: Vec::new(),
+                edges: Vec::new(),
+                writable: BTreeSet::new(),
+                quality: IndexQuality::BestEffort,
+            },
+            k: DEFAULT_MUTATION_K,
+            trace: Trace { spans: Vec::new() },
+            gold_set: BTreeSet::new(),
+        }
+    }
+}
+
+/// Run a read-only audit of `repo`. Builds a ranked, tiered punch-list grounded
+/// in measured numbers: the context-file token closure (aoa-budget), the
+/// mutation-surface proxy (aoa-metrics), and structural enforcement-plane
+/// checks. Writes nothing.
+pub fn audit(repo: &Path, cfg: &AuditConfig) -> Result<AuditReport, AuditError> {
+    let mut items = Vec::new();
+
+    if let Some(item) = context_budget_item(repo, cfg)? {
+        items.push(item);
+    }
+    items.push(mutation_surface_item(cfg));
+    items.extend(plane_items(repo));
+
+    rank(&mut items);
+    Ok(AuditReport::new(items))
+}
+
+/// Measure the context-file token closure and, when over the ceiling, emit an
+/// oversized-context punch item whose cost is the token overflow.
+fn context_budget_item(repo: &Path, cfg: &AuditConfig) -> Result<Option<PunchItem>, AuditError> {
+    let Some(root_rel) = &cfg.context_root else {
+        return Ok(None);
+    };
+    let root = repo.join(root_rel);
+    if !root.exists() {
+        return Ok(None);
+    }
+
+    let closure = resolve_closure(&root)?;
+    let report = count_budget(&closure, &cfg.target, &Config::warn_first(cfg.ceiling))?;
+    let overflow = report.gating_target_tokens.saturating_sub(cfg.ceiling);
+    if overflow == 0 {
+        return Ok(None);
+    }
+
+    Ok(Some(PunchItem {
+        title: format!(
+            "context closure from {} exceeds the token ceiling",
+            root_rel.display()
+        ),
+        tier: Tier::Tier2,
+        measured_cost: MeasuredCost::new(overflow as u64, "tokens over ceiling"),
+        plane: None,
+    }))
+}
+
+/// Emit the mutation-surface punch item. The retrieval-locality proxy is
+/// computed alongside to ground the same MetricInput; its cost contribution is
+/// folded into the mutation surface (the writable blast radius is the actionable
+/// number). Cost = count of writable files reachable within depth k.
+fn mutation_surface_item(cfg: &AuditConfig) -> PunchItem {
+    let input = MetricInput {
+        trace: cfg.trace.clone(),
+        gold_set: cfg.gold_set.clone(),
+        invariant_set: BTreeSet::new(),
+        transform: TransformMap::default(),
+        edited_files: BTreeSet::new(),
+        accepted_solutions: Vec::new(),
+        graph: cfg.graph.clone(),
+        k: cfg.k,
+        held_out_success: true,
+    };
+
+    let _retrieval = compute_retrieval_locality(&input);
+    let surface = compute_mutation_surface(&input);
+
+    PunchItem {
+        title: format!("writable mutation surface within depth {}", cfg.k),
+        tier: Tier::Tier2,
+        measured_cost: MeasuredCost::new(
+            surface.writable_reachable as u64,
+            "writable files reachable",
+        ),
+        plane: None,
+    }
+}
+
+/// One punch item per missing enforcement plane, tier mapped from the plane.
+/// Cost = 1 missing plane (a real count: the plane is absent).
+fn plane_items(repo: &Path) -> Vec<PunchItem> {
+    missing_planes(repo)
+        .into_iter()
+        .map(|plane| PunchItem {
+            title: format!("missing enforcement plane: {}", plane.label()),
+            tier: plane.tier(),
+            measured_cost: MeasuredCost::new(1, "missing plane"),
+            plane: Some(plane),
+        })
+        .collect()
+}

@@ -1,0 +1,10 @@
+{
+  "tasks": [
+    { "visible_success": true, "held_out_success": false },
+    { "visible_success": true, "held_out_success": false },
+    { "visible_success": true, "held_out_success": true },
+    { "visible_success": false, "held_out_success": false }
+  ],
+  "held_out_provenance": "native_composed",
+  "canaries": []
+}

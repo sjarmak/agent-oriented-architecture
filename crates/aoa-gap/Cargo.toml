@@ -1,0 +1,13 @@
+[package]
+name = "aoa-gap"
+description = "Reward-hacking gap (R9), held-out integrity canary (R0b), and construct validity gating (R9c) for the AOA Toolkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aoa-metrics = { path = "../aoa-metrics" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

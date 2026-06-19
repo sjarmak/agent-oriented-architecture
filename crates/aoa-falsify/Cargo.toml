@@ -1,0 +1,14 @@
+[package]
+name = "aoa-falsify"
+description = "Wrong-layer falsification gate (R0) with robust/abstaining/monitored hardening (R0') for the AOA Toolkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aoa-gap = { path = "../aoa-gap" }
+aoa-metrics = { path = "../aoa-metrics" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

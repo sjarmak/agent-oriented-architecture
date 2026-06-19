@@ -1,0 +1,12 @@
+[package]
+name = "aoa-metrics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aoa-trace = { path = "../aoa-trace" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

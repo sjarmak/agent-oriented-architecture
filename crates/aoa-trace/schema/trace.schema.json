@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aoa.dev/schemas/trace.schema.json",
+  "title": "AOA Trace File",
+  "description": "A trace file is a JSON object with a `spans` array. Spans are ordered by a monotonically non-decreasing `seq` key.",
+  "type": "object",
+  "required": ["spans"],
+  "additionalProperties": false,
+  "properties": {
+    "spans": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/span" }
+    }
+  },
+  "$defs": {
+    "span": {
+      "type": "object",
+      "required": ["type", "source", "seq"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "description": "The kind of span. One of the eight stable discriminants.",
+          "type": "string",
+          "enum": [
+            "retrieval.search",
+            "file.read",
+            "symbol.lookup",
+            "write.attempt",
+            "write.blocked",
+            "test.run",
+            "gateway.invoke",
+            "abstain"
+          ]
+        },
+        "source": {
+          "description": "Provenance of the span.",
+          "type": "string",
+          "enum": ["native", "reconstructed"]
+        },
+        "seq": {
+          "description": "Monotonic ordering key within the trace.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "attributes": {
+          "description": "Free-form span-type-specific metadata.",
+          "type": "object"
+        }
+      }
+    }
+  }
+}
