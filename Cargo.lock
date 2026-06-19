@@ -111,6 +111,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aoa-codeprobe-shim"
+version = "0.1.0"
+dependencies = [
+ "aoa-trace",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "aoa-falsify"
 version = "0.1.0"
 dependencies = [

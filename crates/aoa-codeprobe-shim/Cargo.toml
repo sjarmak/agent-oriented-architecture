@@ -1,0 +1,13 @@
+[package]
+name = "aoa-codeprobe-shim"
+description = "Parses a codeprobe per-trial stream-json transcript (claude -p --output-format stream-json --verbose) into a native 8-span AOA trace, preserving tool-call order and targets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aoa-trace = { path = "../aoa-trace" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
