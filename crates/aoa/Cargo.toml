@@ -17,6 +17,10 @@ aoa-lint = { path = "../aoa-lint" }
 aoa-gap = { path = "../aoa-gap" }
 aoa-audit = { path = "../aoa-audit" }
 aoa-falsify = { path = "../aoa-falsify" }
+aoa-metrics = { path = "../aoa-metrics" }
+aoa-bench = { path = "../aoa-bench" }
+aoa-scip-graph = { path = "../aoa-scip-graph" }
+aoa-codeprobe-shim = { path = "../aoa-codeprobe-shim" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

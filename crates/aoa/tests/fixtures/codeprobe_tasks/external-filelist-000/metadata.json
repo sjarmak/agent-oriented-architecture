@@ -1,0 +1,15 @@
+{
+  "id": "external-filelist-000",
+  "repo": "sample/widget",
+  "metadata": {
+    "name": "external-filelist-000",
+    "task_type": "sdlc_code_change",
+    "ground_truth_commit": "0000000000000000000000000000000000000000"
+  },
+  "verification": {
+    "type": "oracle",
+    "oracle_type": "file_list",
+    "oracle_answer": ["src/widget/core.py", "src/widget/api.py"]
+  },
+  "instruction_path": "instruction.md"
+}

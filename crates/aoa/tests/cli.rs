@@ -22,7 +22,7 @@ fn aoa() -> Command {
 #[test]
 fn validate_trace_valid_prints_counts_and_exits_zero() {
     aoa()
-        .args(["eval", "--validate-trace"])
+        .args(["eval", "validate-trace"])
         .arg(fixture("valid_trace.json"))
         .assert()
         .success()
@@ -33,7 +33,7 @@ fn validate_trace_valid_prints_counts_and_exits_zero() {
 #[test]
 fn validate_trace_invalid_exits_non_zero() {
     aoa()
-        .args(["eval", "--validate-trace"])
+        .args(["eval", "validate-trace"])
         .arg(fixture("invalid_trace.json"))
         .assert()
         .failure();
@@ -43,7 +43,7 @@ fn validate_trace_invalid_exits_non_zero() {
 #[test]
 fn validate_trace_json_is_parseable() {
     let output = aoa()
-        .args(["eval", "--json", "--validate-trace"])
+        .args(["eval", "validate-trace", "--json"])
         .arg(fixture("valid_trace.json"))
         .output()
         .expect("run");
@@ -56,7 +56,7 @@ fn validate_trace_json_is_parseable() {
 #[test]
 fn compare_prints_gap_delta() {
     aoa()
-        .args(["eval", "--compare"])
+        .args(["eval", "compare"])
         .arg(fixture("baseline.json"))
         .arg(fixture("migrated.json"))
         .assert()
@@ -67,7 +67,7 @@ fn compare_prints_gap_delta() {
 #[test]
 fn compare_json_carries_gap_delta() {
     let output = aoa()
-        .args(["eval", "--json", "--compare"])
+        .args(["eval", "compare", "--json"])
         .arg(fixture("baseline.json"))
         .arg(fixture("migrated.json"))
         .output()
@@ -76,6 +76,169 @@ fn compare_json_carries_gap_delta() {
     let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
     assert!(parsed.get("gap_delta").is_some());
     assert_eq!(parsed["label"], "good");
+}
+
+// --- aoa-2lw: eval run post-processes a codeprobe run -------------------------
+
+fn run_dir() -> PathBuf {
+    fixture("codeprobe_run")
+}
+fn tasks_dir() -> PathBuf {
+    fixture("codeprobe_tasks")
+}
+
+// AC1 + AC4: emits a per-task record for each valid trial, and a per-trial error
+// (non-zero exit) for BOTH a missing-scoring and a missing-transcript trial —
+// never silently skipped.
+#[test]
+fn eval_run_emits_records_and_fails_loud_per_trial() {
+    let output = aoa()
+        .args(["eval", "run", "--json", "--codeprobe-run"])
+        .arg(run_dir())
+        .arg("--tasks")
+        .arg(tasks_dir())
+        .output()
+        .expect("run");
+    // Two trials error (broken-no-scoring, broken-no-transcript) -> non-zero
+    // exit, but the good records still computed.
+    assert!(!output.status.success(), "broken trials must fail loud");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert_eq!(parsed["record_count"], 2, "two good trials produce records");
+    assert_eq!(parsed["error_count"], 2, "both broken trials are reported");
+
+    let errors = parsed["errors"].as_array().expect("errors array");
+    let err_for = |id: &str| {
+        errors
+            .iter()
+            .find(|e| e["task_id"] == id)
+            .unwrap_or_else(|| panic!("no error for {id}"))["error"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert!(
+        err_for("broken-no-scoring").contains("scoring.json"),
+        "missing-scoring error must name the root cause"
+    );
+    assert!(
+        err_for("broken-no-transcript").contains("agent_output.txt"),
+        "missing-transcript error must name the root cause"
+    );
+
+    // Every record carries the four metrics + the gap + conditioning.
+    let records = parsed["records"].as_array().expect("records array");
+    for rec in records {
+        assert_eq!(rec["conditioned_on"], "held_out");
+        assert_eq!(rec["visible_unobserved"], true);
+        assert!(rec["retrieval_locality"].is_object());
+        assert!(rec["invariant_discoverability"].is_object());
+        assert!(rec["mutation_surface"].is_object());
+        assert!(rec.get("gap").is_some());
+        assert!(rec.get("transcript_warnings").is_some());
+    }
+}
+
+// AC3: held-out drives counted_as_success; a held-out fail is not a success.
+#[test]
+fn eval_run_held_out_fail_not_counted_as_success() {
+    let output = aoa()
+        .args(["eval", "run", "--json", "--codeprobe-run"])
+        .arg(run_dir())
+        .arg("--tasks")
+        .arg(tasks_dir())
+        .output()
+        .expect("run");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    let records = parsed["records"].as_array().unwrap();
+    let by_id = |id: &str| records.iter().find(|r| r["task_id"] == id).unwrap().clone();
+
+    let pass = by_id("external-filelist-000");
+    assert_eq!(pass["held_out_success"], true);
+    assert_eq!(pass["counted_as_success"], true);
+
+    let fail = by_id("native-consensus-001");
+    assert_eq!(fail["held_out_success"], false);
+    assert_eq!(fail["counted_as_success"], false);
+}
+
+// AC2/AC3: provenance drives the gap (External -> available); edit-locality is
+// reported null (never fabricated) when <2 accepted solutions exist.
+#[test]
+fn eval_run_gap_and_edit_locality_honor_provenance_and_solution_count() {
+    let output = aoa()
+        .args(["eval", "run", "--json", "--codeprobe-run"])
+        .arg(run_dir())
+        .arg("--tasks")
+        .arg(tasks_dir())
+        .output()
+        .expect("run");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    let records = parsed["records"].as_array().unwrap();
+    let by_id = |id: &str| records.iter().find(|r| r["task_id"] == id).unwrap().clone();
+
+    // External provenance, single accepted solution.
+    let ext = by_id("external-filelist-000");
+    assert_eq!(ext["held_out_provenance"], "external");
+    assert_eq!(ext["gap"]["status"], "available");
+    assert!(
+        ext["edit_locality"].is_null(),
+        "1 solution -> no fabricated floor/ceiling"
+    );
+    assert!(ext["edit_locality_unavailable"]
+        .as_str()
+        .unwrap()
+        .contains("insufficient"));
+
+    // NativeComposed provenance, two accepted solutions -> edit-locality present.
+    let nat = by_id("native-consensus-001");
+    assert_eq!(nat["held_out_provenance"], "native_composed");
+    assert_eq!(nat["gap"]["status"], "available");
+    assert!(
+        nat["edit_locality"].is_object(),
+        "2 solutions -> edit-locality computed"
+    );
+}
+
+// Without a graph source the symbol graph degrades to zero weight (logged),
+// while records are still emitted (AC1).
+#[test]
+fn eval_run_degrades_graph_without_source() {
+    let output = aoa()
+        .args(["eval", "run", "--json", "--codeprobe-run"])
+        .arg(run_dir())
+        .arg("--tasks")
+        .arg(tasks_dir())
+        .output()
+        .expect("run");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    let rec = parsed["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["task_id"] == "external-filelist-000")
+        .unwrap()
+        .clone();
+    assert_eq!(rec["graph_quality"], "degraded");
+    assert_eq!(rec["weight"], 0.0);
+    assert_eq!(rec["repo_eligible_for_r0"], false);
+    assert!(rec["graph_degrade_reason"]
+        .as_str()
+        .unwrap()
+        .contains("no graph source"));
+}
+
+// Human (non-JSON) register renders text.
+#[test]
+fn eval_run_human_renders_text() {
+    aoa()
+        .args(["eval", "run", "--codeprobe-run"])
+        .arg(run_dir())
+        .arg("--tasks")
+        .arg(tasks_dir())
+        .assert()
+        .failure() // the scoring-less trial -> non-zero exit
+        .stdout(predicate::str::contains("aoa eval run"))
+        .stdout(predicate::str::contains("external-filelist-000"));
 }
 
 // Criterion 4: observe makes no tracked-file changes.

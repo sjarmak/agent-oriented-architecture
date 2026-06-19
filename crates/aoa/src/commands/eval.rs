@@ -1,23 +1,22 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use serde::Serialize;
 
 use aoa_gap::RunResult;
 use aoa_trace::TraceReport;
 
-use crate::cli::EvalArgs;
+use crate::cli::{EvalArgs, EvalCommand};
+use crate::commands::eval_run;
 use crate::output::{print_human, print_json};
 
-/// Dispatch the eval sub-modes. Exactly one of `--validate-trace` / `--compare`
-/// must be supplied.
+/// Dispatch the eval sub-commands.
 pub fn run(args: &EvalArgs) -> Result<i32> {
-    match (&args.validate_trace, &args.compare) {
-        (Some(trace), None) => validate_trace(trace, args.json),
-        (None, Some(pair)) => compare(&pair[0], &pair[1], args.json),
-        (Some(_), Some(_)) => bail!("provide only one of --validate-trace or --compare"),
-        (None, None) => bail!("provide one of --validate-trace <FILE> or --compare <A> <B>"),
+    match &args.command {
+        EvalCommand::ValidateTrace(a) => validate_trace(&a.file, a.json),
+        EvalCommand::Compare(a) => compare(&a.baseline, &a.migrated, a.json),
+        EvalCommand::Run(a) => eval_run::run(a),
     }
 }
 

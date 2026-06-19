@@ -78,13 +78,70 @@ pub struct LintArgs {
 
 #[derive(Debug, Args)]
 pub struct EvalArgs {
+    #[command(subcommand)]
+    pub command: EvalCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum EvalCommand {
     /// Validate a trace file: print per-type span counts; exit non-zero if invalid.
-    #[arg(long, value_name = "FILE")]
-    pub validate_trace: Option<PathBuf>,
+    ValidateTrace(ValidateTraceArgs),
 
     /// Compare a baseline run against a migrated run; print the gap delta.
-    #[arg(long, num_args = 2, value_names = ["BASELINE", "MIGRATED"])]
-    pub compare: Option<Vec<PathBuf>>,
+    Compare(CompareArgs),
+
+    /// Post-process a codeprobe run into per-task AOA metric records.
+    Run(EvalRunArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ValidateTraceArgs {
+    /// Trace JSON file to validate.
+    #[arg(value_name = "FILE")]
+    pub file: PathBuf,
+
+    /// Emit the structured JSON rendering instead of human text.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct CompareArgs {
+    /// Baseline run-result JSON.
+    #[arg(value_name = "BASELINE")]
+    pub baseline: PathBuf,
+
+    /// Migrated run-result JSON.
+    #[arg(value_name = "MIGRATED")]
+    pub migrated: PathBuf,
+
+    /// Emit the structured JSON rendering instead of human text.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct EvalRunArgs {
+    /// codeprobe run directory: the config-label dir holding `<task_id>/`
+    /// subtrees, each with `agent_output.txt` and `scoring.json`.
+    #[arg(long, value_name = "DIR")]
+    pub codeprobe_run: PathBuf,
+
+    /// codeprobe task-source dir (one `<task_id>/` per task) supplying the
+    /// oracle/gold set via the bench loader. Without it, gold-set-dependent
+    /// metrics report no anchors and the gap may be unavailable.
+    #[arg(long, value_name = "DIR")]
+    pub tasks: Option<PathBuf>,
+
+    /// Vendored SCIP index for the task repo (high-confidence graph). Mutually
+    /// exclusive with `--repo`.
+    #[arg(long, value_name = "FILE", conflicts_with = "repo")]
+    pub scip_index: Option<PathBuf>,
+
+    /// Task repo checkout for a best-effort (low-confidence) graph. Without a
+    /// graph source the symbol graph degrades to zero weight (R0-ineligible).
+    #[arg(long, value_name = "DIR")]
+    pub repo: Option<PathBuf>,
 
     /// Emit the structured JSON rendering instead of human text.
     #[arg(long)]
