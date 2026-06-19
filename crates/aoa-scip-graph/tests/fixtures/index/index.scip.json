@@ -1,0 +1,35 @@
+{
+  "metadata": {
+    "tool": "scip-python",
+    "project_root": "pkg"
+  },
+  "documents": [
+    {
+      "relative_path": "pkg/auth.py",
+      "symbols": [
+        { "symbol": "pkg.auth.login", "kind": "function" },
+        { "symbol": "pkg.auth.logout", "kind": "function" }
+      ],
+      "occurrences": [
+        { "symbol": "pkg.auth.login", "roles": ["definition"] },
+        { "symbol": "pkg.tokens.issue_token", "roles": ["reference"], "enclosing": "pkg.auth.login" },
+        { "symbol": "pkg.auth.logout", "roles": ["definition"] }
+      ]
+    },
+    {
+      "relative_path": "pkg/tokens.py",
+      "symbols": [
+        { "symbol": "pkg.tokens.issue_token", "kind": "function" },
+        { "symbol": "pkg.tokens.verify_secret", "kind": "function" }
+      ],
+      "occurrences": [
+        { "symbol": "pkg.tokens.issue_token", "roles": ["definition"] },
+        { "symbol": "pkg.tokens.verify_secret", "roles": ["reference"], "enclosing": "pkg.tokens.issue_token" },
+        { "symbol": "pkg.tokens.verify_secret", "roles": ["definition"] }
+      ]
+    }
+  ],
+  "writable": ["pkg.auth.login", "pkg.auth.logout"],
+  "gold": ["pkg.tokens.issue_token"],
+  "invariants": ["pkg.tokens.issue_token"]
+}
