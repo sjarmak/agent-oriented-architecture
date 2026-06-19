@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "oracle_type": "file_list",
+  "expected": [
+    "src/widget/core.py",
+    "src/widget/api.py",
+    "tests/test_core.py"
+  ],
+  "commit": "0000000000000000000000000000000000000000"
+}

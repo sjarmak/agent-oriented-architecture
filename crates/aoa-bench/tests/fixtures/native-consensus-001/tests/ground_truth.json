@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "oracle_type": "file_list",
+  "expected": [
+    "src/widget/config.py",
+    "src/widget/loader.py"
+  ]
+}
