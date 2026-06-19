@@ -1,0 +1,17 @@
+{
+  "k_runs": 3,
+  "min_holdout_size": 20,
+  "min_effect_size": 0.0,
+  "repos": [
+    {
+      "repo_id": "sample/widget",
+      "confidence": "high",
+      "calibrated": true,
+      "runs": [
+        { "seed": 1, "repo_arm": "seed1/repo_arm", "harness_arm": "seed1/harness_arm" },
+        { "seed": 2, "repo_arm": "seed2/repo_arm", "harness_arm": "seed2/harness_arm" },
+        { "seed": 3, "repo_arm": "seed3/repo_arm", "harness_arm": "seed3/harness_arm" }
+      ]
+    }
+  ]
+}

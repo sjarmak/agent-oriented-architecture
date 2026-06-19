@@ -1,0 +1,8 @@
+{
+  "out_path": "falsify_input.json",
+  "repo_count": 5,
+  "total_identical_pairs": 5,
+  "convention_inputs_degraded": true,
+  "repos": [],
+  "notes": ["convention inputs degraded: no per-repo symbol graph"]
+}

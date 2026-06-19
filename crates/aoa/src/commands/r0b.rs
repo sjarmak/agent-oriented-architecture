@@ -39,89 +39,8 @@ use aoa_gap::{
 };
 
 use crate::cli::R0bArgs;
-use crate::commands::codeprobe::discover_tasks;
+use crate::commands::codeprobe::{aggregate_provenance, discover_tasks, DualScoring};
 use crate::output::{print_human, print_json};
-
-/// A leg `score_*` at or above this counts as a pass when the explicit
-/// `passed_*` boolean is absent (exact-match scorers emit 0.0/1.0).
-const SCORE_PASS_THRESHOLD: f64 = 1.0;
-
-/// The subset of codeprobe's flattened `scoring.json` the R0b gate reads. The
-/// dual scorer merges its `details` onto the top level, so the leg fields sit
-/// beside `score`/`passed` (`core/executor.py::_save_task_artifacts`).
-#[derive(Debug, Deserialize)]
-struct DualScoring {
-    scorer_family: Option<String>,
-    passed_direct: Option<bool>,
-    passed_artifact: Option<bool>,
-    score_direct: Option<f64>,
-    score_artifact: Option<f64>,
-    error_direct: Option<String>,
-    error_artifact: Option<String>,
-}
-
-impl DualScoring {
-    /// Reject anything that is not a clean dual-verifier result: R0b needs both
-    /// the held-out (artifact) and visible (direct) legs to have genuinely run.
-    fn ensure_dual(&self, task_id: &str) -> Result<()> {
-        // `task_id` is a directory name and the leg errors come from an untrusted
-        // `scoring.json`; escape both so a crafted value cannot inject terminal
-        // control sequences when the error surfaces on stderr (matches eval_run).
-        let task_id = task_id.escape_debug();
-        if self.scorer_family.as_deref() != Some("dual_composite") {
-            bail!(
-                "task {task_id}: scoring.json scorer_family is {:?}, not \"dual_composite\" — \
-                 R0b requires a dual-verifier run (held-out artifact leg vs visible direct leg)",
-                self.scorer_family
-            );
-        }
-        if let Some(e) = &self.error_direct {
-            bail!(
-                "task {task_id}: direct (visible) leg errored, cannot trust its outcome: {}",
-                e.escape_debug()
-            );
-        }
-        if let Some(e) = &self.error_artifact {
-            bail!(
-                "task {task_id}: artifact (held-out) leg errored, cannot trust its outcome: {}",
-                e.escape_debug()
-            );
-        }
-        Ok(())
-    }
-
-    /// Visible (direct/`test.sh`) outcome — the gameable proxy verifier.
-    fn visible_success(&self, task_id: &str) -> Result<bool> {
-        Self::leg(
-            self.passed_direct,
-            self.score_direct,
-            "direct (visible)",
-            task_id,
-        )
-    }
-
-    /// Held-out (artifact/mined-oracle) outcome — the contamination-free leg.
-    fn held_out_success(&self, task_id: &str) -> Result<bool> {
-        Self::leg(
-            self.passed_artifact,
-            self.score_artifact,
-            "artifact (held-out)",
-            task_id,
-        )
-    }
-
-    fn leg(passed: Option<bool>, score: Option<f64>, name: &str, task_id: &str) -> Result<bool> {
-        match (passed, score) {
-            (Some(p), _) => Ok(p),
-            (None, Some(s)) => Ok(s >= SCORE_PASS_THRESHOLD),
-            (None, None) => bail!(
-                "task {}: dual scoring is missing the {name} leg \
-                 (no passed_* or score_* field)",
-                task_id.escape_debug()
-            ),
-        }
-    }
-}
 
 /// One operator-declared canary: a known held-out probe and the outcome a clean
 /// (non-leaking) run must produce for it.
@@ -146,52 +65,6 @@ fn load_canary_manifest(path: &Path) -> Result<BTreeMap<String, bool>> {
         map.insert(spec.id, spec.expected_held_out);
     }
     Ok(map)
-}
-
-/// Reduce per-task provenance into the run's single held-out provenance.
-///
-/// Exhaustive over `HeldOutProvenance` so a forbidden suite can never be
-/// laundered into a certifiable one: any `SynthesizedFromVisible` is a hard
-/// error, any task with no independent held-out leg (`None`) makes the whole run
-/// `gap:unavailable`, an all-`External` run is `External`, and any genuine native
-/// agreement is `NativeComposed`.
-fn aggregate_provenance(provenances: &[HeldOutProvenance]) -> Result<HeldOutProvenance> {
-    // An empty run has no held-out signal at all; falling through to `External`
-    // (the default) would silently certify the most permissive provenance, so
-    // fail loud. Unreachable today (`discover_tasks` bails on an empty run dir)
-    // but guarded so the contract does not depend on a caller-side precondition.
-    if provenances.is_empty() {
-        bail!("cannot classify held-out provenance for a run with zero tasks");
-    }
-
-    let mut any_synth = false;
-    let mut any_none = false;
-    let mut any_native = false;
-    for p in provenances {
-        match p {
-            HeldOutProvenance::SynthesizedFromVisible => any_synth = true,
-            HeldOutProvenance::None => any_none = true,
-            HeldOutProvenance::NativeComposed => any_native = true,
-            HeldOutProvenance::External => {}
-        }
-    }
-    if any_synth {
-        // A synthesized held-out suite cannot arise from codeprobe data
-        // (`aoa_bench::classify_provenance` never emits it), so reaching here
-        // means upstream corruption, not a routine gate outcome. Fail loud as a
-        // hard error rather than a structured `Verdict::Refused` — the latter is
-        // reserved for the EXPECTED refusals (leakage, gap-unavailable) a CI gate
-        // treats as data; this is an invariant violation that must not masquerade
-        // as one. Mirrors the per-task contract in `aoa_gap::compute_gap`.
-        bail!("a task's held-out provenance is synthesized-from-visible — forbidden (R0b)");
-    }
-    if any_none {
-        return Ok(HeldOutProvenance::None);
-    }
-    if any_native {
-        return Ok(HeldOutProvenance::NativeComposed);
-    }
-    Ok(HeldOutProvenance::External)
 }
 
 /// Aggregate one codeprobe run directory into a run-level `aoa_gap::RunResult`.
@@ -223,11 +96,7 @@ fn aggregate_run(
     for task_id in &task_ids {
         let task_dir = run_dir.join(task_id);
         let scoring_path = task_dir.join("scoring.json");
-        let raw = std::fs::read_to_string(&scoring_path)
-            .with_context(|| format!("failed to read {}", scoring_path.display()))?;
-        let scoring: DualScoring = serde_json::from_str(&raw)
-            .with_context(|| format!("failed to parse {}", scoring_path.display()))?;
-        scoring.ensure_dual(task_id)?;
+        let scoring = DualScoring::load(&scoring_path, task_id)?;
 
         let visible_success = scoring.visible_success(task_id)?;
         let held_out_success = scoring.held_out_success(task_id)?;
@@ -416,70 +285,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn aggregate_provenance_rejects_synthesized_loud() {
-        // AC1: a synthesized-from-visible suite is rejected at the live-wiring
-        // layer, never folded into the aggregate.
-        let err = aggregate_provenance(&[
-            HeldOutProvenance::External,
-            HeldOutProvenance::SynthesizedFromVisible,
-        ])
-        .unwrap_err();
-        assert!(err.to_string().contains("synthesized-from-visible"));
-    }
-
-    #[test]
-    fn aggregate_provenance_any_none_makes_run_unavailable() {
-        // AC3: one task with no independent held-out leg makes the whole run
-        // gap:unavailable (None), even mixed with eligible tasks.
+    fn aggregate_provenance_reduce_is_shared() {
+        // The provenance reduce now lives in `commands::codeprobe`; r0b composes
+        // it. A focused check that the shared rule still drives r0b's aggregation:
+        // a None task makes the whole run gap:unavailable (AC3).
         let p =
             aggregate_provenance(&[HeldOutProvenance::External, HeldOutProvenance::None]).unwrap();
         assert_eq!(p, HeldOutProvenance::None);
-    }
-
-    #[test]
-    fn aggregate_provenance_all_external_is_external() {
-        let p = aggregate_provenance(&[HeldOutProvenance::External, HeldOutProvenance::External])
-            .unwrap();
-        assert_eq!(p, HeldOutProvenance::External);
-    }
-
-    #[test]
-    fn aggregate_provenance_native_wins_over_external() {
-        let p = aggregate_provenance(&[
-            HeldOutProvenance::External,
-            HeldOutProvenance::NativeComposed,
-        ])
-        .unwrap();
-        assert_eq!(p, HeldOutProvenance::NativeComposed);
-    }
-
-    #[test]
-    fn non_dual_scoring_fails_loud() {
-        let single = DualScoring {
-            scorer_family: Some("binary".to_string()),
-            passed_direct: None,
-            passed_artifact: None,
-            score_direct: None,
-            score_artifact: None,
-            error_direct: None,
-            error_artifact: None,
-        };
-        let err = single.ensure_dual("t").unwrap_err();
-        assert!(err.to_string().contains("dual_composite"));
-    }
-
-    #[test]
-    fn errored_leg_fails_loud() {
-        let errored = DualScoring {
-            scorer_family: Some("dual_composite".to_string()),
-            passed_direct: Some(true),
-            passed_artifact: Some(true),
-            score_direct: Some(1.0),
-            score_artifact: Some(1.0),
-            error_direct: None,
-            error_artifact: Some("answer.json missing".to_string()),
-        };
-        let err = errored.ensure_dual("t").unwrap_err();
-        assert!(err.to_string().contains("artifact (held-out) leg errored"));
     }
 }

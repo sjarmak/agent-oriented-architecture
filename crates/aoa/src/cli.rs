@@ -96,6 +96,11 @@ pub enum EvalCommand {
     /// R0b held-out integrity: compose the AOA leakage canary over two
     /// dual-verifier codeprobe runs (baseline vs migrated).
     R0b(R0bArgs),
+
+    /// Build an R0 falsification input from a codeprobe experiment's paired
+    /// config arms (repo-arm vs harness-arm over the same mined tasks). Emits the
+    /// `FalsifyInput` JSON `aoa falsify` consumes, plus a build report.
+    Experiment(ExperimentArgs),
 }
 
 #[derive(Debug, Args)]
@@ -181,10 +186,45 @@ pub struct R0bArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct ExperimentArgs {
+    /// Build manifest JSON: per-repo confidence + calibration (operator-declared)
+    /// and, per fixed-seed run, the paths to the repo-arm and harness-arm
+    /// codeprobe config-label run dirs. See `docs/r0_runbook.md`.
+    #[arg(long, value_name = "FILE")]
+    pub manifest: PathBuf,
+
+    /// codeprobe task-source dir (one `<task_id>/` per task), shared across arms,
+    /// supplying each task's oracle for held-out provenance classification.
+    #[arg(long, value_name = "DIR")]
+    pub tasks: PathBuf,
+
+    /// Where to write the `FalsifyInput` JSON `aoa falsify --repos` consumes.
+    #[arg(long, value_name = "FILE", default_value = "falsify_input.json")]
+    pub out: PathBuf,
+
+    /// Emit the structured JSON build report instead of human text.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct FalsifyArgs {
     /// Falsification input JSON (paired-repo evidence, power, conventions).
     #[arg(long, value_name = "INPUT")]
     pub repos: PathBuf,
+
+    /// Build report JSON emitted alongside the `FalsifyInput` by
+    /// `aoa eval experiment`. When it flags degraded convention inputs, the gate
+    /// abstains (verdict `inconclusive`, `precondition_unmet`) rather than
+    /// asserting a verdict the R0' convention-invariance check cannot back.
+    #[arg(long, value_name = "FILE")]
+    pub build_meta: Option<PathBuf>,
+
+    /// codeprobe `experiment aggregate` output (`reports/aggregate.json`). Its
+    /// `bias_warnings` are surfaced ALONGSIDE the AOA verdict, never mutating it;
+    /// a `no_independent_baseline` warning is flagged as gate-invalidating.
+    #[arg(long, value_name = "FILE")]
+    pub bias_warnings: Option<PathBuf>,
 
     /// Where to write `falsification.json`. Defaults to the cwd.
     #[arg(long, default_value = "falsification.json")]

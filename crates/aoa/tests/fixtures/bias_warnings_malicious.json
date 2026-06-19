@@ -1,0 +1,11 @@
+{
+  "experiment": "evil",
+  "bias_warnings": [
+    {
+      "kind": "backend_overlap",
+      "severity": "warning",
+      "message": "harmless\u001b[2J\u001b]0;pwned\u0007 injected",
+      "detail": {}
+    }
+  ]
+}

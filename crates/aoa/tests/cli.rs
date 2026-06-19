@@ -578,3 +578,166 @@ fn run_git(path: &Path, args: &[&str]) {
         .expect("git available");
     assert!(status.success(), "git {args:?} failed");
 }
+
+// --- aoa-dhk: R0 falsification as a codeprobe experiment ----------------------
+
+// AC2 SMOKE: the full pipeline runs end-to-end on a fixture experiment (1 repo /
+// 1 identical-pair task across two arms) and emits falsification.json with a
+// verdict field. With a single repo the gate cannot establish a cross-repo
+// majority, so the verdict is an honest `inconclusive` carrying the
+// `too_few_repos` precondition discriminator — never mistakable for a real
+// 5-repo abstention. AC4: codeprobe bias warnings are surfaced alongside.
+#[test]
+fn experiment_pipeline_smoke_emits_verdict_and_surfaces_bias() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("falsify_input.json");
+    let build_meta = dir.path().join("falsify_input.build.json");
+    let falsification = dir.path().join("falsification.json");
+
+    // Step 1: build the FalsifyInput from the experiment's paired arms.
+    aoa()
+        .args(["eval", "experiment", "--manifest"])
+        .arg(fixture("experiment_smoke/manifest.json"))
+        .arg("--tasks")
+        .arg(fixture("codeprobe_tasks"))
+        .arg("--out")
+        .arg(&input)
+        .assert()
+        .success();
+
+    let build: Value =
+        serde_json::from_str(&std::fs::read_to_string(&build_meta).expect("build report written"))
+            .expect("valid build json");
+    assert_eq!(build["repo_count"], 1);
+    assert_eq!(build["total_identical_pairs"], 1);
+    assert_eq!(build["convention_inputs_degraded"], true);
+    let repo0 = &build["repos"][0];
+    assert_eq!(repo0["identical_pairs"], 1);
+    assert_eq!(
+        repo0["eligible"], true,
+        "native+high+calibrated repo is eligible"
+    );
+    // H4: the task present only in the repo arm is excluded as a non-pair.
+    let excluded = repo0["excluded_tasks"].as_array().expect("excluded array");
+    assert!(
+        excluded.iter().any(|e| e["task_id"] == "solo-only-001"),
+        "presence-mismatch task must be recorded as excluded, got {excluded:?}"
+    );
+
+    // Step 2: run the gate over the built input, with bias warnings attached.
+    aoa()
+        .args(["falsify", "--repos"])
+        .arg(&input)
+        .arg("--build-meta")
+        .arg(&build_meta)
+        .arg("--bias-warnings")
+        .arg(fixture("experiment_aggregate.json"))
+        .arg("--out")
+        .arg(&falsification)
+        .assert()
+        // A precondition-driven verdict is a non-usable result: non-zero exit.
+        .failure();
+
+    let out: Value =
+        serde_json::from_str(&std::fs::read_to_string(&falsification).expect("falsification.json"))
+            .expect("valid json");
+    assert_eq!(out["verdict"], "inconclusive");
+    assert_eq!(out["precondition_unmet"], "too_few_repos");
+    // AC4: codeprobe bias warnings surfaced alongside the verdict, and the
+    // no_independent_baseline warning flagged as gate-invalidating.
+    let warnings = out["bias_warnings"]
+        .as_array()
+        .expect("bias warnings surfaced");
+    assert_eq!(warnings.len(), 2);
+    assert_eq!(out["bias_gate_invalidating"], true);
+}
+
+// H2/AC4: given a real >=5-repo input but a build report flagging degraded
+// convention inputs, the gate abstains to `inconclusive` with the
+// `convention_inputs_degraded` precondition rather than asserting a verdict the
+// R0' convention-invariance check cannot back. The gate's deltas are still
+// emitted for transparency.
+#[test]
+fn falsify_abstains_on_degraded_convention_inputs() {
+    let dir = TempDir::new().expect("tempdir");
+    let out = dir.path().join("falsification.json");
+
+    aoa()
+        .args(["falsify", "--repos"])
+        .arg(fixture("falsify_input.json"))
+        .arg("--build-meta")
+        .arg(fixture("build_meta_degraded.json"))
+        .arg("--bias-warnings")
+        .arg(fixture("experiment_aggregate.json"))
+        .arg("--out")
+        .arg(&out)
+        .assert()
+        .failure();
+
+    let parsed: Value =
+        serde_json::from_str(&std::fs::read_to_string(&out).expect("written")).expect("json");
+    assert_eq!(parsed["verdict"], "inconclusive");
+    assert_eq!(parsed["precondition_unmet"], "convention_inputs_degraded");
+    // Deltas preserved for transparency even when abstaining.
+    assert!(
+        parsed.get("repo_delta").is_some(),
+        "repo_delta kept for transparency"
+    );
+    assert_eq!(parsed["bias_gate_invalidating"], true);
+}
+
+// A genuine >=5-repo gate verdict carries NO precondition discriminator and exits
+// zero — the property that keeps a real abstention distinguishable from a
+// precondition-driven one.
+#[test]
+fn falsify_real_verdict_has_no_precondition_marker() {
+    let dir = TempDir::new().expect("tempdir");
+    let out = dir.path().join("falsification.json");
+
+    aoa()
+        .args(["falsify", "--repos"])
+        .arg(fixture("falsify_input.json"))
+        .arg("--out")
+        .arg(&out)
+        .assert()
+        .success();
+
+    let parsed: Value =
+        serde_json::from_str(&std::fs::read_to_string(&out).expect("written")).expect("json");
+    assert!(parsed.get("verdict").is_some());
+    assert!(
+        parsed.get("precondition_unmet").is_none(),
+        "a real gate verdict must not carry a precondition discriminator"
+    );
+}
+
+// Security: untrusted free-text from codeprobe's aggregate.json (bias warning
+// messages) must be escaped before reaching the terminal — a crafted message
+// must not inject raw control sequences into human output.
+#[test]
+fn falsify_escapes_untrusted_bias_warning_text() {
+    let dir = TempDir::new().expect("tempdir");
+    let out = dir.path().join("falsification.json");
+
+    let assert = aoa()
+        .args(["falsify", "--repos"])
+        .arg(fixture("falsify_input.json"))
+        .arg("--bias-warnings")
+        .arg(fixture("bias_warnings_malicious.json"))
+        .arg("--out")
+        .arg(&out)
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8");
+    // The raw ESC (0x1b) and BEL (0x07) control bytes must NOT appear in human
+    // output; the escaped textual form must.
+    assert!(
+        !stdout.contains('\u{1b}') && !stdout.contains('\u{07}'),
+        "raw control bytes leaked into terminal output"
+    );
+    assert!(
+        stdout.contains("\\u{1b}"),
+        "escaped form of the control byte expected"
+    );
+}

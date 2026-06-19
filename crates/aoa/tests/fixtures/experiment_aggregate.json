@@ -1,0 +1,22 @@
+{
+  "experiment": "r0-smoke",
+  "generated": "2026-06-19T00:00:00Z",
+  "config_count": 2,
+  "config_summaries": {},
+  "pairwise_deltas": {},
+  "bias_warnings": [
+    {
+      "kind": "no_independent_baseline",
+      "severity": "warning",
+      "message": "every task's ground truth was produced by the same backend set; with no independent baseline an aggregate winner is uninterpretable",
+      "detail": {}
+    },
+    {
+      "kind": "backend_overlap",
+      "severity": "informational",
+      "message": "a config shares a backend with the GT curator, but the multi-backend curator corroborated independently",
+      "detail": { "config": "aoa_migrated" }
+    }
+  ],
+  "quality_metrics": {}
+}
