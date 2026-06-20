@@ -32,7 +32,7 @@ fn loads_org_scale_metadata_task_into_aoa_inputs() {
     assert!(task.oracle_files.contains("tests/test_core.py"));
     assert_eq!(
         task.ground_truth_commit.as_deref(),
-        Some("0000000000000000000000000000000000000000")
+        Some("a3c0ffee1234567890abcdef1234567890abcdef")
     );
 }
 

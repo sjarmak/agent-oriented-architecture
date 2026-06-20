@@ -83,10 +83,7 @@ fn read_metadata(path: &Path) -> Result<Manifest, BenchError> {
         path: path.to_path_buf(),
         source,
     })?;
-    let commit = file
-        .metadata
-        .ground_truth_commit
-        .filter(|c| !c.trim().is_empty());
+    let commit = meaningful_commit(file.metadata.ground_truth_commit);
     let inline = if file.verification.oracle_answer.is_empty() {
         None
     } else {
@@ -175,10 +172,7 @@ fn read_ground_truth(dir: &Path, manifest: &Manifest) -> Result<GroundTruth, Ben
         (None, Some(gt)) => gt.expected.iter().cloned().collect(),
         (None, None) => BTreeSet::new(),
     };
-    let commit = canonical
-        .as_ref()
-        .and_then(|gt| gt.commit.clone())
-        .filter(|c| !c.trim().is_empty());
+    let commit = meaningful_commit(canonical.as_ref().and_then(|gt| gt.commit.clone()));
 
     let accepted_solutions = read_accepted_backends(dir)?;
 
@@ -264,6 +258,22 @@ fn read_accepted_backends(dir: &Path) -> Result<Vec<AcceptedSolution>, BenchErro
     Ok(solutions)
 }
 
+/// Keep a `ground_truth_commit` only if it anchors the oracle to a real mined
+/// commit.
+///
+/// A blank value, or the (ASCII) git null object id (all zeros, codeprobe's
+/// sanitized / absent-commit placeholder), is dropped: it must NOT grant a task
+/// contamination-free `External` provenance it did not earn. The check targets
+/// the null sentinel specifically — an otherwise-improbable but well-formed SHA
+/// (e.g. all ones) is left alone.
+fn meaningful_commit(commit: Option<String>) -> Option<String> {
+    // Trim only for the predicate; the original value is stored as-is when kept.
+    commit.filter(|c| {
+        let t = c.trim();
+        !t.is_empty() && !t.chars().all(|ch| ch == '0')
+    })
+}
+
 /// codeprobe places ground truth under `tests/` in the probe/dual layout and at
 /// the task root in the org-scale layout. Prefer whichever exists.
 fn ground_truth_dir(dir: &Path) -> PathBuf {
@@ -329,6 +339,49 @@ fn read_capped(path: &Path, max: u64) -> Result<String, BenchError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn meaningful_commit_rejects_blank_and_the_git_null_id() {
+        // Blank and the all-zeros git null id are dropped...
+        assert_eq!(meaningful_commit(None), None);
+        assert_eq!(meaningful_commit(Some("   ".into())), None);
+        assert_eq!(meaningful_commit(Some("0".repeat(40))), None);
+        assert_eq!(meaningful_commit(Some(" 0000000 ".into())), None);
+        // ...while a real SHA, or any non-all-zeros placeholder, is kept.
+        assert_eq!(
+            meaningful_commit(Some("a3c0ffee1234567890abcdef1234567890abcdef".into())).as_deref(),
+            Some("a3c0ffee1234567890abcdef1234567890abcdef")
+        );
+        assert_eq!(
+            meaningful_commit(Some("1".repeat(40))).as_deref(),
+            Some(&"1".repeat(40)[..])
+        );
+    }
+
+    #[test]
+    fn a_null_commit_does_not_grant_external_provenance() {
+        use aoa_gap::HeldOutProvenance;
+
+        let dir = std::env::temp_dir().join(format!("aoa-bench-null-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("metadata.json"),
+            r#"{
+              "id": "synthetic-000", "repo": "sample/widget",
+              "metadata": {"ground_truth_commit": "0000000000000000000000000000000000000000"},
+              "verification": {"oracle_type": "file_list", "oracle_answer": ["src/a.py"]}
+            }"#,
+        )
+        .unwrap();
+        fs::write(dir.join("instruction.md"), "do the thing").unwrap();
+
+        let task = load_task(&dir).unwrap();
+        // The null commit is stripped, so the task is NOT externally composed.
+        assert_eq!(task.ground_truth_commit, None);
+        assert_ne!(task.held_out_provenance(), HeldOutProvenance::External);
+
+        fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn read_capped_rejects_over_cap_and_accepts_exactly_cap() {
