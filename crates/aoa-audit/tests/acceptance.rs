@@ -208,6 +208,38 @@ fn exit_code_table() {
     }
 }
 
+// Criterion 7: the code-structure audit family surfaces a measured, Tier-3
+// (advisory) item. The fixture repo has no README at its root, so the
+// navigability-anchor check must emit an item — alongside the planes/budget
+// items — proving structure checks are wired into `audit()`.
+#[test]
+fn audit_surfaces_structure_family_items() {
+    let repo = fixture_repo();
+    let report = audit(repo.path(), &audit_config()).expect("audit succeeds");
+
+    let anchor = report
+        .items
+        .iter()
+        .find(|item| item.measured_cost.unit == "package roots")
+        .expect("expected a navigability-anchor structure item");
+
+    // A measured fact (a real count), born advisory: structure best-practices
+    // are never evidence-backed until R9c external-outcome correlation.
+    assert!(
+        anchor.measured_cost.value >= 1,
+        "anchor count must be a real measured count"
+    );
+    assert_eq!(
+        anchor.tier,
+        Tier::Tier3,
+        "structure items are born advisory (Tier-3)"
+    );
+    assert!(
+        anchor.plane.is_none(),
+        "a structure item is not plane-shaped"
+    );
+}
+
 // Defensive: the default-config audit (no context root match, empty graph) still
 // produces a well-formed, ranked report with tiered items.
 #[test]

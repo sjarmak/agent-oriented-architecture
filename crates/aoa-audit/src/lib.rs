@@ -19,6 +19,7 @@ mod observe;
 mod planes;
 mod punch;
 mod report;
+mod structure;
 mod tier;
 
 pub use audit::{audit, AuditConfig};

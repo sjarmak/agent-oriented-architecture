@@ -9,6 +9,7 @@ use crate::error::AuditError;
 use crate::planes::missing_planes;
 use crate::punch::{rank, MeasuredCost, PunchItem};
 use crate::report::AuditReport;
+use crate::structure::structure_items;
 use crate::tier::Tier;
 
 /// The reference encoding used for the context-budget probe. o200k_base loads
@@ -21,6 +22,13 @@ const DEFAULT_CONTEXT_CEILING: usize = 2_000;
 
 /// Default mutation-surface reachability depth.
 const DEFAULT_MUTATION_K: u32 = 2;
+
+/// Default module-size outlier multiplier: a source file longer than this many
+/// times the repo's *own* median source-file line count is counted as an
+/// outlier. Self-calibrating against the repo's distribution rather than an
+/// absolute size, so it asserts no external best-practice. Overridable per run,
+/// mirroring the inspectable-defaults discipline of `aoa-gap`'s thresholds.
+const DEFAULT_SIZE_OUTLIER_K: f64 = 4.0;
 
 /// Configuration for a read-only audit run. Every field is data the caller
 /// supplies; the audit makes no semantic judgments of its own.
@@ -42,6 +50,10 @@ pub struct AuditConfig {
     pub trace: Trace,
     /// Gold artifact symbols anchoring the retrieval-locality proxy.
     pub gold_set: BTreeSet<String>,
+    /// Multiplier for the module-size outlier check: a source file longer than
+    /// `size_outlier_k ×` the repo's own median source-file line count is
+    /// counted. Documented, overridable; never an absolute size threshold.
+    pub size_outlier_k: f64,
 }
 
 impl Default for AuditConfig {
@@ -59,14 +71,16 @@ impl Default for AuditConfig {
             k: DEFAULT_MUTATION_K,
             trace: Trace { spans: Vec::new() },
             gold_set: BTreeSet::new(),
+            size_outlier_k: DEFAULT_SIZE_OUTLIER_K,
         }
     }
 }
 
 /// Run a read-only audit of `repo`. Builds a ranked, tiered punch-list grounded
 /// in measured numbers: the context-file token closure (aoa-budget), the
-/// mutation-surface proxy (aoa-metrics), and structural enforcement-plane
-/// checks. Writes nothing.
+/// mutation-surface proxy (aoa-metrics), structural enforcement-plane checks,
+/// and the code-structure family (navigability anchors, module-size outliers —
+/// born Tier-3/advisory). Writes nothing.
 pub fn audit(repo: &Path, cfg: &AuditConfig) -> Result<AuditReport, AuditError> {
     let mut items = Vec::new();
 
@@ -75,6 +89,7 @@ pub fn audit(repo: &Path, cfg: &AuditConfig) -> Result<AuditReport, AuditError> 
     }
     items.push(mutation_surface_item(cfg));
     items.extend(plane_items(repo));
+    items.extend(structure_items(repo, cfg.size_outlier_k)?);
 
     rank(&mut items);
     Ok(AuditReport::new(items))
