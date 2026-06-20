@@ -14,13 +14,17 @@
 //!
 //! Construct validity (R9c): a metric is `advisory` until a correlation report
 //! ties it to at least one external outcome (revert rate, incident count, or
-//! review acceptance); only then may it be `gating`.
+//! review acceptance) with the right sign, sufficient magnitude, sufficient
+//! sample size, and significance (an exact permutation p-value); only then may
+//! it be `gating`. With no external-outcome corpus presently available, every
+//! gating candidate stays advisory — see [`current_determination`].
 //!
 //! All logic here is deterministic mechanism: rates are arithmetic means of
 //! per-task booleans and labels are boolean predicates over rate/gap deltas.
 
 mod compare;
 mod construct;
+mod correlation;
 mod error;
 mod gap;
 mod provenance;
@@ -28,8 +32,11 @@ mod run;
 
 pub use compare::{compare, CompareOutcome, Label};
 pub use construct::{
-    classify_metric, CorrelationReport, ExternalOutcome, MetricMode, OutcomeCorrelation,
+    build_report, classify_metric, current_determination, ConstructValidityReport,
+    CorrelationReport, ExternalOutcome, GatingThresholds, MetricClassification, MetricMode,
+    MetricOrientation, OutcomeCorrelation, GATING_CANDIDATES, NO_EXTERNAL_OUTCOME_SOURCE,
 };
+pub use correlation::{spearman, CorrelationError, RankCorrelation, MAX_EXACT_N};
 pub use error::GapError;
 pub use gap::{compute_gap, GapOutcome};
 pub use provenance::HeldOutProvenance;
