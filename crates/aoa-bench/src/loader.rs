@@ -6,16 +6,16 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::error::BenchError;
-use crate::task::CodeprobeTask;
+use crate::task::{AcceptedSolution, CodeprobeTask};
 
 /// Load a codeprobe task directory into AOA task inputs.
 ///
 /// Supports both observed codeprobe layouts: the rich org-scale form
 /// (`metadata.json` carrying the oracle answer and ground-truth commit) and the
 /// simple probe form (`task.toml` + `tests/ground_truth.json`). The oracle file
-/// set is read from `ground_truth.json` (top-level or under `tests/`), and any
-/// `ground_truth_<backend>.json` siblings are read as independently-mined
-/// accepted solutions.
+/// set is read from `ground_truth.json` (top-level or under `tests/`); the
+/// per-backend accepted solutions are read from `divergence_report.json`,
+/// codeprobe's record of what each consensus-mining backend independently found.
 pub fn load_task(dir: impl AsRef<Path>) -> Result<CodeprobeTask, BenchError> {
     let dir = dir.as_ref();
     let metadata_path = dir.join("metadata.json");
@@ -152,20 +152,20 @@ struct GroundTruthFile {
 /// The oracle facts resolved from a task's ground-truth files.
 struct GroundTruth {
     oracle_files: BTreeSet<String>,
-    accepted_solutions: Vec<BTreeSet<String>>,
+    accepted_solutions: Vec<AcceptedSolution>,
     /// History commit recorded alongside the file-list oracle, if any.
     commit: Option<String>,
 }
 
-/// Resolve the oracle file set and the independently-mined accepted solutions.
+/// Resolve the oracle file set, the per-backend accepted solutions, and the
+/// mining commit.
 ///
-/// The oracle file set comes from the manifest's inline answer when present,
-/// otherwise from `ground_truth.json`. Backend-variant ground-truth files
-/// (`ground_truth_<backend>.json`) each contribute one accepted-solution set.
-/// The canonical oracle set is always included as one accepted solution so a
-/// single backend that matches the oracle does not over-count. The canonical
-/// file's own `commit`, if any, is returned so a probe-layout task can be
-/// recognized as externally composed even without an org-scale metadata block.
+/// The oracle file set (`G_t`) comes from the manifest's inline answer when
+/// present, otherwise from `ground_truth.json` (the consensus answer). The
+/// accepted solutions come from `divergence_report.json`, codeprobe's record of
+/// what *each* backend independently mined — see [`read_accepted_backends`]. The
+/// canonical file's own `commit`, if any, is returned so a probe-layout task can
+/// be recognized as externally composed even without an org-scale metadata block.
 fn read_ground_truth(dir: &Path, manifest: &Manifest) -> Result<GroundTruth, BenchError> {
     let gt_dir = ground_truth_dir(dir);
 
@@ -180,24 +180,88 @@ fn read_ground_truth(dir: &Path, manifest: &Manifest) -> Result<GroundTruth, Ben
         .and_then(|gt| gt.commit.clone())
         .filter(|c| !c.trim().is_empty());
 
-    let mut accepted: Vec<BTreeSet<String>> = Vec::new();
-    if !oracle_files.is_empty() {
-        accepted.push(oracle_files.clone());
-    }
-    for variant in backend_variant_files(&gt_dir)? {
-        if let Some(gt) = parse_ground_truth(&variant)? {
-            let set: BTreeSet<String> = gt.expected.into_iter().collect();
-            if !set.is_empty() {
-                accepted.push(set);
-            }
-        }
-    }
+    let accepted_solutions = read_accepted_backends(dir)?;
 
     Ok(GroundTruth {
         oracle_files,
-        accepted_solutions: accepted,
+        accepted_solutions,
         commit,
     })
+}
+
+// ---------------------------------------------------------------------------
+// divergence_report.json (consensus.v1) — per-backend accepted solutions
+// ---------------------------------------------------------------------------
+
+/// codeprobe's per-backend consensus record, written at `<task>/divergence_report.json`.
+#[derive(Deserialize)]
+struct DivergenceReport {
+    /// `"shipped"` when ≥2 backends agreed above the F1 threshold, else
+    /// `"quarantined"`. Only a shipped task has a real consensus answer.
+    #[serde(default)]
+    decision: String,
+    #[serde(default)]
+    backend_results: Vec<BackendResult>,
+}
+
+#[derive(Deserialize)]
+struct BackendResult {
+    #[serde(default)]
+    backend: String,
+    #[serde(default)]
+    available: bool,
+    #[serde(default)]
+    files: Vec<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+/// Read the per-backend accepted solutions from `divergence_report.json`.
+///
+/// This is codeprobe's authoritative record of independent multi-backend mining
+/// (schema `consensus.v1`): each backend's own file-set, plus the `decision`
+/// (`shipped` ⇔ ≥2 backends agreed above the F1 threshold). AOA consumes that
+/// decision rather than re-deriving agreement: only a `shipped` report yields
+/// accepted solutions, and only available, errored-free, named backends
+/// contribute. Absent the report (external/probe tasks with no consensus leg),
+/// there are simply no native accepted solutions.
+///
+/// Note: each backend's own `files` are used (the spread edit-locality needs),
+/// NOT the report's `consensus_files` (the agreed intersection). `G_t` comes
+/// separately from `ground_truth.json`; in a real codeprobe task both derive from
+/// one `ConsensusDecision`, so they agree by construction at mine time.
+fn read_accepted_backends(dir: &Path) -> Result<Vec<AcceptedSolution>, BenchError> {
+    let path = dir.join("divergence_report.json");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let raw = read_file(&path)?;
+    let report: DivergenceReport =
+        serde_json::from_str(&raw).map_err(|source| BenchError::Json {
+            path: path.clone(),
+            source,
+        })?;
+
+    if report.decision != "shipped" {
+        return Ok(Vec::new());
+    }
+
+    // Keep every usable backend identity — available, errored-free, named. File
+    // emptiness is deliberately NOT filtered here: a shipped report is codeprobe's
+    // authoritative "≥2 backends agreed" judgment, so dropping a backend for an
+    // empty file-set would let AOA silently demote a shipped consensus to None.
+    // Empty solutions are dropped downstream by `accepted_solution_files`, where
+    // edit-locality (which needs a real spread) actually cares.
+    let solutions = report
+        .backend_results
+        .into_iter()
+        .filter(|b| b.available && b.error.is_none() && !b.backend.is_empty())
+        .map(|b| AcceptedSolution {
+            backend: b.backend,
+            files: b.files.into_iter().collect(),
+        })
+        .collect();
+    Ok(solutions)
 }
 
 /// codeprobe places ground truth under `tests/` in the probe/dual layout and at
@@ -224,43 +288,10 @@ fn parse_ground_truth(path: &Path) -> Result<Option<GroundTruthFile>, BenchError
 }
 
 /// Largest task-dir file read into memory. metadata.json / task.toml /
-/// ground_truth*.json are small by nature; this ceiling bounds the bytes held
-/// from an attacker-controlled task dir without rejecting real input.
+/// ground_truth.json / divergence_report.json are small by nature; this ceiling
+/// bounds the bytes held from an attacker-controlled task dir without rejecting
+/// real input.
 const MAX_TASK_FILE_BYTES: u64 = 16 * 1024 * 1024;
-
-/// List `ground_truth_<backend>.json` siblings in sorted order.
-///
-/// Entries are classified by [`fs::DirEntry::file_type`], which does NOT follow
-/// symlinks: a symlinked `ground_truth_*.json` reports as a symlink (not a file)
-/// and is skipped, so a link cannot pull an out-of-tree file's bytes into a
-/// JSON-parse error. Mirrors the guard `discover_tasks` uses.
-fn backend_variant_files(gt_dir: &Path) -> Result<Vec<PathBuf>, BenchError> {
-    let entries = fs::read_dir(gt_dir).map_err(|source| BenchError::Io {
-        path: gt_dir.to_path_buf(),
-        source,
-    })?;
-    let mut variants: Vec<PathBuf> = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|source| BenchError::Io {
-            path: gt_dir.to_path_buf(),
-            source,
-        })?;
-        let file_type = entry.file_type().map_err(|source| BenchError::Io {
-            path: entry.path(),
-            source,
-        })?;
-        if !file_type.is_file() {
-            continue;
-        }
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with("ground_truth_") && name.ends_with(".json") {
-            variants.push(entry.path());
-        }
-    }
-    variants.sort();
-    Ok(variants)
-}
 
 /// Read `path` into a `String`, rejecting anything past [`MAX_TASK_FILE_BYTES`].
 fn read_file(path: &Path) -> Result<String, BenchError> {
@@ -313,28 +344,50 @@ mod tests {
         fs::remove_dir_all(&dir).ok();
     }
 
-    #[cfg(unix)]
     #[test]
-    fn symlinked_ground_truth_variant_is_skipped() {
-        use std::os::unix::fs::symlink;
+    fn shipped_divergence_report_yields_per_backend_accepted_solutions() {
+        let dir = std::env::temp_dir().join(format!("aoa-bench-diverge-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("divergence_report.json"),
+            r#"{
+              "schema_version": "consensus.v1",
+              "decision": "shipped",
+              "backend_results": [
+                {"backend": "ast", "available": true, "files": ["a.py", "b.py"], "error": null},
+                {"backend": "treesitter", "available": true, "files": ["a.py", "b.py"], "error": null},
+                {"backend": "broken", "available": false, "files": [], "error": "timeout"}
+              ]
+            }"#,
+        )
+        .unwrap();
 
-        let base = std::env::temp_dir().join(format!("aoa-bench-variant-{}", std::process::id()));
-        let gt_dir = base.join("task");
-        let outside = base.join("outside");
-        fs::create_dir_all(&gt_dir).unwrap();
-        fs::create_dir_all(&outside).unwrap();
+        let solutions = read_accepted_backends(&dir).unwrap();
+        let backends: Vec<&str> = solutions.iter().map(|s| s.backend.as_str()).collect();
+        // The two agreeing backends are kept (identical files and all); the
+        // unavailable/errored one is dropped.
+        assert_eq!(backends, vec!["ast", "treesitter"]);
 
-        let real = gt_dir.join("ground_truth_real.json");
-        fs::write(&real, "{}").unwrap();
-        let target = outside.join("secret.json");
-        fs::write(&target, "{}").unwrap();
-        // A symlinked variant must NOT be followed: its out-of-tree bytes must not
-        // reach the JSON parser.
-        symlink(&target, gt_dir.join("ground_truth_evil.json")).unwrap();
+        fs::remove_dir_all(&dir).ok();
+    }
 
-        let variants = backend_variant_files(&gt_dir).unwrap();
-        assert_eq!(variants, vec![real]);
+    #[test]
+    fn quarantined_or_absent_report_yields_no_accepted_solutions() {
+        let dir = std::env::temp_dir().join(format!("aoa-bench-quar-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        // Absent report → empty.
+        assert!(read_accepted_backends(&dir).unwrap().is_empty());
+        // Quarantined report (backends disagreed) → empty, regardless of count.
+        fs::write(
+            dir.join("divergence_report.json"),
+            r#"{"decision": "quarantined", "backend_results": [
+                {"backend": "ast", "available": true, "files": ["a.py"], "error": null},
+                {"backend": "treesitter", "available": true, "files": ["z.py"], "error": null}
+            ]}"#,
+        )
+        .unwrap();
+        assert!(read_accepted_backends(&dir).unwrap().is_empty());
 
-        fs::remove_dir_all(&base).ok();
+        fs::remove_dir_all(&dir).ok();
     }
 }

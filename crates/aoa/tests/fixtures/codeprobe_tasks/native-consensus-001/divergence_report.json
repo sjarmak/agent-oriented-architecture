@@ -1,0 +1,28 @@
+{
+  "schema_version": "consensus.v1",
+  "symbol": "parse_config",
+  "defining_file": "src/widget/config.py",
+  "threshold": 0.5,
+  "mode": "intersection",
+  "decision": "shipped",
+  "backend_results": [
+    {
+      "backend": "ast",
+      "available": true,
+      "n_files": 2,
+      "files": ["src/widget/config.py", "src/widget/loader.py"],
+      "error": null
+    },
+    {
+      "backend": "treesitter",
+      "available": true,
+      "n_files": 3,
+      "files": ["src/widget/config.py", "src/widget/loader.py", "tests/test_config.py"],
+      "error": null
+    }
+  ],
+  "pair_metrics": [
+    {"backend_a": "ast", "backend_b": "treesitter", "precision": 1.0, "recall": 0.667, "f1": 0.8}
+  ],
+  "consensus_files": ["src/widget/config.py", "src/widget/loader.py"]
+}

@@ -216,7 +216,7 @@ fn process_task(
         .unwrap_or_default();
     let accepted_solutions = task
         .as_ref()
-        .map(|t| t.accepted_solutions.clone())
+        .map(|t| t.accepted_solution_files())
         .unwrap_or_default();
 
     let edited_files = edited_files_from_trace(&trace);

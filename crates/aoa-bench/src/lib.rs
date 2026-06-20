@@ -9,12 +9,13 @@
 //! floor/ceiling.
 //!
 //! Provenance is surfaced to `aoa-gap` as `External` (a `file_list` oracle
-//! anchored to a real ground-truth commit) or `NativeComposed` (two or more mined
-//! backends that agreed), never `SynthesizedFromVisible`. A task with no
+//! anchored to a real ground-truth commit) or `NativeComposed` (two or more
+//! independently-mined backends agreed in consensus mining, read from
+//! `divergence_report.json`), never `SynthesizedFromVisible`. A task with no
 //! independent held-out leg classifies as `None`, which drives `compute_gap` to
 //! `Unavailable` (gap:unavailable) rather than fabricating a held-out suite.
-//! When fewer than two accepted solutions were mined, edit-locality anchors
-//! surface `aoa-metrics`' `InsufficientAcceptedSolutions` instead of inventing one.
+//! When fewer than two distinct accepted solutions were mined, edit-locality
+//! anchors surface `aoa-metrics`' `InsufficientAcceptedSolutions`, not an invented one.
 
 mod bridge;
 mod error;
@@ -26,4 +27,4 @@ pub use bridge::EditLocalityAnchors;
 pub use error::BenchError;
 pub use loader::load_task;
 pub use provenance::classify_provenance;
-pub use task::CodeprobeTask;
+pub use task::{AcceptedSolution, CodeprobeTask};

@@ -82,6 +82,20 @@ fn two_agreeing_backends_are_native_composed() {
 }
 
 #[test]
+fn native_composed_backends_are_auditable_from_the_loaded_task() {
+    // AC2: the NativeComposed decision must be auditable from the loaded
+    // structure — the backend identities that agreed are read straight from
+    // divergence_report.json, not inferred from file-set cardinality.
+    let task = load("native-consensus-001");
+    let backends: Vec<&str> = task
+        .accepted_solutions
+        .iter()
+        .map(|s| s.backend.as_str())
+        .collect();
+    assert_eq!(backends, vec!["ast", "treesitter"]);
+}
+
+#[test]
 fn provenance_is_never_synthesized_from_visible() {
     for name in [
         "external-filelist-000",

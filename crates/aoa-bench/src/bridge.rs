@@ -28,14 +28,17 @@ impl CodeprobeTask {
     /// `compute_edit_locality` would raise — a missing second solution is never
     /// fabricated to force a floor/ceiling.
     pub fn edit_locality_anchors(&self) -> Result<EditLocalityAnchors, MetricError> {
-        if self.accepted_solutions.len() < 2 {
-            return Err(MetricError::InsufficientAcceptedSolutions(
-                self.accepted_solutions.len(),
-            ));
+        // Edit locality needs the spread between *distinct* accepted solutions:
+        // two backends that mined identical files give no floor/ceiling
+        // information, so they collapse here (they still count as independent
+        // backends for provenance — that is a separate judgment).
+        let distinct = self.accepted_solution_files();
+        if distinct.len() < 2 {
+            return Err(MetricError::InsufficientAcceptedSolutions(distinct.len()));
         }
         Ok(EditLocalityAnchors {
             gold_set: self.oracle_files.clone(),
-            accepted_solutions: self.accepted_solutions.clone(),
+            accepted_solutions: distinct,
         })
     }
 
@@ -53,5 +56,64 @@ impl CodeprobeTask {
             held_out_provenance: self.held_out_provenance(),
             canaries: Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::task::AcceptedSolution;
+    use aoa_gap::HeldOutProvenance;
+
+    fn solution(backend: &str, files: &[&str]) -> AcceptedSolution {
+        AcceptedSolution {
+            backend: backend.to_string(),
+            files: files.iter().map(|f| f.to_string()).collect(),
+        }
+    }
+
+    fn task(accepted: Vec<AcceptedSolution>) -> CodeprobeTask {
+        CodeprobeTask {
+            id: "t".into(),
+            repo: "r".into(),
+            instruction: "i".into(),
+            oracle_files: BTreeSet::from(["g.py".to_string()]),
+            ground_truth_commit: None,
+            accepted_solutions: accepted,
+        }
+    }
+
+    #[test]
+    fn identical_backend_solutions_are_insufficient_for_edit_locality() {
+        // The provenance/edit-locality split: two backends with identical files
+        // are NativeComposed (provenance) but collapse to ONE distinct solution,
+        // so edit locality fails loud rather than reporting a degenerate
+        // floor==ceiling from a zero-width spread.
+        let t = task(vec![
+            solution("ast", &["a.py", "b.py"]),
+            solution("treesitter", &["a.py", "b.py"]),
+        ]);
+        assert_eq!(t.held_out_provenance(), HeldOutProvenance::NativeComposed);
+        match t.edit_locality_anchors() {
+            Err(MetricError::InsufficientAcceptedSolutions(n)) => assert_eq!(n, 1),
+            other => panic!("expected InsufficientAcceptedSolutions(1), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_file_backend_counts_for_provenance_but_not_edit_locality() {
+        // A shipped backend with an empty file-set still counts as an independent
+        // run (NativeComposed) but contributes no edit-locality anchor.
+        let t = task(vec![
+            solution("ast", &["a.py", "b.py"]),
+            solution("treesitter", &[]),
+        ]);
+        assert_eq!(t.held_out_provenance(), HeldOutProvenance::NativeComposed);
+        // Only one non-empty distinct solution survives for edit locality.
+        assert_eq!(t.accepted_solution_files().len(), 1);
+        assert!(matches!(
+            t.edit_locality_anchors(),
+            Err(MetricError::InsufficientAcceptedSolutions(1))
+        ));
     }
 }
