@@ -42,13 +42,23 @@ fn figures(run: &RunResult) -> Result<RunFigures, GapError> {
     }
 }
 
-/// Whether the leakage canary trips: held-out rose while visible stayed flat and
-/// an injected canary flipped against its expected outcome. Held-out improving
-/// without any visible movement is exactly the leakage signature; a flipped
-/// known-held-out canary confirms the suite was contaminated.
+/// Whether the leakage canary trips: held-out rose while the visible leg stayed
+/// flat and an injected canary flipped against its expected outcome. Held-out
+/// improving without matching visible movement is the leakage signature; a
+/// flipped known-held-out canary confirms the suite was contaminated.
+///
+/// "Flat" tolerates one task's worth of movement (`1/N`) rather than demanding
+/// an exact-equal visible rate: a real leak that also nudges the visible leg by
+/// a single task out of N would otherwise read as not-flat and fail open. The
+/// band uses the smaller task count so a one-task flip in either run is covered;
+/// for the common same-task-set case both counts are N. A broad gain that lifts
+/// visible well beyond one task is honest capability, not a held-out-specific
+/// leak, and is deliberately left outside the band.
 fn leakage_detected(baseline: &RunResult, migrated: &RunResult) -> bool {
     let held_out_rose = migrated.held_out_rate() > baseline.held_out_rate();
-    let visible_flat = migrated.visible_rate() == baseline.visible_rate();
+    let n = baseline.tasks.len().min(migrated.tasks.len());
+    let visible_tol = if n == 0 { 0.0 } else { 1.0 / n as f64 };
+    let visible_flat = (migrated.visible_rate() - baseline.visible_rate()).abs() <= visible_tol;
     let canary_flipped = baseline.any_canary_flipped() || migrated.any_canary_flipped();
     held_out_rose && visible_flat && canary_flipped
 }
