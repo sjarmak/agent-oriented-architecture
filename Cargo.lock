@@ -80,6 +80,7 @@ dependencies = [
  "aoa-gap",
  "aoa-lint",
  "aoa-metrics",
+ "aoa-migrate",
  "aoa-scip-graph",
  "aoa-trace",
  "assert_cmd",
@@ -174,6 +175,17 @@ dependencies = [
  "aoa-trace",
  "serde",
  "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "aoa-migrate"
+version = "0.1.0"
+dependencies = [
+ "aoa-audit",
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror",
 ]
 

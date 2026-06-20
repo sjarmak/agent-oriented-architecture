@@ -22,6 +22,10 @@ pub enum Command {
     /// Print a tiered, ranked audit punch-list grounded in measured numbers.
     Audit(AuditArgs),
 
+    /// Apply safe, reproducible, code-layer migrations toward the structure
+    /// best-practices the audit measures (the R0 repo-delta treatment).
+    Migrate(MigrateArgs),
+
     /// Lint context files for config-file smells over the resolved closure.
     LintContext(LintArgs),
 
@@ -51,6 +55,26 @@ pub struct AuditArgs {
     /// Exit non-zero when a Tier-1 gap is present.
     #[arg(long, value_parser = ["tier1"])]
     pub fail_on: Option<String>,
+
+    /// Emit the structured JSON rendering instead of human text.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct MigrateArgs {
+    /// Repository checkout to migrate. Defaults to the cwd.
+    #[arg(long, default_value = ".")]
+    pub repo: PathBuf,
+
+    /// Write the changes (archived + recorded for rollback). Without it the
+    /// command is a dry-run that only previews the diff (safe by default).
+    #[arg(long)]
+    pub apply: bool,
+
+    /// Undo the last applied migration recorded in `.aoa/migrate/manifest.json`.
+    #[arg(long, conflicts_with = "apply")]
+    pub rollback: bool,
 
     /// Emit the structured JSON rendering instead of human text.
     #[arg(long)]

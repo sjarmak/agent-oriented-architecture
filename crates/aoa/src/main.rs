@@ -15,6 +15,7 @@ fn main() -> ExitCode {
     let result = match &cli.command {
         Command::Observe(args) => commands::run_observe(args),
         Command::Audit(args) => commands::run_audit(args),
+        Command::Migrate(args) => commands::run_migrate(args),
         Command::LintContext(args) => commands::run_lint(args),
         Command::Eval(args) => commands::run_eval(args),
         Command::Falsify(args) => commands::run_falsify(args),

@@ -80,10 +80,15 @@ pub(crate) fn structure_items(
     Ok(items)
 }
 
-/// Count package roots (the repo root, plus every immediate child directory
-/// carrying a build manifest) that have no README. A package without a
-/// navigability anchor is a measured fact about how findable its entry point is.
-fn navigability_anchor_item(repo: &Path) -> Result<Option<PunchItem>, AuditError> {
+/// The package roots under `repo` that lack a navigability anchor (README):
+/// the repo root, plus every immediate child directory carrying a build
+/// manifest, minus those that already have a README.
+///
+/// This is the per-site finding behind the navigability measure. The audit
+/// reports only its *count* (a measured fact), but `aoa-migrate` consumes the
+/// concrete sites so a migration fixes *exactly* what the audit measured —
+/// there is one package-root walk, not two that can drift apart.
+pub fn navigability_sites(repo: &Path) -> Result<Vec<PathBuf>, AuditError> {
     let mut roots: Vec<PathBuf> = vec![repo.to_path_buf()];
     for entry in read_dir(repo)? {
         let entry = entry.map_err(|source| io_err(repo, source))?;
@@ -95,7 +100,16 @@ fn navigability_anchor_item(repo: &Path) -> Result<Option<PunchItem>, AuditError
         }
     }
 
-    let missing = roots.iter().filter(|root| !has_readme(root)).count();
+    roots.retain(|root| !has_readme(root));
+    Ok(roots)
+}
+
+/// Count package roots that have no README. A package without a navigability
+/// anchor is a measured fact about how findable its entry point is. The count
+/// is exactly the length of [`navigability_sites`] — the migration acts on the
+/// same set.
+fn navigability_anchor_item(repo: &Path) -> Result<Option<PunchItem>, AuditError> {
+    let missing = navigability_sites(repo)?.len();
     if missing == 0 {
         return Ok(None);
     }
@@ -263,6 +277,31 @@ mod tests {
     fn median_handles_odd_and_even() {
         assert_eq!(median(&[1, 2, 3]), 2);
         assert_eq!(median(&[1, 2, 3, 5]), 2); // (2+3)/2 floored
+    }
+
+    #[test]
+    fn navigability_sites_lists_each_root_without_a_readme() {
+        let dir = tmp("nav-sites");
+        fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
+        // A child package missing a README is a site; one with a README is not.
+        let missing = dir.join("crate-a");
+        fs::create_dir_all(&missing).unwrap();
+        fs::write(missing.join("Cargo.toml"), "[package]\n").unwrap();
+        let present = dir.join("crate-b");
+        fs::create_dir_all(&present).unwrap();
+        fs::write(present.join("Cargo.toml"), "[package]\n").unwrap();
+        fs::write(present.join("README.md"), "# b\n").unwrap();
+
+        let sites = navigability_sites(&dir).unwrap();
+        assert!(sites.contains(&dir), "repo root lacks a README -> a site");
+        assert!(sites.contains(&missing), "crate-a lacks a README -> a site");
+        assert!(
+            !sites.contains(&present),
+            "crate-b has a README -> not a site"
+        );
+        // The count the audit reports is exactly the number of sites.
+        assert_eq!(sites.len(), 2);
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

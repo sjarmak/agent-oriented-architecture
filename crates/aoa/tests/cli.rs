@@ -741,3 +741,74 @@ fn falsify_escapes_untrusted_bias_warning_text() {
         "escaped form of the control byte expected"
     );
 }
+
+// --- aoa migrate (aoa-mnz.2) ------------------------------------------------
+
+/// A fixture checkout with a manifest-bearing root but no README, so the audit
+/// reports a navigability site the migration can fix.
+fn migrate_repo() -> TempDir {
+    let dir = TempDir::new().expect("tempdir");
+    let p = dir.path();
+    std::fs::write(p.join("Cargo.toml"), "[package]\nname = \"demo\"\n").unwrap();
+    std::fs::create_dir_all(p.join("src")).unwrap();
+    std::fs::write(p.join("src/lib.rs"), "pub fn demo() {}\n").unwrap();
+    dir
+}
+
+#[test]
+fn migrate_plan_is_dry_run_and_writes_nothing() {
+    let repo = migrate_repo();
+    aoa()
+        .args(["migrate", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dry-run"))
+        .stdout(predicate::str::contains("README.md"));
+    assert!(
+        !repo.path().join("README.md").exists(),
+        "dry-run must not write the anchor"
+    );
+}
+
+#[test]
+fn migrate_apply_then_rollback_round_trips() {
+    let repo = migrate_repo();
+    aoa()
+        .args(["migrate", "--apply", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .success();
+    assert!(
+        repo.path().join("README.md").exists(),
+        "apply writes the anchor"
+    );
+
+    aoa()
+        .args(["migrate", "--rollback", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .success();
+    assert!(
+        !repo.path().join("README.md").exists(),
+        "rollback restores the baseline"
+    );
+}
+
+#[test]
+fn migrate_apply_json_reports_verified_remaining_zero() {
+    let repo = migrate_repo();
+    let assert = aoa()
+        .args(["migrate", "--apply", "--json", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8");
+    let v: Value = serde_json::from_str(&stdout).expect("json");
+    assert_eq!(v["mode"], "apply");
+    assert_eq!(v["navigability_sites_remaining"], 0);
+    assert!(v["eligibility_note"]
+        .as_str()
+        .unwrap()
+        .contains("code-layer"));
+}
