@@ -1,7 +1,7 @@
 use aoa_gap::{
-    classify_metric, compare, compute_gap, CanaryItem, CorrelationReport, ExternalOutcome,
-    GapError, GapOutcome, HeldOutProvenance, Label, MetricMode, OutcomeCorrelation, RunResult,
-    TaskOutcome,
+    classify_metric, compare, compute_gap, spearman, CanaryItem, CorrelationReport,
+    ExternalOutcome, GapError, GapOutcome, GatingThresholds, HeldOutProvenance, Label, MetricMode,
+    MetricOrientation, OutcomeCorrelation, RunResult, TaskOutcome, GATING_CANDIDATES,
 };
 
 fn task(visible: bool, held_out: bool) -> TaskOutcome {
@@ -382,42 +382,186 @@ fn criterion_5_unavailable_refuses_label() {
     );
 }
 
-// Criterion 6: a metric is advisory without a positive correlation report; only
-// a metric WITH a supplied positive correlation may be gating.
+// Criterion 6: a metric is advisory unless a correlation report supplies a
+// CONFIRMING correlation — right sign for the metric's orientation, magnitude at
+// or above the floor, sample at or above the floor, and significant. Each axis
+// failing independently keeps the metric advisory; only all four together gate.
 #[test]
 fn criterion_6_construct_validity() {
-    // No report at all -> advisory.
-    assert_eq!(classify_metric("edit_locality", None), MetricMode::Advisory);
+    let t = GatingThresholds::default(); // min |rho| 0.3, min n 5, alpha 0.05
 
-    // Report present but no positive correlation -> advisory.
-    let negative = CorrelationReport {
+    // A correlation for `edit_locality` (HigherIsBetter) against an outcome,
+    // with explicit coefficient/n/p so each gate is exercised in isolation.
+    let corr = |outcome, coefficient, n, p_value| CorrelationReport {
         metric: "edit_locality".into(),
+        orientation: MetricOrientation::HigherIsBetter,
         correlations: vec![OutcomeCorrelation {
-            outcome: ExternalOutcome::RevertRate,
-            positive: false,
+            outcome,
+            coefficient,
+            n,
+            p_value,
         }],
     };
+
+    // No report at all -> advisory.
+    assert_eq!(classify_metric(None, &t), MetricMode::Advisory);
+
+    // Empty report (no external outcomes available) -> advisory.
+    let empty = CorrelationReport {
+        metric: "edit_locality".into(),
+        orientation: MetricOrientation::HigherIsBetter,
+        correlations: vec![],
+    };
+    assert_eq!(classify_metric(Some(&empty), &t), MetricMode::Advisory);
+
+    // Wrong direction: a HigherIsBetter metric POSITIVELY correlated with the
+    // revert rate (more locality -> more reverts) refutes, not confirms.
+    let wrong_dir = corr(ExternalOutcome::RevertRate, 0.8, 8, 0.01);
+    assert_eq!(classify_metric(Some(&wrong_dir), &t), MetricMode::Advisory);
+
+    // Below magnitude: correct sign but |rho| under the floor.
+    let weak = corr(ExternalOutcome::ReviewAcceptance, 0.2, 8, 0.01);
+    assert_eq!(classify_metric(Some(&weak), &t), MetricMode::Advisory);
+
+    // Below sample size: strong and significant but too few observations.
+    let tiny = corr(ExternalOutcome::ReviewAcceptance, 0.9, 4, 0.01);
+    assert_eq!(classify_metric(Some(&tiny), &t), MetricMode::Advisory);
+
+    // Not significant: strong, right sign, big enough sample, but p > alpha.
+    let noisy = corr(ExternalOutcome::ReviewAcceptance, 0.9, 8, 0.20);
+    assert_eq!(classify_metric(Some(&noisy), &t), MetricMode::Advisory);
+
+    // Confirming for a HigherIsBetter metric: positive vs review-acceptance
+    // (more locality -> more accepted), and negative vs revert/incident (more
+    // locality -> fewer harms). All clear the thresholds -> gating.
+    let confirming = [
+        (ExternalOutcome::ReviewAcceptance, 0.8_f64),
+        (ExternalOutcome::RevertRate, -0.7),
+        (ExternalOutcome::IncidentCount, -0.7),
+    ];
+    for (outcome, coefficient) in confirming {
+        let report = corr(outcome, coefficient, 8, 0.01);
+        assert_eq!(
+            classify_metric(Some(&report), &t),
+            MetricMode::Gating,
+            "outcome {outcome:?} should confirm a HigherIsBetter metric"
+        );
+    }
+}
+
+// Criterion 6 (orientation): a LowerIsBetter metric flips the confirming sign.
+// `mutation_surface` (smaller blast radius is better) POSITIVELY correlated with
+// the revert rate confirms (more surface -> more reverts); a negative
+// correlation would refute.
+#[test]
+fn criterion_6_lower_is_better_orientation() {
+    let t = GatingThresholds::default();
+    let surface = |coefficient| CorrelationReport {
+        metric: "mutation_surface".into(),
+        orientation: MetricOrientation::LowerIsBetter,
+        correlations: vec![OutcomeCorrelation {
+            outcome: ExternalOutcome::RevertRate,
+            coefficient,
+            n: 8,
+            p_value: 0.01,
+        }],
+    };
+    assert_eq!(classify_metric(Some(&surface(0.7)), &t), MetricMode::Gating);
     assert_eq!(
-        classify_metric("edit_locality", Some(&negative)),
+        classify_metric(Some(&surface(-0.7)), &t),
         MetricMode::Advisory
     );
 
-    // At least one positive external outcome -> gating.
-    for outcome in [
-        ExternalOutcome::RevertRate,
-        ExternalOutcome::IncidentCount,
-        ExternalOutcome::ReviewAcceptance,
-    ] {
-        let report = CorrelationReport {
-            metric: "edit_locality".into(),
-            correlations: vec![OutcomeCorrelation {
-                outcome,
-                positive: true,
-            }],
-        };
+    // The sixth combination: a LowerIsBetter harm metric vs review-acceptance
+    // (higher is better) confirms with a NEGATIVE coefficient (less harm -> more
+    // accepted); a positive coefficient refutes.
+    let surface_vs_accept = |coefficient| CorrelationReport {
+        metric: "mutation_surface".into(),
+        orientation: MetricOrientation::LowerIsBetter,
+        correlations: vec![OutcomeCorrelation {
+            outcome: ExternalOutcome::ReviewAcceptance,
+            coefficient,
+            n: 8,
+            p_value: 0.01,
+        }],
+    };
+    assert_eq!(
+        classify_metric(Some(&surface_vs_accept(-0.7)), &t),
+        MetricMode::Gating
+    );
+    assert_eq!(
+        classify_metric(Some(&surface_vs_accept(0.7)), &t),
+        MetricMode::Advisory
+    );
+}
+
+// Criterion 6 (end-to-end): a confirming correlation computed by the real
+// Spearman pipeline from observations gates the metric — sign + magnitude come
+// from data, not a hand-set flag.
+#[test]
+fn criterion_6_end_to_end_from_observations() {
+    let t = GatingThresholds::default();
+    // edit_locality (x) vs review-acceptance rate (y): a strong monotone tie
+    // over 6 observations. Perfect monotone at n=6 gives p = 2/720 << 0.05.
+    let observations = [
+        (0.10, 0.20),
+        (0.25, 0.35),
+        (0.40, 0.50),
+        (0.55, 0.65),
+        (0.70, 0.85),
+        (0.90, 0.95),
+    ];
+    let c = spearman(&observations).expect("well-defined correlation");
+    assert!(c.coefficient > 0.9 && c.p_value <= 0.05);
+
+    let report = CorrelationReport {
+        metric: "edit_locality".into(),
+        orientation: MetricOrientation::HigherIsBetter,
+        correlations: vec![OutcomeCorrelation {
+            outcome: ExternalOutcome::ReviewAcceptance,
+            coefficient: c.coefficient,
+            n: c.n,
+            p_value: c.p_value,
+        }],
+    };
+    assert_eq!(classify_metric(Some(&report), &t), MetricMode::Gating);
+}
+
+// Criterion 6 (artifact): the current determination is a reproducible artifact
+// that names its data source and classifies every gating candidate. With no
+// external-outcome corpus available, every candidate is advisory — the
+// executable form of "no metric gates a feature without real correlation". The
+// committed fixture is byte-for-byte reproduced by the pipeline.
+#[test]
+fn criterion_6_artifact_reproduces_and_all_advisory() {
+    let artifact = aoa_gap::current_determination();
+
+    // Every gating candidate appears, and none gates absent external data.
+    assert_eq!(artifact.metrics.len(), GATING_CANDIDATES.len());
+    for (m, expected) in artifact.metrics.iter().zip(GATING_CANDIDATES) {
+        assert_eq!(m.metric, expected.0);
+        assert_eq!(m.orientation, expected.1);
+        assert!(m.correlations.is_empty());
         assert_eq!(
-            classify_metric("edit_locality", Some(&report)),
-            MetricMode::Gating
+            m.mode,
+            MetricMode::Advisory,
+            "{} must stay advisory",
+            m.metric
         );
     }
+    assert!(!artifact.data_source.is_empty());
+
+    // The committed artifact fixture deserializes to exactly this determination,
+    // and the value round-trips through serde unchanged.
+    let fixture = include_str!("fixtures/construct_validity_report.json");
+    let from_disk: aoa_gap::ConstructValidityReport =
+        serde_json::from_str(fixture).expect("fixture parses");
+    assert_eq!(
+        from_disk, artifact,
+        "fixture must match the pipeline output"
+    );
+
+    let roundtrip: aoa_gap::ConstructValidityReport =
+        serde_json::from_str(&serde_json::to_string(&artifact).unwrap()).unwrap();
+    assert_eq!(roundtrip, artifact);
 }

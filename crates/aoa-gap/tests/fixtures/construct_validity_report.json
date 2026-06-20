@@ -1,0 +1,46 @@
+{
+  "data_source": "codeprobe run history (runs/codeprobe-*): no post-merge revert, production-incident, or human review-acceptance fields are recorded. The only per-trial outcome is the oracle pass/reward, which is conditioned on held-out success and is therefore circular for construct validity. ground_truth_commit anchors the oracle but correlating a metric with oracle agreement is the same tautology. No external-outcome corpus is available as of 2026-06-20, so every gating candidate stays advisory.",
+  "thresholds": {
+    "min_magnitude": 0.3,
+    "min_n": 5,
+    "max_p_value": 0.05
+  },
+  "metrics": [
+    {
+      "metric": "retrieval_locality",
+      "orientation": "higher_is_better",
+      "correlations": [],
+      "mode": "advisory"
+    },
+    {
+      "metric": "edit_locality",
+      "orientation": "higher_is_better",
+      "correlations": [],
+      "mode": "advisory"
+    },
+    {
+      "metric": "invariant_discoverability",
+      "orientation": "higher_is_better",
+      "correlations": [],
+      "mode": "advisory"
+    },
+    {
+      "metric": "mutation_surface",
+      "orientation": "lower_is_better",
+      "correlations": [],
+      "mode": "advisory"
+    },
+    {
+      "metric": "budget_adherence",
+      "orientation": "higher_is_better",
+      "correlations": [],
+      "mode": "advisory"
+    },
+    {
+      "metric": "reward_hacking_gap",
+      "orientation": "lower_is_better",
+      "correlations": [],
+      "mode": "advisory"
+    }
+  ]
+}
