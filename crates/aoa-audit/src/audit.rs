@@ -2,10 +2,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use aoa_budget::{count_budget, resolve_closure, Config};
-use aoa_metrics::{
-    compute_mutation_surface, IndexQuality, MetricInput, SymbolGraph,
-    TransformMap,
-};
+use aoa_metrics::{compute_mutation_surface, IndexQuality, MetricInput, SymbolGraph, TransformMap};
 use aoa_trace::Trace;
 
 use crate::error::AuditError;

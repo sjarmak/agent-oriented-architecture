@@ -87,8 +87,7 @@ mod tests {
             assert_eq!(json, format!("\"{wire}\""));
             assert_eq!(variant.as_str(), wire);
 
-            let parsed: SpanType =
-                serde_json::from_str(&json).expect("deserialize span type");
+            let parsed: SpanType = serde_json::from_str(&json).expect("deserialize span type");
             assert_eq!(parsed, variant);
         }
     }

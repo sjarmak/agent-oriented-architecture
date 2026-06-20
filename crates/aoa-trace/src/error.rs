@@ -20,9 +20,7 @@ pub enum TraceError {
     },
 
     /// Spans were not in monotonically non-decreasing `seq` order.
-    #[error(
-        "trace spans are out of order at index {index}: seq {seq} < previous seq {previous}"
-    )]
+    #[error("trace spans are out of order at index {index}: seq {seq} < previous seq {previous}")]
     OutOfOrder {
         index: usize,
         seq: u64,

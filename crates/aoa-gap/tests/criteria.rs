@@ -387,10 +387,7 @@ fn criterion_5_unavailable_refuses_label() {
 #[test]
 fn criterion_6_construct_validity() {
     // No report at all -> advisory.
-    assert_eq!(
-        classify_metric("edit_locality", None),
-        MetricMode::Advisory
-    );
+    assert_eq!(classify_metric("edit_locality", None), MetricMode::Advisory);
 
     // Report present but no positive correlation -> advisory.
     let negative = CorrelationReport {
