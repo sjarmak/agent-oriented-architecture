@@ -4,6 +4,7 @@ mod eval;
 mod eval_run;
 mod falsify;
 mod falsify_build;
+mod fsutil;
 mod lint;
 mod observe;
 mod policy;

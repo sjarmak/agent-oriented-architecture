@@ -19,4 +19,10 @@ pub enum ScipGraphError {
         #[source]
         source: serde_json::Error,
     },
+
+    /// An index source file exceeded its byte cap before being read into memory.
+    /// Raised for attacker-controlled local files (a crafted SCIP index or a
+    /// single oversized source file under a best-effort scan).
+    #[error("index source {path} exceeds {max} byte cap (DoS guard)")]
+    TooLarge { path: String, max: u64 },
 }

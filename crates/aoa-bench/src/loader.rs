@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -222,7 +223,17 @@ fn parse_ground_truth(path: &Path) -> Result<Option<GroundTruthFile>, BenchError
     Ok(Some(gt))
 }
 
+/// Largest task-dir file read into memory. metadata.json / task.toml /
+/// ground_truth*.json are small by nature; this ceiling bounds the bytes held
+/// from an attacker-controlled task dir without rejecting real input.
+const MAX_TASK_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
 /// List `ground_truth_<backend>.json` siblings in sorted order.
+///
+/// Entries are classified by [`fs::DirEntry::file_type`], which does NOT follow
+/// symlinks: a symlinked `ground_truth_*.json` reports as a symlink (not a file)
+/// and is skipped, so a link cannot pull an out-of-tree file's bytes into a
+/// JSON-parse error. Mirrors the guard `discover_tasks` uses.
 fn backend_variant_files(gt_dir: &Path) -> Result<Vec<PathBuf>, BenchError> {
     let entries = fs::read_dir(gt_dir).map_err(|source| BenchError::Io {
         path: gt_dir.to_path_buf(),
@@ -234,6 +245,13 @@ fn backend_variant_files(gt_dir: &Path) -> Result<Vec<PathBuf>, BenchError> {
             path: gt_dir.to_path_buf(),
             source,
         })?;
+        let file_type = entry.file_type().map_err(|source| BenchError::Io {
+            path: entry.path(),
+            source,
+        })?;
+        if !file_type.is_file() {
+            continue;
+        }
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if name.starts_with("ground_truth_") && name.ends_with(".json") {
@@ -244,9 +262,79 @@ fn backend_variant_files(gt_dir: &Path) -> Result<Vec<PathBuf>, BenchError> {
     Ok(variants)
 }
 
+/// Read `path` into a `String`, rejecting anything past [`MAX_TASK_FILE_BYTES`].
 fn read_file(path: &Path) -> Result<String, BenchError> {
-    fs::read_to_string(path).map_err(|source| BenchError::Io {
+    read_capped(path, MAX_TASK_FILE_BYTES)
+}
+
+/// Read `path` into a `String`, rejecting anything past `max` bytes.
+///
+/// Bounded via [`Read::take`] rather than a pre-read `metadata().len()` check so
+/// a file that grows (or a symlink whose target swaps) between stat and read
+/// cannot blow past the cap. One byte past the cap is read so an exactly-`max`
+/// file is accepted while a larger one is rejected.
+fn read_capped(path: &Path, max: u64) -> Result<String, BenchError> {
+    let file = fs::File::open(path).map_err(|source| BenchError::Io {
         path: path.to_path_buf(),
         source,
-    })
+    })?;
+    let mut raw = String::new();
+    let read = file
+        .take(max + 1)
+        .read_to_string(&mut raw)
+        .map_err(|source| BenchError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if read as u64 > max {
+        return Err(BenchError::TooLarge {
+            path: path.to_path_buf(),
+            max,
+        });
+    }
+    Ok(raw)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_capped_rejects_over_cap_and_accepts_exactly_cap() {
+        let dir = std::env::temp_dir().join(format!("aoa-bench-cap-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("gt.json");
+        fs::write(&path, "0123456789").unwrap(); // 10 bytes
+
+        let err = read_capped(&path, 4).unwrap_err();
+        assert!(matches!(err, BenchError::TooLarge { max: 4, .. }));
+        assert_eq!(read_capped(&path, 10).unwrap().len(), 10);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_ground_truth_variant_is_skipped() {
+        use std::os::unix::fs::symlink;
+
+        let base = std::env::temp_dir().join(format!("aoa-bench-variant-{}", std::process::id()));
+        let gt_dir = base.join("task");
+        let outside = base.join("outside");
+        fs::create_dir_all(&gt_dir).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+
+        let real = gt_dir.join("ground_truth_real.json");
+        fs::write(&real, "{}").unwrap();
+        let target = outside.join("secret.json");
+        fs::write(&target, "{}").unwrap();
+        // A symlinked variant must NOT be followed: its out-of-tree bytes must not
+        // reach the JSON parser.
+        symlink(&target, gt_dir.join("ground_truth_evil.json")).unwrap();
+
+        let variants = backend_variant_files(&gt_dir).unwrap();
+        assert_eq!(variants, vec![real]);
+
+        fs::remove_dir_all(&base).ok();
+    }
 }

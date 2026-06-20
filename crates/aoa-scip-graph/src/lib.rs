@@ -20,6 +20,7 @@
 //! them to migrated names through an [`aoa_metrics::TransformMap`].
 
 mod best_effort;
+mod bounded;
 mod error;
 mod index;
 mod scip;

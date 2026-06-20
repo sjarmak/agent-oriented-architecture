@@ -3,6 +3,7 @@ use std::path::Path;
 
 use aoa_metrics::{IndexQuality, SymbolGraph};
 
+use crate::bounded::{read_capped, MAX_SOURCE_BYTES};
 use crate::error::ScipGraphError;
 use crate::index::IndexedRepo;
 
@@ -29,10 +30,15 @@ pub fn index_best_effort(repo_dir: &Path) -> Result<IndexedRepo, ScipGraphError>
     for file in &files {
         let rel = file.strip_prefix(repo_dir).unwrap_or(file);
         let module = module_name(rel);
-        let source = std::fs::read_to_string(file).map_err(|source| ScipGraphError::Io {
-            path: file.display().to_string(),
-            source,
-        })?;
+        // An oversized single file is skipped, not fatal: a best-effort scan is
+        // already lossy by contract, so dropping one pathological file keeps the
+        // rest of the repo indexable while still bounding memory. A genuine read
+        // error (permissions, vanished file) still propagates.
+        let source = match read_capped(file, MAX_SOURCE_BYTES) {
+            Ok(source) => source,
+            Err(ScipGraphError::TooLarge { .. }) => continue,
+            Err(other) => return Err(other),
+        };
         scan_module(&module, &source, &mut nodes, &mut edges);
     }
 
@@ -53,6 +59,12 @@ pub fn index_best_effort(repo_dir: &Path) -> Result<IndexedRepo, ScipGraphError>
 }
 
 /// Recursively collect `.py` files under `dir`, skipping hidden directories.
+///
+/// Directory entries are classified by [`std::fs::DirEntry::file_type`], which
+/// does NOT follow symlinks: a symlinked directory reports as a symlink (neither
+/// dir nor file) and is skipped, so a link pointing at `/` cannot recurse the
+/// whole filesystem. Symlinked `.py` files are likewise skipped — a best-effort
+/// scan trades that completeness for not following links out of the repo tree.
 fn collect_py_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<(), ScipGraphError> {
     let entries = std::fs::read_dir(dir).map_err(|source| ScipGraphError::Io {
         path: dir.display().to_string(),
@@ -63,15 +75,19 @@ fn collect_py_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<(),
             path: dir.display().to_string(),
             source,
         })?;
-        let path = entry.path();
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if name.starts_with('.') {
             continue;
         }
-        if path.is_dir() {
+        let file_type = entry.file_type().map_err(|source| ScipGraphError::Io {
+            path: entry.path().display().to_string(),
+            source,
+        })?;
+        let path = entry.path();
+        if file_type.is_dir() {
             collect_py_files(&path, out)?;
-        } else if path.extension().is_some_and(|e| e == "py") {
+        } else if file_type.is_file() && path.extension().is_some_and(|e| e == "py") {
             out.push(path);
         }
     }
@@ -246,5 +262,29 @@ mod tests {
         let src = "def f(x):\n    return f(x)\n";
         let (_nodes, edges) = scan("m", src);
         assert!(edges.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_directory_is_not_traversed() {
+        use std::os::unix::fs::symlink;
+
+        let base = std::env::temp_dir().join(format!("aoa-be-symlink-{}", std::process::id()));
+        let repo = base.join("repo");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(repo.join("inside.py"), "def a():\n    pass\n").unwrap();
+        std::fs::write(outside.join("escaped.py"), "def b():\n    pass\n").unwrap();
+        // A symlink inside the repo pointing at the outside tree must NOT be
+        // followed — otherwise a link to `/` would recurse the filesystem.
+        symlink(&outside, repo.join("link")).unwrap();
+
+        let mut files = Vec::new();
+        collect_py_files(&repo, &mut files).unwrap();
+        files.sort();
+
+        assert_eq!(files, vec![repo.join("inside.py")]);
+        std::fs::remove_dir_all(&base).ok();
     }
 }

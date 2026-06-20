@@ -33,4 +33,9 @@ pub enum BenchError {
         #[source]
         source: toml::de::Error,
     },
+
+    /// A file in the task dir exceeded its byte cap before being read. Guards
+    /// against an attacker-controlled task dir feeding an oversized JSON file.
+    #[error("{path} exceeds {max} byte cap (DoS guard)")]
+    TooLarge { path: PathBuf, max: u64 },
 }

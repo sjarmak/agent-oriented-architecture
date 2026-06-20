@@ -5,6 +5,7 @@ use serde::Deserialize;
 
 use aoa_metrics::{IndexQuality, SymbolGraph};
 
+use crate::bounded::{read_capped, MAX_SCIP_BYTES};
 use crate::error::ScipGraphError;
 use crate::index::IndexedRepo;
 
@@ -45,10 +46,7 @@ struct ScipOccurrence {
 /// `(enclosing, symbol)` for each `reference` occurrence that names its
 /// enclosing definition. The resulting graph is tagged [`IndexQuality::Scip`].
 pub fn index_with_scip(index_path: &Path) -> Result<IndexedRepo, ScipGraphError> {
-    let raw = std::fs::read_to_string(index_path).map_err(|source| ScipGraphError::Io {
-        path: index_path.display().to_string(),
-        source,
-    })?;
+    let raw = read_capped(index_path, MAX_SCIP_BYTES)?;
     let index: ScipIndex = serde_json::from_str(&raw).map_err(|source| ScipGraphError::Parse {
         path: index_path.display().to_string(),
         source,

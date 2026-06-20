@@ -13,6 +13,8 @@ use serde::Deserialize;
 
 use aoa_gap::HeldOutProvenance;
 
+use crate::commands::fsutil::{read_to_string_capped, MAX_TASK_DIRS, MAX_TRIAL_JSON_BYTES};
+
 /// A leg `score_*` at or above this counts as a pass when the explicit
 /// `passed_*` boolean is absent (exact-match scorers emit 0.0/1.0).
 pub(crate) const SCORE_PASS_THRESHOLD: f64 = 1.0;
@@ -42,8 +44,7 @@ pub(crate) struct DualScoring {
 impl DualScoring {
     /// Read and validate a trial's `scoring.json` as a clean dual-verifier result.
     pub(crate) fn load(scoring_path: &Path, task_id: &str) -> Result<Self> {
-        let raw = std::fs::read_to_string(scoring_path)
-            .with_context(|| format!("failed to read {}", scoring_path.display()))?;
+        let raw = read_to_string_capped(scoring_path, MAX_TRIAL_JSON_BYTES)?;
         let scoring: DualScoring = serde_json::from_str(&raw)
             .with_context(|| format!("failed to parse {}", scoring_path.display()))?;
         scoring.ensure_dual(task_id)?;
@@ -138,7 +139,21 @@ pub(crate) fn discover_tasks(run_dir: &Path) -> Result<Vec<String>> {
             continue;
         }
         let dir = entry.path();
-        if dir.join("scoring.json").is_file() || dir.join("agent_output.txt").is_file() {
+        // No-follow probes: a symlinked `scoring.json`/`agent_output.txt` must
+        // not qualify a dir, or a crafted run dir could point the later capped
+        // read at an out-of-tree file. `Path::is_file` follows symlinks; the
+        // dir-level guard above does not, and these must match it.
+        if is_regular_file(&dir.join("scoring.json"))
+            || is_regular_file(&dir.join("agent_output.txt"))
+        {
+            if task_ids.len() >= MAX_TASK_DIRS {
+                bail!(
+                    "more than {} task trials under {} (DoS guard): point the run dir at a \
+                     single run's config-label directory",
+                    MAX_TASK_DIRS,
+                    run_dir.display()
+                );
+            }
             task_ids.push(entry.file_name().to_string_lossy().into_owned());
         }
     }
@@ -152,6 +167,15 @@ pub(crate) fn discover_tasks(run_dir: &Path) -> Result<Vec<String>> {
         );
     }
     Ok(task_ids)
+}
+
+/// True only if `path` is a regular file, without following symlinks. A symlink
+/// (even one targeting a real file) returns false, so a crafted sentinel cannot
+/// pull an out-of-tree path into the trial set.
+fn is_regular_file(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|m| m.file_type().is_file())
+        .unwrap_or(false)
 }
 
 /// Reduce per-task held-out provenance into a single provenance for a set of
@@ -282,5 +306,39 @@ mod tests {
         };
         assert!(scored.visible_success("t").unwrap());
         assert!(!scored.held_out_success("t").unwrap());
+    }
+
+    #[test]
+    fn discover_tasks_finds_real_trial_dirs() {
+        let base = std::env::temp_dir().join(format!("aoa-discover-real-{}", std::process::id()));
+        let trial = base.join("task-a");
+        std::fs::create_dir_all(&trial).unwrap();
+        std::fs::write(trial.join("scoring.json"), "{}").unwrap();
+
+        let ids = discover_tasks(&base).unwrap();
+        assert_eq!(ids, vec!["task-a".to_string()]);
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discover_tasks_ignores_symlinked_sentinel() {
+        use std::os::unix::fs::symlink;
+
+        let base = std::env::temp_dir().join(format!("aoa-discover-sym-{}", std::process::id()));
+        let trial = base.join("task-evil");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&trial).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let target = outside.join("real_scoring.json");
+        std::fs::write(&target, "{}").unwrap();
+        // A symlinked scoring.json must NOT qualify the dir as a trial.
+        symlink(&target, trial.join("scoring.json")).unwrap();
+
+        let err = discover_tasks(&base).unwrap_err();
+        assert!(err.to_string().contains("no task trials found"));
+
+        std::fs::remove_dir_all(&base).ok();
     }
 }
