@@ -31,10 +31,55 @@ held-out leg of two different config arms. R0 `proceed` requires
 `repo-delta ≥ harness-delta` on a strict majority of ≥5 eligible repos, hardened
 by R0' (determinism, convention-invariance, eligibility, power).
 
+## What counts as the AOA migration (the repo-delta treatment) — read before running
+
+R0 is only interpretable if the repo-delta arm varies **the layer AOA actually
+claims**, and varies *nothing the harness arm also varies*. AOA's claimed layer
+is the **code's own infrastructure best-practices**: the structure, naming,
+organization, and modularity of the codebase, and the navigable in-repo
+documentation the agent builds on. The migration is the observability-guardrail
+intervention — audit adherence to those best-practices, then apply (where
+permitted) the changes that nudge the infrastructure back toward them.
+
+Three guardrails make the treatment construct-valid; violating any one
+**confounds the gate** and a `proceed` becomes meaningless:
+
+1. **Code-layer, not prompt-layer.** The treatment must change what the
+   compiler, tests, symbol graph, and file-navigation see — code structure,
+   module boundaries, names, types, rustdoc/docstrings, dead-code removal. It
+   **must not** be agent-instruction files (`CLAUDE.md`/`AGENTS.md`) or any
+   prompt/system-context material: those are *harness* inputs, and putting them
+   in the repo arm makes repo-delta and harness-delta measure the same thing.
+   The repo dimension is realized by the **repo state the tasks run against**
+   (baseline checkout vs migrated checkout) — **not** by any codeprobe
+   `add-config` flag (those flags — `--model`, `--mcp-config`, `--allowed-tools`,
+   `--instruction-variant`, `--preamble` — are all harness knobs and belong to
+   the harness arm only).
+2. **Authored blind to the held-out oracle.** Because a migration can touch
+   prose (docstrings, READMEs), it can leak held-out task answers — an
+   asymmetric contamination that inflates repo-delta only. The migrated state
+   must be produced without sight of the mined held-out task set. Prefer
+   tool-driven, mechanical migrations over free-hand edits for exactly this
+   reason.
+3. **Independent of the success criterion.** "Migrated" must be defined by a
+   pre-registered best-practices spec, not *only* by whether AOA's own
+   audit/lint passes — otherwise the gate confirms AOA's prior (Goodhart) rather
+   than an independent fact. Use AOA's audit to *verify* the operator hit the
+   spec, not to *define* it.
+
+> Capability note: as of this writing AOA's `audit` surfaces only
+> enforcement-plane gaps (CI / pre-commit / writable-mutation surface) and
+> `lint-context` covers the context-file closure. Auditing and **executing**
+> code-structure best-practices (naming / modularity / organization /
+> doc-navigability) is the tool/skill/hook capability that produces this
+> treatment reproducibly, and it is the precondition tracked in `aoa-dhk.1`'s
+> blocker. Until it exists, the migrated arm is hand-authored per the guardrails
+> above and the gate will mostly, honestly, return `inconclusive`.
+
 ## Pipeline
 
 ```
-codeprobe experiment (≥2 arms, K seeds)          # you run this — needs a live agent
+codeprobe experiment init/add-config + run (≥2 arms, K seeds)   # you run this — needs a live agent
         │  runs/<arm>/<task_id>/scoring.json (dual_composite)
         │  reports/aggregate.json (bias_warnings)
         ▼
@@ -56,13 +101,23 @@ codeprobe experiment has been run.
 
 ```bash
 cd /home/ds/projects/codeprobe
-codeprobe experiment init   --name r0 --path runs/r0
-codeprobe experiment add-config baseline      --path runs/r0   # baseline repo, baseline harness
-codeprobe experiment add-config aoa_migrated  --path runs/r0   # AOA-migrated repo  → repo_arm
-codeprobe experiment add-config harness_swap  --path runs/r0   # swapped harness    → harness_arm
-codeprobe experiment run       --path runs/r0                  # live agent over the SAME mined tasks
-codeprobe experiment aggregate --path runs/r0                  # writes reports/aggregate.json
+codeprobe experiment init runs/r0 --name r0
+# add-config sets HARNESS knobs only (agent/model/mcp/tools/instruction/preamble).
+# The repo dimension is the repo STATE the tasks run against (see the treatment
+# guardrails above), NOT an add-config flag.
+codeprobe experiment add-config runs/r0 --label baseline      # baseline repo state, baseline harness
+codeprobe experiment add-config runs/r0 --label aoa_migrated  # migrated repo state, baseline harness → repo_arm
+codeprobe experiment add-config runs/r0 --label harness_swap  # baseline repo state, swapped harness   → harness_arm
+codeprobe run --config runs/r0 --dry-run                      # estimate cost/turns FIRST (no agent spawned)
+codeprobe run --config runs/r0 --max-cost-usd <budget>        # live agent over the SAME mined tasks; cost-capped
+codeprobe experiment status    runs/r0                        # per-config completion
+codeprobe experiment aggregate runs/r0                        # writes reports/aggregate.json
 ```
+
+> There is no `codeprobe experiment run`; execution is the top-level
+> `codeprobe run --config <experiment-dir>`. Always `--dry-run` first and pass
+> `--max-cost-usd` — a ≥5-repo × K≥3 × 3-arm campaign is many live agent
+> sessions.
 
 For determinism (K≥3), run the experiment **K times** into K dirs (one per seed),
 or seed the agent K ways — each becomes one `runs[]` entry per repo in the
