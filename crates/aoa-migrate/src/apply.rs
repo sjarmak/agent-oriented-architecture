@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::MigrateError;
-use crate::fix::ChangeAction;
+use crate::fix::{ChangeAction, FixEligibility};
 use crate::plan::MigrationPlan;
 
 /// Directory (under the repo, inside the ignored `.aoa/` tree) holding the
@@ -22,15 +22,6 @@ use crate::plan::MigrationPlan;
 const MIGRATE_DIR: &str = ".aoa/migrate";
 const MANIFEST_NAME: &str = "manifest.json";
 const ARCHIVE_DIR: &str = "archive";
-
-/// The R0 eligibility precondition recorded with every migration: a generated
-/// README is a code-layer (file-navigation) change *only* for harnesses that do
-/// not auto-inject READMEs into the agent's system context. A harness that does
-/// would turn this into a harness-layer change and confound the repo-delta arm
-/// (see `docs/r0_runbook.md` guardrail 1).
-pub const ELIGIBILITY_NOTE: &str = "Navigability-anchor migration is code-layer only for harnesses that do NOT \
-auto-inject README files into the agent's system context. If the R0 harness loads READMEs into context, this \
-treatment confounds repo-delta with harness-delta and the arm is ineligible (docs/r0_runbook.md guardrail 1).";
 
 /// One recorded change in a [`MigrationManifest`]. The variant determines how
 /// rollback undoes it: a [`Created`](ManifestEntry::Created) file is deleted, a
@@ -45,7 +36,7 @@ pub enum ManifestEntry {
 }
 
 /// The durable record of an applied migration: which fixes ran, every file
-/// touched, and the eligibility precondition. Serialized to
+/// touched, and each contributing fix's eligibility precondition. Serialized to
 /// `.aoa/migrate/manifest.json` and consumed by [`rollback`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MigrationManifest {
@@ -53,8 +44,12 @@ pub struct MigrationManifest {
     pub fixes_applied: Vec<String>,
     /// Every file the migration writes, in apply order.
     pub entries: Vec<ManifestEntry>,
-    /// The recorded R0 eligibility precondition ([`ELIGIBILITY_NOTE`]).
-    pub eligibility_note: String,
+    /// Each contributing fix's R0 eligibility precondition, tagged with its id.
+    /// `#[serde(default)]` keeps a manifest written before per-fix notes existed
+    /// (a bare older schema) readable, so rollback never breaks on an in-flight
+    /// migration from an earlier binary.
+    #[serde(default)]
+    pub eligibility_notes: Vec<FixEligibility>,
 }
 
 /// Apply `plan` to `repo`, returning the manifest that records it.
@@ -110,7 +105,7 @@ pub fn apply(repo: &Path, plan: &MigrationPlan) -> Result<MigrationManifest, Mig
     let manifest = MigrationManifest {
         fixes_applied: plan.fix_ids.clone(),
         entries,
-        eligibility_note: ELIGIBILITY_NOTE.to_string(),
+        eligibility_notes: plan.eligibility_notes.clone(),
     };
 
     // 2. Plan-first: persist the manifest before touching any source file.
@@ -264,6 +259,10 @@ mod tests {
                 old_content: None,
             }],
             fix_ids: vec!["test-fix".to_string()],
+            eligibility_notes: vec![FixEligibility {
+                fix_id: "test-fix".to_string(),
+                note: "test eligibility".to_string(),
+            }],
         }
     }
 
@@ -277,7 +276,8 @@ mod tests {
         assert_eq!(manifest.fixes_applied, vec!["test-fix"]);
         assert!(matches!(manifest.entries[0], ManifestEntry::Created { .. }));
         assert!(manifest_path(&repo).exists(), "manifest persisted");
-        assert_eq!(manifest.eligibility_note, ELIGIBILITY_NOTE);
+        assert_eq!(manifest.eligibility_notes[0].fix_id, "test-fix");
+        assert_eq!(manifest.eligibility_notes[0].note, "test eligibility");
         fs::remove_dir_all(&repo).ok();
     }
 
@@ -356,6 +356,7 @@ mod tests {
                 old_content: Some("ORIGINAL\n".to_string()),
             }],
             fix_ids: vec!["test-overwrite".to_string()],
+            eligibility_notes: Vec::new(),
         };
         apply(&repo, &plan).unwrap();
         assert_eq!(fs::read_to_string(&target).unwrap(), "REPLACED\n");
@@ -366,6 +367,88 @@ mod tests {
             "ORIGINAL\n",
             "original restored from archive"
         );
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    fn overwrite_change(path: PathBuf, old: &str, new: &str) -> PlannedChange {
+        PlannedChange {
+            path,
+            action: ChangeAction::Overwrite,
+            new_content: new.to_string(),
+            old_content: Some(old.to_string()),
+        }
+    }
+
+    #[test]
+    fn multi_file_overwrite_archives_and_rollback_restores_all() {
+        let repo = tmp("overwrite-multi");
+        let a = repo.join("a.txt");
+        let b = repo.join("b.txt");
+        fs::write(&a, "A-ORIG\n").unwrap();
+        fs::write(&b, "B-ORIG\n").unwrap();
+
+        let plan = MigrationPlan {
+            changes: vec![
+                overwrite_change(a.clone(), "A-ORIG\n", "A-NEW\n"),
+                overwrite_change(b.clone(), "B-ORIG\n", "B-NEW\n"),
+            ],
+            fix_ids: vec!["multi".to_string()],
+            eligibility_notes: Vec::new(),
+        };
+        apply(&repo, &plan).unwrap();
+        assert_eq!(fs::read_to_string(&a).unwrap(), "A-NEW\n");
+        assert_eq!(fs::read_to_string(&b).unwrap(), "B-NEW\n");
+
+        rollback(&repo).unwrap();
+        assert_eq!(fs::read_to_string(&a).unwrap(), "A-ORIG\n", "a restored");
+        assert_eq!(fs::read_to_string(&b).unwrap(), "B-ORIG\n", "b restored");
+        assert!(!repo.join(MIGRATE_DIR).exists());
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn rollback_after_partial_overwrite_restores_archived_and_leaves_untouched() {
+        // Crash mid-apply across two Modified entries: entry A was archived then
+        // replaced; entry B's write never happened, so its archive is absent and
+        // its original is still intact. Rollback must restore A from its archive
+        // and leave B alone (a missing archive means the write never landed).
+        let repo = tmp("overwrite-partial");
+        let a = repo.join("a.txt");
+        let b = repo.join("b.txt");
+        let archive_a = repo.join(MIGRATE_DIR).join(ARCHIVE_DIR).join("a.txt");
+        let archive_b = repo.join(MIGRATE_DIR).join(ARCHIVE_DIR).join("b.txt");
+        fs::write(&b, "B-ORIG\n").unwrap(); // B untouched by the partial apply
+
+        let manifest = MigrationManifest {
+            fixes_applied: vec!["partial-overwrite".to_string()],
+            entries: vec![
+                ManifestEntry::Modified {
+                    path: a.clone(),
+                    archive: archive_a.clone(),
+                },
+                ManifestEntry::Modified {
+                    path: b.clone(),
+                    archive: archive_b.clone(),
+                },
+            ],
+            eligibility_notes: Vec::new(),
+        };
+        create_dir_all(&repo.join(MIGRATE_DIR)).unwrap();
+        write_manifest(&repo, &manifest).unwrap();
+        // Simulate A having been archived-then-replaced before the crash.
+        create_dir_all(archive_a.parent().unwrap()).unwrap();
+        fs::write(&archive_a, "A-ORIG\n").unwrap();
+        fs::write(&a, "A-NEW\n").unwrap();
+        // B's archive deliberately absent (write never reached it).
+
+        rollback(&repo).unwrap();
+        assert_eq!(fs::read_to_string(&a).unwrap(), "A-ORIG\n", "A restored");
+        assert_eq!(
+            fs::read_to_string(&b).unwrap(),
+            "B-ORIG\n",
+            "B left intact (archive absent => write never landed)"
+        );
+        assert!(!repo.join(MIGRATE_DIR).exists());
         fs::remove_dir_all(&repo).ok();
     }
 
@@ -383,7 +466,7 @@ mod tests {
                 ManifestEntry::Created { path: a.clone() },
                 ManifestEntry::Created { path: b.clone() },
             ],
-            eligibility_note: ELIGIBILITY_NOTE.to_string(),
+            eligibility_notes: Vec::new(),
         };
         create_dir_all(&repo.join(MIGRATE_DIR)).unwrap();
         write_manifest(&repo, &manifest).unwrap();

@@ -6,6 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::MigrateError;
 
 /// Whether a [`PlannedChange`] creates a new file or overwrites an existing one.
@@ -37,6 +39,19 @@ pub struct PlannedChange {
     pub old_content: Option<String>,
 }
 
+/// The R0 eligibility precondition a fix records when it contributes changes,
+/// tagged with the fix that owns it. Different fixes have different preconditions
+/// (the navigability fix's "no README auto-injection" is irrelevant to a
+/// compiler-verified fix), so the manifest carries one note per contributing
+/// fix rather than a single global string.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FixEligibility {
+    /// The [`CodeFix::id`] this note belongs to.
+    pub fix_id: String,
+    /// The fix's eligibility precondition ([`CodeFix::eligibility_note`]).
+    pub note: String,
+}
+
 /// A mechanical, reproducible, oracle-blind migration toward a code-layer
 /// best-practice. Implementors only *plan*; the engine applies.
 pub trait CodeFix {
@@ -46,9 +61,20 @@ pub trait CodeFix {
     /// One-line human description of what the fix does.
     fn describe(&self) -> &str;
 
+    /// The R0 eligibility precondition under which this fix is a construct-valid
+    /// code-layer treatment. Recorded in the manifest alongside the fix id.
+    fn eligibility_note(&self) -> &str;
+
     /// Compute the changes this fix would make to `repo`. Read-only: a `plan`
     /// call never mutates the checkout.
     fn plan(&self, repo: &Path) -> Result<Vec<PlannedChange>, MigrateError>;
+}
+
+/// Every registered [`CodeFix`], in deterministic order — the single source of
+/// truth for which migrations exist. The CLI selects a subset by id; passing
+/// the whole set runs them all.
+pub fn all_fixes() -> Vec<Box<dyn CodeFix>> {
+    vec![Box::new(NavigabilityAnchorFix)]
 }
 
 /// Directory names skipped when listing a package's contents — build output and
@@ -81,6 +107,15 @@ const ANCHOR_FILENAME: &str = "README.md";
 /// Goodhart; see `docs/r0_runbook.md` guardrail 3).
 pub struct NavigabilityAnchorFix;
 
+/// The R0 eligibility precondition for the navigability-anchor fix: a generated
+/// README is a code-layer (file-navigation) change *only* for harnesses that do
+/// not auto-inject README files into the agent's system context. A harness that
+/// does would turn this into a harness-layer change and confound the repo-delta
+/// arm (see `docs/r0_runbook.md` guardrail 1).
+pub(crate) const NAVIGABILITY_ELIGIBILITY: &str = "Navigability-anchor migration is code-layer only for harnesses that do NOT \
+auto-inject README files into the agent's system context. If the R0 harness loads READMEs into context, this \
+treatment confounds repo-delta with harness-delta and the arm is ineligible (docs/r0_runbook.md guardrail 1).";
+
 impl CodeFix for NavigabilityAnchorFix {
     fn id(&self) -> &str {
         "navigability-anchor"
@@ -88,6 +123,10 @@ impl CodeFix for NavigabilityAnchorFix {
 
     fn describe(&self) -> &str {
         "create a mechanical README index at each package root lacking a navigability anchor"
+    }
+
+    fn eligibility_note(&self) -> &str {
+        NAVIGABILITY_ELIGIBILITY
     }
 
     fn plan(&self, repo: &Path) -> Result<Vec<PlannedChange>, MigrateError> {
@@ -195,6 +234,19 @@ mod tests {
             std::env::temp_dir().join(format!("aoa-migrate-fix-{name}-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn all_fixes_registry_exposes_the_navigability_fix_with_its_eligibility() {
+        let fixes = all_fixes();
+        let ids: Vec<&str> = fixes.iter().map(|f| f.id()).collect();
+        assert!(ids.contains(&"navigability-anchor"));
+        let nav = fixes
+            .iter()
+            .find(|f| f.id() == "navigability-anchor")
+            .unwrap();
+        assert_eq!(nav.eligibility_note(), NAVIGABILITY_ELIGIBILITY);
+        assert!(nav.eligibility_note().contains("code-layer"));
     }
 
     #[test]

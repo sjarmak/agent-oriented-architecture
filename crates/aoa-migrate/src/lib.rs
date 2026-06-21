@@ -22,10 +22,9 @@ mod error;
 mod fix;
 mod plan;
 
-pub use apply::{
-    apply, manifest_path, read_manifest, rollback, ManifestEntry, MigrationManifest,
-    ELIGIBILITY_NOTE,
-};
+pub use apply::{apply, manifest_path, read_manifest, rollback, ManifestEntry, MigrationManifest};
 pub use error::MigrateError;
-pub use fix::{ChangeAction, CodeFix, NavigabilityAnchorFix, PlannedChange};
+pub use fix::{
+    all_fixes, ChangeAction, CodeFix, FixEligibility, NavigabilityAnchorFix, PlannedChange,
+};
 pub use plan::MigrationPlan;

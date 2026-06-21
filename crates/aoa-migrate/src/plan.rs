@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use crate::error::MigrateError;
-use crate::fix::{ChangeAction, CodeFix, PlannedChange};
+use crate::fix::{ChangeAction, CodeFix, FixEligibility, PlannedChange};
 
 /// The full set of changes a migration would make, gathered from one or more
 /// [`CodeFix`]es. Building a plan writes nothing — it is the dry-run artifact.
@@ -14,6 +14,8 @@ pub struct MigrationPlan {
     /// The ids of the fixes that contributed changes — provenance recorded in
     /// the manifest so a campaign can pre-register exactly which migrations ran.
     pub fix_ids: Vec<String>,
+    /// The eligibility precondition of each contributing fix, in fix order.
+    pub eligibility_notes: Vec<FixEligibility>,
 }
 
 impl MigrationPlan {
@@ -21,17 +23,26 @@ impl MigrationPlan {
     pub fn build(repo: &Path, fixes: &[&dyn CodeFix]) -> Result<Self, MigrateError> {
         let mut changes = Vec::new();
         let mut fix_ids = Vec::new();
+        let mut eligibility_notes = Vec::new();
         for fix in fixes {
             let fix_changes = fix.plan(repo)?;
             if !fix_changes.is_empty() {
                 fix_ids.push(fix.id().to_string());
+                eligibility_notes.push(FixEligibility {
+                    fix_id: fix.id().to_string(),
+                    note: fix.eligibility_note().to_string(),
+                });
             }
             changes.extend(fix_changes);
         }
         // Stable ordering so the preview and the manifest are reproducible even
         // if two fixes return their changes in different orders.
         changes.sort_by(|a, b| a.path.cmp(&b.path));
-        Ok(Self { changes, fix_ids })
+        Ok(Self {
+            changes,
+            fix_ids,
+            eligibility_notes,
+        })
     }
 
     /// Whether the plan would change nothing (the repo already conforms).

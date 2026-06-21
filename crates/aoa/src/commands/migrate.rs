@@ -1,7 +1,9 @@
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::Serialize;
+
+use aoa_migrate::{CodeFix, FixEligibility, MigrationPlan};
 
 use crate::cli::MigrateArgs;
 use crate::output::{print_human, print_json};
@@ -13,9 +15,7 @@ pub fn run(args: &MigrateArgs) -> Result<i32> {
         return run_rollback(args);
     }
 
-    let plan =
-        aoa_migrate::MigrationPlan::build(&args.repo, &[&aoa_migrate::NavigabilityAnchorFix])
-            .with_context(|| format!("failed to plan migration for {}", args.repo.display()))?;
+    let plan = build_plan(args)?;
 
     if args.apply {
         run_apply(args, plan)
@@ -24,18 +24,39 @@ pub fn run(args: &MigrateArgs) -> Result<i32> {
     }
 }
 
+/// Build the plan from the fix registry, restricted to `--fix` ids when given.
+/// An unknown id is a hard error (never silently ignored) so a campaign's pinned
+/// treatment set is exactly what runs.
+fn build_plan(args: &MigrateArgs) -> Result<MigrationPlan> {
+    let registry = aoa_migrate::all_fixes();
+    let known: Vec<&str> = registry.iter().map(|f| f.id()).collect();
+    for id in &args.fix {
+        if !known.contains(&id.as_str()) {
+            bail!("unknown fix id '{id}' (known: {})", known.join(", "));
+        }
+    }
+    let selected: Vec<&dyn CodeFix> = registry
+        .iter()
+        .filter(|f| args.fix.is_empty() || args.fix.iter().any(|id| id == f.id()))
+        .map(|f| f.as_ref())
+        .collect();
+
+    MigrationPlan::build(&args.repo, &selected)
+        .with_context(|| format!("failed to plan migration for {}", args.repo.display()))
+}
+
 /// Dry-run: surface the grounding audit finding, preview the diff, write nothing.
-fn run_preview(args: &MigrateArgs, plan: aoa_migrate::MigrationPlan) -> Result<i32> {
+fn run_preview(args: &MigrateArgs, plan: MigrationPlan) -> Result<i32> {
     let grounding = navigability_count(&args.repo)?;
 
     if args.json {
-        let view = MigrateView::Plan {
+        let changes = change_views(&plan);
+        print_json(&MigrateView::Plan {
             grounding_navigability_sites: grounding,
-            fix_ids: plan.fix_ids.clone(),
-            changes: change_views(&plan),
-            eligibility_note: aoa_migrate::ELIGIBILITY_NOTE,
-        };
-        print_json(&view)?;
+            fix_ids: plan.fix_ids,
+            changes,
+            eligibility_notes: plan.eligibility_notes,
+        })?;
     } else {
         let mut out = format!(
             "AOA migrate (dry-run): audit reports {grounding} package root(s) without a navigability anchor.\n\n"
@@ -44,10 +65,7 @@ fn run_preview(args: &MigrateArgs, plan: aoa_migrate::MigrationPlan) -> Result<i
         if !plan.is_empty() {
             out.push_str("\nRun with --apply to write these changes (archived for rollback).\n");
         }
-        out.push_str(&format!(
-            "\n[eligibility] {}\n",
-            aoa_migrate::ELIGIBILITY_NOTE
-        ));
+        out.push_str(&render_eligibility(&plan.eligibility_notes));
         print_human(&out);
     }
     Ok(0)
@@ -56,7 +74,7 @@ fn run_preview(args: &MigrateArgs, plan: aoa_migrate::MigrationPlan) -> Result<i
 /// Write the changes, then independently re-audit to verify the spec is met
 /// (verify, not define — the migration's success is spec conformance, and the
 /// audit confirms it; it does not define it).
-fn run_apply(args: &MigrateArgs, plan: aoa_migrate::MigrationPlan) -> Result<i32> {
+fn run_apply(args: &MigrateArgs, plan: MigrationPlan) -> Result<i32> {
     // Nothing to do: skip apply() entirely so an already-conforming repo never
     // writes (and never clobbers) a manifest.
     if plan.is_empty() {
@@ -66,7 +84,7 @@ fn run_apply(args: &MigrateArgs, plan: aoa_migrate::MigrationPlan) -> Result<i32
                 files_written: 0,
                 navigability_sites_remaining: navigability_count(&args.repo)?,
                 manifest_path: String::new(),
-                eligibility_note: aoa_migrate::ELIGIBILITY_NOTE,
+                eligibility_notes: Vec::new(),
             })?;
         } else {
             print_human("AOA migrate: repo already conforms; nothing to apply.\n");
@@ -79,24 +97,23 @@ fn run_apply(args: &MigrateArgs, plan: aoa_migrate::MigrationPlan) -> Result<i32
     let remaining = navigability_count(&args.repo)?;
 
     if args.json {
-        let view = MigrateView::Apply {
-            fixes_applied: manifest.fixes_applied.clone(),
+        print_json(&MigrateView::Apply {
             files_written: manifest.entries.len(),
+            fixes_applied: manifest.fixes_applied,
             navigability_sites_remaining: remaining,
             manifest_path: aoa_migrate::manifest_path(&args.repo).display().to_string(),
-            eligibility_note: aoa_migrate::ELIGIBILITY_NOTE,
-        };
-        print_json(&view)?;
+            eligibility_notes: manifest.eligibility_notes,
+        })?;
     } else {
-        let out = format!(
+        let mut out = format!(
             "AOA migrate (applied): wrote {} file(s) via fix(es) [{}].\n\
              Re-audit verifies {remaining} navigability site(s) remaining.\n\
-             Rollback record: {}\n\n[eligibility] {}\n",
+             Rollback record: {}\n",
             manifest.entries.len(),
             manifest.fixes_applied.join(", "),
             aoa_migrate::manifest_path(&args.repo).display(),
-            aoa_migrate::ELIGIBILITY_NOTE,
         );
+        out.push_str(&render_eligibility(&manifest.eligibility_notes));
         print_human(&out);
     }
     Ok(0)
@@ -135,7 +152,15 @@ fn navigability_count(repo: &Path) -> Result<u64> {
     Ok(sites.len() as u64)
 }
 
-fn change_views(plan: &aoa_migrate::MigrationPlan) -> Vec<ChangeView> {
+/// Render each contributing fix's eligibility precondition as human text.
+fn render_eligibility(notes: &[FixEligibility]) -> String {
+    notes
+        .iter()
+        .map(|n| format!("\n[eligibility:{}] {}\n", n.fix_id, n.note))
+        .collect()
+}
+
+fn change_views(plan: &MigrationPlan) -> Vec<ChangeView> {
     plan.changes
         .iter()
         .map(|c| ChangeView {
@@ -161,14 +186,14 @@ enum MigrateView {
         grounding_navigability_sites: u64,
         fix_ids: Vec<String>,
         changes: Vec<ChangeView>,
-        eligibility_note: &'static str,
+        eligibility_notes: Vec<FixEligibility>,
     },
     Apply {
         fixes_applied: Vec<String>,
         files_written: usize,
         navigability_sites_remaining: u64,
         manifest_path: String,
-        eligibility_note: &'static str,
+        eligibility_notes: Vec<FixEligibility>,
     },
     Rollback {
         files_reverted: usize,

@@ -76,6 +76,13 @@ pub struct MigrateArgs {
     #[arg(long, conflicts_with = "apply")]
     pub rollback: bool,
 
+    /// Restrict the run to these fix ids (repeatable). Empty runs every
+    /// registered fix. Lets an R0 campaign pin the exact treatment set.
+    /// Ignored by `--rollback` (which reverts the whole recorded manifest), so
+    /// the two are mutually exclusive.
+    #[arg(long = "fix", value_name = "ID", conflicts_with = "rollback")]
+    pub fix: Vec<String>,
+
     /// Emit the structured JSON rendering instead of human text.
     #[arg(long)]
     pub json: bool,

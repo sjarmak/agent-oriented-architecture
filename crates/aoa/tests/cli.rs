@@ -807,8 +807,42 @@ fn migrate_apply_json_reports_verified_remaining_zero() {
     let v: Value = serde_json::from_str(&stdout).expect("json");
     assert_eq!(v["mode"], "apply");
     assert_eq!(v["navigability_sites_remaining"], 0);
-    assert!(v["eligibility_note"]
-        .as_str()
-        .unwrap()
-        .contains("code-layer"));
+    // Per-fix eligibility: the navigability fix's note is tagged with its id.
+    let notes = v["eligibility_notes"]
+        .as_array()
+        .expect("eligibility_notes");
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0]["fix_id"], "navigability-anchor");
+    assert!(notes[0]["note"].as_str().unwrap().contains("code-layer"));
+}
+
+#[test]
+fn migrate_fix_selector_rejects_unknown_id() {
+    let repo = migrate_repo();
+    aoa()
+        .args(["migrate", "--fix", "no-such-fix", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown fix id"));
+}
+
+#[test]
+fn migrate_fix_selector_runs_named_fix() {
+    let repo = migrate_repo();
+    aoa()
+        .args([
+            "migrate",
+            "--fix",
+            "navigability-anchor",
+            "--apply",
+            "--repo",
+        ])
+        .arg(repo.path())
+        .assert()
+        .success();
+    assert!(
+        repo.path().join("README.md").exists(),
+        "selected fix ran and wrote the anchor"
+    );
 }
