@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::MigrateError;
-use crate::fix::{ChangeAction, FixEligibility};
+use crate::fix::{ChangeAction, FixEligibility, FixProvenance};
 use crate::plan::MigrationPlan;
 
 /// Directory (under the repo, inside the ignored `.aoa/` tree) holding the
@@ -50,6 +50,12 @@ pub struct MigrationManifest {
     /// migration from an earlier binary.
     #[serde(default)]
     pub eligibility_notes: Vec<FixEligibility>,
+    /// Toolchain/environment provenance for contributing fixes that record any —
+    /// the reproducibility *verification* a compiler-backed fix leaves behind so a
+    /// later R0 audit knows which toolchain produced the change. `#[serde(default)]`
+    /// for the same backward-compatibility reason as `eligibility_notes`.
+    #[serde(default)]
+    pub provenance: Vec<FixProvenance>,
 }
 
 /// Apply `plan` to `repo`, returning the manifest that records it.
@@ -106,6 +112,7 @@ pub fn apply(repo: &Path, plan: &MigrationPlan) -> Result<MigrationManifest, Mig
         fixes_applied: plan.fix_ids.clone(),
         entries,
         eligibility_notes: plan.eligibility_notes.clone(),
+        provenance: plan.provenance.clone(),
     };
 
     // 2. Plan-first: persist the manifest before touching any source file.
@@ -263,6 +270,7 @@ mod tests {
                 fix_id: "test-fix".to_string(),
                 note: "test eligibility".to_string(),
             }],
+            provenance: Vec::new(),
         }
     }
 
@@ -357,6 +365,7 @@ mod tests {
             }],
             fix_ids: vec!["test-overwrite".to_string()],
             eligibility_notes: Vec::new(),
+            provenance: Vec::new(),
         };
         apply(&repo, &plan).unwrap();
         assert_eq!(fs::read_to_string(&target).unwrap(), "REPLACED\n");
@@ -394,6 +403,7 @@ mod tests {
             ],
             fix_ids: vec!["multi".to_string()],
             eligibility_notes: Vec::new(),
+            provenance: Vec::new(),
         };
         apply(&repo, &plan).unwrap();
         assert_eq!(fs::read_to_string(&a).unwrap(), "A-NEW\n");
@@ -432,6 +442,7 @@ mod tests {
                 },
             ],
             eligibility_notes: Vec::new(),
+            provenance: Vec::new(),
         };
         create_dir_all(&repo.join(MIGRATE_DIR)).unwrap();
         write_manifest(&repo, &manifest).unwrap();
@@ -467,6 +478,7 @@ mod tests {
                 ManifestEntry::Created { path: b.clone() },
             ],
             eligibility_notes: Vec::new(),
+            provenance: Vec::new(),
         };
         create_dir_all(&repo.join(MIGRATE_DIR)).unwrap();
         write_manifest(&repo, &manifest).unwrap();

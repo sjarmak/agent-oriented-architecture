@@ -11,6 +11,12 @@ aoa-audit = { path = "../aoa-audit" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# tempfile: DeadImportFix copies the target repo to an isolated tree at plan
+# time, so it is a runtime dependency, not just a test dependency.
+tempfile = "3.10.1"
+# rustfix: parse rustc's JSON diagnostics and apply only the unused_imports-class
+# MachineApplicable suggestions (no regex on stderr, no blind cargo-fix rewrites).
+rustfix = "0.9.6"
 
 [dev-dependencies]
 tempfile = "3.10.1"

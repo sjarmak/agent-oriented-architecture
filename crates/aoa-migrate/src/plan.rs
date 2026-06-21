@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use crate::error::MigrateError;
-use crate::fix::{ChangeAction, CodeFix, FixEligibility, PlannedChange};
+use crate::fix::{ChangeAction, CodeFix, FixEligibility, FixProvenance, PlannedChange};
 
 /// The full set of changes a migration would make, gathered from one or more
 /// [`CodeFix`]es. Building a plan writes nothing — it is the dry-run artifact.
@@ -16,6 +16,10 @@ pub struct MigrationPlan {
     pub fix_ids: Vec<String>,
     /// The eligibility precondition of each contributing fix, in fix order.
     pub eligibility_notes: Vec<FixEligibility>,
+    /// Environment provenance recorded by contributing fixes that have any
+    /// (e.g. the toolchain a compiler-backed fix ran under) — the reproducibility
+    /// verification half. Empty for fixes that are pure functions of the tree.
+    pub provenance: Vec<FixProvenance>,
 }
 
 impl MigrationPlan {
@@ -24,6 +28,7 @@ impl MigrationPlan {
         let mut changes = Vec::new();
         let mut fix_ids = Vec::new();
         let mut eligibility_notes = Vec::new();
+        let mut provenance = Vec::new();
         for fix in fixes {
             let fix_changes = fix.plan(repo)?;
             if !fix_changes.is_empty() {
@@ -32,6 +37,11 @@ impl MigrationPlan {
                     fix_id: fix.id().to_string(),
                     note: fix.eligibility_note().to_string(),
                 });
+                // Only contributing fixes record provenance: a fix that planned
+                // nothing has no toolchain influence on this migration.
+                if let Some(p) = fix.provenance(repo)? {
+                    provenance.push(p);
+                }
             }
             changes.extend(fix_changes);
         }
@@ -42,6 +52,7 @@ impl MigrationPlan {
             changes,
             fix_ids,
             eligibility_notes,
+            provenance,
         })
     }
 

@@ -52,6 +52,26 @@ pub struct FixEligibility {
     pub note: String,
 }
 
+/// Environment provenance a fix records about *how* it computed its changes — the
+/// verification half of reproducibility (the toolchain pin is the mechanism; this
+/// records which toolchain actually ran). A fix that is a pure function of the
+/// directory tree (the navigability anchor) has none; a compiler-backed fix
+/// records the toolchain so an R0 artifact can say which `rustc` produced the
+/// subtraction, months after the campaign.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FixProvenance {
+    /// The [`CodeFix::id`] this provenance belongs to.
+    pub fix_id: String,
+    /// Toolchain identity, e.g. the output of `rustc --version --verbose`
+    /// (version, commit hash, host triple) resolved under the repo's pin.
+    pub toolchain: String,
+    /// Whether the target repo carried a toolchain pin (`rust-toolchain.toml` or
+    /// `rust-toolchain`). With no pin the toolchain is the ambient default and the
+    /// result is reproducible only under that toolchain — the eligibility note
+    /// spells this out.
+    pub pin_present: bool,
+}
+
 /// A mechanical, reproducible, oracle-blind migration toward a code-layer
 /// best-practice. Implementors only *plan*; the engine applies.
 pub trait CodeFix {
@@ -68,13 +88,25 @@ pub trait CodeFix {
     /// Compute the changes this fix would make to `repo`. Read-only: a `plan`
     /// call never mutates the checkout.
     fn plan(&self, repo: &Path) -> Result<Vec<PlannedChange>, MigrateError>;
+
+    /// Environment provenance for this fix's changes, recorded in the manifest as
+    /// reproducibility *verification*. Default `None`: a fix that is a pure
+    /// function of the tree has no toolchain dependence to record. A
+    /// compiler-backed fix overrides this to capture the toolchain it ran under.
+    /// Only consulted for fixes that actually contributed changes.
+    fn provenance(&self, _repo: &Path) -> Result<Option<FixProvenance>, MigrateError> {
+        Ok(None)
+    }
 }
 
 /// Every registered [`CodeFix`], in deterministic order — the single source of
 /// truth for which migrations exist. The CLI selects a subset by id; passing
 /// the whole set runs them all.
 pub fn all_fixes() -> Vec<Box<dyn CodeFix>> {
-    vec![Box::new(NavigabilityAnchorFix)]
+    vec![
+        Box::new(NavigabilityAnchorFix),
+        Box::new(crate::imports::DeadImportFix),
+    ]
 }
 
 /// Directory names skipped when listing a package's contents — build output and

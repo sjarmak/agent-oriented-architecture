@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
 
-use aoa_migrate::{CodeFix, FixEligibility, MigrationPlan};
+use aoa_migrate::{CodeFix, FixEligibility, FixProvenance, MigrationPlan};
 
 use crate::cli::MigrateArgs;
 use crate::output::{print_human, print_json};
@@ -56,6 +56,7 @@ fn run_preview(args: &MigrateArgs, plan: MigrationPlan) -> Result<i32> {
             fix_ids: plan.fix_ids,
             changes,
             eligibility_notes: plan.eligibility_notes,
+            provenance: plan.provenance,
         })?;
     } else {
         let mut out = format!(
@@ -66,6 +67,7 @@ fn run_preview(args: &MigrateArgs, plan: MigrationPlan) -> Result<i32> {
             out.push_str("\nRun with --apply to write these changes (archived for rollback).\n");
         }
         out.push_str(&render_eligibility(&plan.eligibility_notes));
+        out.push_str(&render_provenance(&plan.provenance));
         print_human(&out);
     }
     Ok(0)
@@ -85,6 +87,7 @@ fn run_apply(args: &MigrateArgs, plan: MigrationPlan) -> Result<i32> {
                 navigability_sites_remaining: navigability_count(&args.repo)?,
                 manifest_path: String::new(),
                 eligibility_notes: Vec::new(),
+                provenance: Vec::new(),
             })?;
         } else {
             print_human("AOA migrate: repo already conforms; nothing to apply.\n");
@@ -103,6 +106,7 @@ fn run_apply(args: &MigrateArgs, plan: MigrationPlan) -> Result<i32> {
             navigability_sites_remaining: remaining,
             manifest_path: aoa_migrate::manifest_path(&args.repo).display().to_string(),
             eligibility_notes: manifest.eligibility_notes,
+            provenance: manifest.provenance,
         })?;
     } else {
         let mut out = format!(
@@ -114,6 +118,7 @@ fn run_apply(args: &MigrateArgs, plan: MigrationPlan) -> Result<i32> {
             aoa_migrate::manifest_path(&args.repo).display(),
         );
         out.push_str(&render_eligibility(&manifest.eligibility_notes));
+        out.push_str(&render_provenance(&manifest.provenance));
         print_human(&out);
     }
     Ok(0)
@@ -160,6 +165,25 @@ fn render_eligibility(notes: &[FixEligibility]) -> String {
         .collect()
 }
 
+/// Render the reproducibility provenance a compiler-backed fix recorded (the
+/// toolchain it ran under and whether the repo pinned it).
+fn render_provenance(provenance: &[FixProvenance]) -> String {
+    provenance
+        .iter()
+        .map(|p| {
+            let pin = if p.pin_present {
+                "pinned"
+            } else {
+                "UNPINNED (reproducible only on this toolchain)"
+            };
+            format!(
+                "\n[provenance:{}] toolchain {pin}:\n{}\n",
+                p.fix_id, p.toolchain
+            )
+        })
+        .collect()
+}
+
 fn change_views(plan: &MigrationPlan) -> Vec<ChangeView> {
     plan.changes
         .iter()
@@ -187,6 +211,7 @@ enum MigrateView {
         fix_ids: Vec<String>,
         changes: Vec<ChangeView>,
         eligibility_notes: Vec<FixEligibility>,
+        provenance: Vec<FixProvenance>,
     },
     Apply {
         fixes_applied: Vec<String>,
@@ -194,6 +219,7 @@ enum MigrateView {
         navigability_sites_remaining: u64,
         manifest_path: String,
         eligibility_notes: Vec<FixEligibility>,
+        provenance: Vec<FixProvenance>,
     },
     Rollback {
         files_reverted: usize,
