@@ -40,7 +40,7 @@ use aoa_gap::{compute_gap, GapOutcome, HeldOutProvenance, RunResult, TaskOutcome
 use aoa_metrics::{
     compute_edit_locality, compute_invariant_discoverability, compute_mutation_surface,
     compute_retrieval_locality, ConditionedOn, Confidence, EditLocality, IndexQuality,
-    InvariantDiscoverability, MetricError, MetricInput, MutationSurface, RetrievalLocality,
+    InvariantDiscoverability, MetricError, MetricInputRef, MutationSurface, RetrievalLocality,
     TransformMap,
 };
 use aoa_scip_graph::{build_symbol_graph, degraded, IndexSource, IndexedRepo};
@@ -221,15 +221,20 @@ fn process_task(
 
     let edited_files = edited_files_from_trace(&trace);
 
-    let input = MetricInput {
-        trace,
-        gold_set,
+    // The symbol graph and invariant set are task-invariant for the run — borrow
+    // the single shared copy rather than cloning it into a fresh `MetricInput`
+    // every task. Per-task fields (trace, gold set, edits, accepted solutions)
+    // are owned on this stack frame and borrowed into the same view.
+    let transform = TransformMap::default();
+    let input = MetricInputRef {
+        trace: &trace,
+        gold_set: &gold_set,
         // I_t comes only from a SCIP index; empty (vacuous) otherwise.
-        invariant_set: indexed.invariant_set.clone(),
-        transform: TransformMap::default(),
-        edited_files,
-        accepted_solutions,
-        graph: indexed.graph.clone(),
+        invariant_set: &indexed.invariant_set,
+        transform: &transform,
+        edited_files: &edited_files,
+        accepted_solutions: &accepted_solutions,
+        graph: &indexed.graph,
         k: DEFAULT_K,
         held_out_success,
     };
@@ -238,7 +243,7 @@ fn process_task(
     // than fail the whole record. The match is intentionally exhaustive on
     // `MetricError`'s sole variant: a future variant must become a compile error
     // here so it is handled deliberately, never silently nulled.
-    let (edit_locality, edit_locality_unavailable) = match compute_edit_locality(&input) {
+    let (edit_locality, edit_locality_unavailable) = match compute_edit_locality(input) {
         Ok(e) => (Some(e), None),
         Err(MetricError::InsufficientAcceptedSolutions(n)) => (
             None,
@@ -279,9 +284,9 @@ fn process_task(
         repo_eligible_for_r0: quality.eligible_for_r0(),
         graph_degrade_reason: indexed.degrade_reason.clone(),
         transcript_warnings,
-        retrieval_locality: compute_retrieval_locality(&input),
-        invariant_discoverability: compute_invariant_discoverability(&input),
-        mutation_surface: compute_mutation_surface(&input),
+        retrieval_locality: compute_retrieval_locality(input),
+        invariant_discoverability: compute_invariant_discoverability(input),
+        mutation_surface: compute_mutation_surface(input),
         edit_locality,
         edit_locality_unavailable,
         gap,

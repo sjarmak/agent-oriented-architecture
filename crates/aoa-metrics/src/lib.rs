@@ -23,7 +23,7 @@ mod retrieval;
 pub use common::ConditionedOn;
 pub use edit::{compute_edit_locality, EditLocality};
 pub use error::MetricError;
-pub use input::{Confidence, IndexQuality, MetricInput, SymbolGraph, TransformMap};
+pub use input::{Confidence, IndexQuality, MetricInput, MetricInputRef, SymbolGraph, TransformMap};
 pub use invariant::{compute_invariant_discoverability, InvariantDiscoverability};
 pub use mutation::{compute_mutation_surface, MutationSurface};
 pub use record::{compute_metrics, MetricRecord};

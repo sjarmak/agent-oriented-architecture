@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::common::{is_access_span, ranked_results, span_artifact, ConditionedOn};
-use crate::input::{Confidence, MetricInput};
+use crate::input::{Confidence, MetricInputRef};
 
 /// Retrieval-locality bundle: time-to-first-relevant, Recall@k, and MRR, with
 /// the gold set anchored to base-repo symbols through the transform map.
@@ -29,8 +29,8 @@ pub struct RetrievalLocality {
 
 /// Compute retrieval-locality. `G_t` is anchored to migrated names so a renamed
 /// gold symbol still matches the migrated identifier the trace references.
-pub fn compute_retrieval_locality(input: &MetricInput) -> RetrievalLocality {
-    let anchored: BTreeSet<String> = input.transform.anchor(&input.gold_set);
+pub fn compute_retrieval_locality(input: MetricInputRef<'_>) -> RetrievalLocality {
+    let anchored: BTreeSet<String> = input.transform.anchor(input.gold_set);
 
     let mut spans: Vec<_> = input.trace.spans.iter().collect();
     spans.sort_by_key(|s| s.seq);

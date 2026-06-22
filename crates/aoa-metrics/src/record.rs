@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::ConditionedOn;
 use crate::edit::{compute_edit_locality, EditLocality};
 use crate::error::MetricError;
-use crate::input::{Confidence, MetricInput};
+use crate::input::{Confidence, MetricInputRef};
 use crate::invariant::{compute_invariant_discoverability, InvariantDiscoverability};
 use crate::mutation::{compute_mutation_surface, MutationSurface};
 use crate::retrieval::{compute_retrieval_locality, RetrievalLocality};
@@ -30,7 +30,7 @@ pub struct MetricRecord {
 }
 
 /// Compute the full metric record from a single task-run input.
-pub fn compute_metrics(input: &MetricInput) -> Result<MetricRecord, MetricError> {
+pub fn compute_metrics(input: MetricInputRef<'_>) -> Result<MetricRecord, MetricError> {
     let quality = input.graph.quality;
     Ok(MetricRecord {
         retrieval_locality: compute_retrieval_locality(input),
