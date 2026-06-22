@@ -43,6 +43,7 @@ use aoa_metrics::Confidence;
 
 use crate::cli::ExperimentArgs;
 use crate::commands::codeprobe::{aggregate_provenance, discover_tasks, DualScoring};
+use crate::commands::fsutil::{read_to_string_capped, MAX_JSON_BYTES};
 use crate::output::{print_human, print_json};
 
 /// Sentinel convention inputs emitted while a per-repo symbol graph is not
@@ -421,7 +422,7 @@ fn build_report_path(out: &Path) -> PathBuf {
 
 /// Run `aoa eval experiment`.
 pub(crate) fn run(args: &ExperimentArgs) -> Result<i32> {
-    let raw = std::fs::read_to_string(&args.manifest)
+    let raw = read_to_string_capped(&args.manifest, MAX_JSON_BYTES)
         .with_context(|| format!("failed to read manifest {}", args.manifest.display()))?;
     let manifest: Manifest = serde_json::from_str(&raw)
         .with_context(|| format!("failed to parse manifest {}", args.manifest.display()))?;
@@ -507,5 +508,24 @@ mod tests {
     fn confidence_decl_maps_to_metrics_confidence() {
         assert_eq!(Confidence::from(ConfidenceDecl::High), Confidence::High);
         assert_eq!(Confidence::from(ConfidenceDecl::Low), Confidence::Low);
+    }
+
+    #[test]
+    fn run_rejects_oversized_manifest() {
+        let dir = std::env::temp_dir().join(format!("aoa-experiment-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let manifest = dir.join("manifest.json");
+        std::fs::write(&manifest, vec![b'x'; (MAX_JSON_BYTES + 1) as usize]).unwrap();
+
+        let args = ExperimentArgs {
+            manifest,
+            tasks: dir.clone(),
+            out: dir.join("falsify_input.json"),
+            json: false,
+        };
+        let err = run(&args).unwrap_err();
+        assert!(format!("{err:#}").contains("byte cap"), "got: {err:#}");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -1,10 +1,44 @@
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::Path;
 
 use crate::error::TraceError;
 use crate::model::Trace;
 use crate::report::TraceReport;
 use crate::span_type::SpanSource;
+
+/// Largest trace file read into memory. Trace files are small by nature; the cap
+/// only trips pathological or hostile input so a crafted file cannot exhaust
+/// memory before the schema parse.
+const MAX_TRACE_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Read `path` into a `String`, rejecting anything past `max` bytes.
+///
+/// Bounded via [`Read::take`] rather than a pre-read `metadata().len()` check: a
+/// file that grows (or a symlink whose target swaps) between stat and read cannot
+/// blow past the cap. One byte past `max` is read so an exactly-`max` file is
+/// accepted while a larger one is rejected.
+fn read_capped(path: &Path, max: u64) -> Result<String, TraceError> {
+    let file = std::fs::File::open(path).map_err(|source| TraceError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let mut raw = String::new();
+    let read = file
+        .take(max + 1)
+        .read_to_string(&mut raw)
+        .map_err(|source| TraceError::Read {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if read as u64 > max {
+        return Err(TraceError::TooLarge {
+            path: path.to_path_buf(),
+            max,
+        });
+    }
+    Ok(raw)
+}
 
 /// Load and validate a trace file at `path`.
 ///
@@ -15,10 +49,7 @@ use crate::span_type::SpanSource;
 /// On success returns a [`TraceReport`] with per-span-type counts and a
 /// `has_reconstructed` flag.
 pub fn validate_trace(path: &Path) -> Result<TraceReport, TraceError> {
-    let raw = std::fs::read_to_string(path).map_err(|source| TraceError::Read {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let raw = read_capped(path, MAX_TRACE_BYTES)?;
 
     let trace: Trace = serde_json::from_str(&raw).map_err(|source| TraceError::Schema {
         path: path.to_path_buf(),
@@ -56,4 +87,27 @@ pub fn validate_trace_value(trace: &Trace) -> Result<TraceReport, TraceError> {
     }
 
     Ok(TraceReport::new(counts, has_reconstructed))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_oversized_trace_file() {
+        let dir = std::env::temp_dir().join(format!("aoa-trace-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("trace.json");
+        // One byte past the cap; content need not be valid JSON since the size
+        // guard must trip before the schema parse is attempted.
+        std::fs::write(&path, vec![b'x'; (MAX_TRACE_BYTES + 1) as usize]).unwrap();
+
+        let err = validate_trace(&path).unwrap_err();
+        assert!(
+            matches!(err, TraceError::TooLarge { .. }),
+            "expected TooLarge, got {err:?}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

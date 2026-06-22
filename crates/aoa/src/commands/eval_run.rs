@@ -48,7 +48,7 @@ use aoa_trace::{SpanType, Trace};
 
 use crate::cli::EvalRunArgs;
 use crate::commands::codeprobe::discover_tasks;
-use crate::commands::fsutil::{read_to_string_capped, MAX_TRIAL_JSON_BYTES};
+use crate::commands::fsutil::{read_to_string_capped, MAX_JSON_BYTES};
 use crate::output::{print_human, print_json};
 
 /// Mutation-surface reachability depth and retrieval cutoff. Fixed to the value
@@ -195,7 +195,7 @@ fn process_task(
     let transcript_warnings = shim.warnings.len();
 
     let scoring_path = task_dir.join("scoring.json");
-    let scoring_raw = read_to_string_capped(&scoring_path, MAX_TRIAL_JSON_BYTES)?;
+    let scoring_raw = read_to_string_capped(&scoring_path, MAX_JSON_BYTES)?;
     let scoring: Scoring = serde_json::from_str(&scoring_raw)
         .with_context(|| format!("failed to parse {}", scoring_path.display()))?;
     let held_out_success = scoring.held_out_success();
