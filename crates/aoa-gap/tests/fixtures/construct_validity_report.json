@@ -41,6 +41,24 @@
       "orientation": "lower_is_better",
       "correlations": [],
       "mode": "advisory"
+    },
+    {
+      "metric": "navigability_anchor_absence",
+      "orientation": "lower_is_better",
+      "correlations": [],
+      "mode": "advisory"
+    },
+    {
+      "metric": "module_size_outliers",
+      "orientation": "lower_is_better",
+      "correlations": [],
+      "mode": "advisory"
+    },
+    {
+      "metric": "unused_import_proxy",
+      "orientation": "lower_is_better",
+      "correlations": [],
+      "mode": "advisory"
     }
   ]
 }

@@ -161,6 +161,13 @@ pub fn classify_metric(
 /// could let gate a generative feature once a confirming correlation exists.
 /// `mutation_surface` and `reward_hacking_gap` are harms (smaller is better);
 /// the rest are goods.
+///
+/// The trailing three are the code-structure measures emitted by `aoa-audit`
+/// (see [`STRUCTURE_MEASURE_SPECS`]). They are registered here so they ride the
+/// same Advisory→Gating discipline as every other candidate — never gating
+/// until [`classify_metric`] sees a confirming external-outcome correlation.
+/// They are appended last so the positional ordering of the pre-existing six is
+/// unchanged.
 pub const GATING_CANDIDATES: &[(&str, MetricOrientation)] = &[
     ("retrieval_locality", MetricOrientation::HigherIsBetter),
     ("edit_locality", MetricOrientation::HigherIsBetter),
@@ -171,6 +178,56 @@ pub const GATING_CANDIDATES: &[(&str, MetricOrientation)] = &[
     ("mutation_surface", MetricOrientation::LowerIsBetter),
     ("budget_adherence", MetricOrientation::HigherIsBetter),
     ("reward_hacking_gap", MetricOrientation::LowerIsBetter),
+    (
+        "navigability_anchor_absence",
+        MetricOrientation::LowerIsBetter,
+    ),
+    ("module_size_outliers", MetricOrientation::LowerIsBetter),
+    ("unused_import_proxy", MetricOrientation::LowerIsBetter),
+];
+
+/// The pre-registered spec for the code-structure measures: each metric paired
+/// with the mechanical fact `aoa-audit` measures for it. This is the spec AOA
+/// *verifies* — "better-organized / migrated" is fixed by these definitions,
+/// never by AOA's own pass-state (anti-Goodhart; runbook guardrail 3). The
+/// metric names match [`GATING_CANDIDATES`] exactly (asserted in tests), and the
+/// orientation lives there alone — this table adds only the definition, so the
+/// two cannot drift on direction.
+///
+/// Promotion path: every measure here is born [`MetricMode::Advisory`] and
+/// promotes to [`MetricMode::Gating`] ONLY when [`classify_metric`] sees a
+/// confirming correlation to an [`ExternalOutcome`] (revert rate, incident
+/// count, or review acceptance) clearing [`GatingThresholds`] — the same gate
+/// as every other candidate. The external-outcome corpus that would supply such
+/// a correlation does not yet exist (see [`NO_EXTERNAL_OUTCOME_SOURCE`]), so all
+/// three are currently Advisory.
+///
+/// `module_size_outliers` carries a caveat the other two do not: its
+/// `LowerIsBetter` orientation is a *registered, falsifiable directional
+/// hypothesis*, not an earned best-practice. The navigability and unused-import
+/// measures each have a mechanical migration that drives them down
+/// (`aoa-migrate`); module size has none (splitting a large module is not
+/// mechanically safe and was ruled out of scope). Its direction therefore earns
+/// nothing until external-outcome correlation confirms it — which is exactly
+/// what pre-registering a hypothesis under R9c means.
+pub const STRUCTURE_MEASURE_SPECS: &[(&str, &str)] = &[
+    (
+        "navigability_anchor_absence",
+        "count of package roots (repo root + workspace member crates) lacking a \
+README navigability anchor, per aoa-audit navigability_sites",
+    ),
+    (
+        "module_size_outliers",
+        "count of source files exceeding size_outlier_k × the repo's own median \
+source-file line count (self-calibrating), per aoa-audit module_size_outlier_item; \
+the LowerIsBetter orientation is a registered falsifiable hypothesis (no backing \
+migration), promotable only by external-outcome correlation",
+    ),
+    (
+        "unused_import_proxy",
+        "count of likely-unused imports by a syntactic proxy (a use-bound name \
+absent from the file body), per aoa-audit unused_import_proxy_item",
+    ),
 ];
 
 /// One metric's classification within a [`ConstructValidityReport`].

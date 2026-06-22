@@ -2,6 +2,7 @@ use aoa_gap::{
     classify_metric, compare, compute_gap, spearman, CanaryItem, CorrelationReport,
     ExternalOutcome, GapError, GapOutcome, GatingThresholds, HeldOutProvenance, Label, MetricMode,
     MetricOrientation, OutcomeCorrelation, RunResult, TaskOutcome, GATING_CANDIDATES,
+    STRUCTURE_MEASURE_SPECS,
 };
 
 fn task(visible: bool, held_out: bool) -> TaskOutcome {
@@ -525,6 +526,87 @@ fn criterion_6_end_to_end_from_observations() {
         }],
     };
     assert_eq!(classify_metric(Some(&report), &t), MetricMode::Gating);
+}
+
+// R9c structure-measure wiring (aoa-mnz.3): the code-structure measures are
+// registered as Advisory gating candidates, born advisory exactly like the
+// process metrics, and gain no special treatment.
+#[test]
+fn structure_measures_are_registered_advisory_candidates() {
+    let registered: std::collections::HashMap<&str, MetricOrientation> =
+        GATING_CANDIDATES.iter().copied().collect();
+
+    for (metric, _) in STRUCTURE_MEASURE_SPECS {
+        // Each structure measure is a registered candidate, and a count of a
+        // harm (absences / outliers / unused imports) is LowerIsBetter.
+        assert_eq!(
+            registered.get(metric),
+            Some(&MetricOrientation::LowerIsBetter),
+            "{metric} must be a LowerIsBetter gating candidate"
+        );
+    }
+
+    // Born advisory: absent any external-outcome correlation, no report
+    // classifies as gating. This holds for every candidate regardless of
+    // metric, so it is asserted once rather than per iteration.
+    assert_eq!(
+        classify_metric(None, &GatingThresholds::default()),
+        MetricMode::Advisory
+    );
+}
+
+// The pre-registered spec is a single source of truth on direction: every spec
+// metric names a real candidate (no drift between the two tables) and carries a
+// non-empty mechanical definition — the spec AOA verifies, not defines.
+#[test]
+fn structure_measure_spec_matches_candidates_and_is_documented() {
+    let registered: std::collections::HashSet<&str> =
+        GATING_CANDIDATES.iter().map(|(m, _)| *m).collect();
+
+    for (metric, definition) in STRUCTURE_MEASURE_SPECS {
+        assert!(
+            registered.contains(metric),
+            "spec metric {metric} is not a registered gating candidate"
+        );
+        assert!(
+            !definition.trim().is_empty(),
+            "spec metric {metric} has no pre-registered definition"
+        );
+    }
+}
+
+// AC3: a structure measure CAN promote to Gating when a confirming
+// external-outcome correlation exists — the same path as the process metrics.
+// For a LowerIsBetter metric against a lower-is-better outcome (revert rate),
+// metric-good and outcome-good point the same way, so a POSITIVE coefficient
+// confirms (fewer unused imports track fewer reverts).
+#[test]
+fn structure_measure_promotes_to_gating_on_confirming_correlation() {
+    let t = GatingThresholds::default();
+    let report = CorrelationReport {
+        metric: "unused_import_proxy".into(),
+        orientation: MetricOrientation::LowerIsBetter,
+        correlations: vec![OutcomeCorrelation {
+            outcome: ExternalOutcome::RevertRate,
+            coefficient: 0.8,
+            n: 12,
+            p_value: 0.001,
+        }],
+    };
+    assert_eq!(classify_metric(Some(&report), &t), MetricMode::Gating);
+
+    // The same evidence with the WRONG sign (negative coefficient) does not
+    // confirm a LowerIsBetter-vs-revert hypothesis — it stays advisory.
+    let wrong_sign = CorrelationReport {
+        correlations: vec![OutcomeCorrelation {
+            outcome: ExternalOutcome::RevertRate,
+            coefficient: -0.8,
+            n: 12,
+            p_value: 0.001,
+        }],
+        ..report
+    };
+    assert_eq!(classify_metric(Some(&wrong_sign), &t), MetricMode::Advisory);
 }
 
 // Criterion 6 (artifact): the current determination is a reproducible artifact
