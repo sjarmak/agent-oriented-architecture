@@ -43,6 +43,7 @@ pub enum IndexSource<'a> {
 /// [`IndexedRepo::degrade_reason`] so a misconfigured index is distinguishable from
 /// a legitimately empty repo. The source-specific functions still surface the typed
 /// error for callers that need it.
+#[must_use]
 pub fn build_symbol_graph(source: IndexSource<'_>) -> IndexedRepo {
     let indexed = match source {
         IndexSource::Scip { index_path } => index_with_scip(index_path),

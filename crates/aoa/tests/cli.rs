@@ -888,3 +888,39 @@ fn migrate_fix_selector_runs_named_fix() {
         "selected fix ran and wrote the anchor"
     );
 }
+
+// aoa-mnz.7: the `aoa gap` subcommand is a live, non-test consumer of
+// `current_determination()`. It surfaces the R9c Gating-vs-Advisory
+// determination to the operator. With no external-outcome corpus available,
+// every gating candidate is Advisory — the surface must say so, naming each
+// candidate, rather than silently gating.
+#[test]
+fn gap_human_surfaces_advisory_determination() {
+    aoa()
+        .args(["gap"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("construct validity"))
+        .stdout(predicate::str::contains("Advisory"))
+        // a known pre-registered candidate is named
+        .stdout(predicate::str::contains("reward_hacking_gap"));
+}
+
+#[test]
+fn gap_json_carries_every_candidate_as_advisory() {
+    let output = aoa().args(["gap", "--json"]).output().expect("run");
+    assert!(output.status.success());
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    let metrics = parsed["metrics"].as_array().expect("metrics array");
+    assert!(!metrics.is_empty(), "every gating candidate is classified");
+    for m in metrics {
+        assert_eq!(
+            m["mode"], "advisory",
+            "no candidate gates without an external-outcome corpus"
+        );
+    }
+    assert!(
+        parsed["data_source"].as_str().unwrap().contains("external"),
+        "the surface names the data source it consulted"
+    );
+}

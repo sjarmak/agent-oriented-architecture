@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use aoa_metrics::{
     compute_edit_locality, compute_invariant_discoverability, compute_metrics,
     compute_mutation_surface, compute_retrieval_locality, Confidence, IndexQuality, MetricInput,
-    SymbolGraph, TransformMap,
+    MetricInputRef, SymbolGraph, TransformMap,
 };
 use aoa_trace::{Span, SpanSource, SpanType, Trace};
 
@@ -63,7 +63,7 @@ fn retrieval_locality_anchors_gold_through_rename() {
         ..base_input()
     };
 
-    let r = compute_retrieval_locality(&input);
+    let r = compute_retrieval_locality(input.as_view());
 
     // Anchored gold is the migrated name, not the raw base name.
     assert!(r.anchored_gold.contains("orders::Service"));
@@ -90,7 +90,7 @@ fn retrieval_locality_misses_when_only_raw_name_present() {
         k: 3,
         ..base_input()
     };
-    let r = compute_retrieval_locality(&input);
+    let r = compute_retrieval_locality(input.as_view());
     assert_eq!(r.tool_calls_to_first_relevant_artifact, None);
     assert!((r.mrr - 0.0).abs() < 1e-9);
 }
@@ -104,7 +104,7 @@ fn edit_locality_emits_floor_and_ceiling() {
         accepted_solutions: vec![set(&["a.rs", "b.rs"]), set(&["a.rs", "c.rs"])],
         ..base_input()
     };
-    let e = compute_edit_locality(&input).unwrap();
+    let e = compute_edit_locality(input.as_view()).unwrap();
 
     // intersection = {a.rs} size 1; union = {a,b,c} size 3.
     assert_eq!(e.intersection_size, 1);
@@ -123,7 +123,7 @@ fn edit_locality_requires_two_solutions() {
         accepted_solutions: vec![set(&["a.rs"])],
         ..base_input()
     };
-    assert!(compute_edit_locality(&input).is_err());
+    assert!(compute_edit_locality(input.as_view()).is_err());
 }
 
 // Criterion 3: invariant-discoverability is true when an I_t access precedes the
@@ -148,7 +148,7 @@ fn invariant_discovered_before_write() {
         },
         ..base_input()
     };
-    let d = compute_invariant_discoverability(&input);
+    let d = compute_invariant_discoverability(input.as_view());
     assert!(d.accessed_before_first_write);
     assert_eq!(d.first_write_seq, Some(2));
 }
@@ -173,7 +173,7 @@ fn invariant_not_discovered_when_accessed_after_write() {
         },
         ..base_input()
     };
-    let d = compute_invariant_discoverability(&input);
+    let d = compute_invariant_discoverability(input.as_view());
     assert!(!d.accessed_before_first_write);
 }
 
@@ -185,7 +185,7 @@ fn mutation_surface_counts_reachable_and_emits_k() {
         k: 1,
         ..base_input()
     };
-    let m = compute_mutation_surface(&input);
+    let m = compute_mutation_surface(input.as_view());
     // From roots, depth <= 1 reaches root, mid, leaf, far (each is a root node),
     // writable = {mid, leaf, far} -> 3.
     assert_eq!(m.k, 1);
@@ -208,7 +208,7 @@ fn mutation_surface_respects_depth_bound() {
         k: 1,
         ..base_input()
     };
-    let m = compute_mutation_surface(&input);
+    let m = compute_mutation_surface(input.as_view());
     // depth 1 reaches mid but not leaf.
     assert_eq!(m.writable_reachable, 1);
     assert!(m.reachable.contains("mid"));
@@ -219,10 +219,13 @@ fn mutation_surface_respects_depth_bound() {
 // visible-pass-but-held-out-FAIL task is not counted as success.
 #[test]
 fn records_conditioned_on_held_out_success() {
-    let pass = compute_metrics(&MetricInput {
-        held_out_success: true,
-        ..base_input()
-    })
+    let pass = compute_metrics(
+        (MetricInput {
+            held_out_success: true,
+            ..base_input()
+        })
+        .as_view(),
+    )
     .unwrap();
     assert!(pass.counted_as_success);
     // Serialized form carries the literal "held_out".
@@ -230,10 +233,13 @@ fn records_conditioned_on_held_out_success() {
     assert_eq!(json["conditioned_on"], "held_out");
     assert_eq!(json["retrieval_locality"]["conditioned_on"], "held_out");
 
-    let held_out_fail = compute_metrics(&MetricInput {
-        held_out_success: false,
-        ..base_input()
-    })
+    let held_out_fail = compute_metrics(
+        (MetricInput {
+            held_out_success: false,
+            ..base_input()
+        })
+        .as_view(),
+    )
     .unwrap();
     assert!(!held_out_fail.counted_as_success);
 }
@@ -241,7 +247,7 @@ fn records_conditioned_on_held_out_success() {
 // Criterion 6: confidence labeling (R15) and R-silent gating.
 #[test]
 fn scip_index_is_high_confidence_full_weight_and_eligible() {
-    let r = compute_metrics(&base_input()).unwrap();
+    let r = compute_metrics(base_input().as_view()).unwrap();
     assert_eq!(r.confidence, Confidence::High);
     assert!((r.weight - 1.0).abs() < 1e-9);
     assert!(r.repo_eligible_for_r0);
@@ -251,10 +257,13 @@ fn scip_index_is_high_confidence_full_weight_and_eligible() {
 fn best_effort_index_is_low_confidence_lower_weight() {
     let mut graph = scip_graph();
     graph.quality = IndexQuality::BestEffort;
-    let r = compute_metrics(&MetricInput {
-        graph,
-        ..base_input()
-    })
+    let r = compute_metrics(
+        (MetricInput {
+            graph,
+            ..base_input()
+        })
+        .as_view(),
+    )
     .unwrap();
     assert_eq!(r.confidence, Confidence::Low);
     assert!(r.weight < 1.0);
@@ -263,7 +272,7 @@ fn best_effort_index_is_low_confidence_lower_weight() {
 
 #[test]
 fn degraded_index_lowers_weight_disqualifies_r0_and_never_raises_surface() {
-    let scip = compute_mutation_surface(&base_input());
+    let scip = compute_mutation_surface(base_input().as_view());
 
     let mut graph = scip_graph();
     graph.quality = IndexQuality::Degraded;
@@ -271,7 +280,7 @@ fn degraded_index_lowers_weight_disqualifies_r0_and_never_raises_surface() {
         graph,
         ..base_input()
     };
-    let degraded = compute_metrics(&degraded_input).unwrap();
+    let degraded = compute_metrics(degraded_input.as_view()).unwrap();
 
     assert_eq!(degraded.confidence, Confidence::Low);
     assert!((degraded.weight - 0.0).abs() < 1e-9);
@@ -282,6 +291,43 @@ fn degraded_index_lowers_weight_disqualifies_r0_and_never_raises_surface() {
     assert_eq!(degraded.mutation_surface.writable_reachable, 0);
     // It still emits k and over_approximation.
     assert!(degraded.mutation_surface.over_approximation);
+}
+
+// A `MetricInputRef` borrowing a single shared graph + invariant set across a
+// task loop computes identically to the owned `MetricInput` path — no per-task
+// graph clone is required. This is the eval_run hot-loop contract.
+#[test]
+fn borrowed_view_matches_owned_input_without_cloning_graph() {
+    let owned = base_input();
+    let owned_record = compute_metrics(owned.as_view()).unwrap();
+
+    // Hold the task-invariant fields once; do NOT clone the graph per task.
+    let graph = scip_graph();
+    let invariant_set = set(&["invariants::orders"]);
+    let transform = TransformMap::default();
+
+    // Simulate two tasks borrowing the same shared graph/invariant_set, each
+    // mixing in its own per-task trace/gold/edits/solutions by reference.
+    for _task in 0..2 {
+        let trace = Trace { spans: vec![] };
+        let gold_set = set(&["OrderService"]);
+        let edited_files = set(&["a.rs", "b.rs"]);
+        let accepted_solutions = vec![set(&["a.rs", "b.rs"]), set(&["a.rs", "c.rs"])];
+
+        let view = MetricInputRef {
+            trace: &trace,
+            gold_set: &gold_set,
+            invariant_set: &invariant_set,
+            transform: &transform,
+            edited_files: &edited_files,
+            accepted_solutions: &accepted_solutions,
+            graph: &graph,
+            k: 2,
+            held_out_success: true,
+        };
+
+        assert_eq!(compute_metrics(view).unwrap(), owned_record);
+    }
 }
 
 #[test]

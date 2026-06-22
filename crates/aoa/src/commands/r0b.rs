@@ -35,7 +35,8 @@ use serde::{Deserialize, Serialize};
 
 use aoa_bench::load_task;
 use aoa_gap::{
-    compare, CanaryItem, CompareOutcome, GapError, HeldOutProvenance, Label, RunResult, TaskOutcome,
+    compare, CanaryItem, CompareOutcome, CompareWarning, GapError, HeldOutProvenance, Label,
+    RunResult, TaskOutcome,
 };
 
 use crate::cli::R0bArgs;
@@ -170,6 +171,11 @@ enum Verdict {
         gap_delta: f64,
         held_out_delta: f64,
         label: Label,
+        /// Non-fatal advisories from the comparison; notably a zero-canary
+        /// leak-shaped signal the gate could not adjudicate. Empty in the clean
+        /// case and omitted from JSON when empty.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        warnings: Vec<CompareWarning>,
     },
     Refused {
         kind: String,
@@ -183,6 +189,24 @@ struct R0bReport {
     migrated: RunView,
     #[serde(flatten)]
     verdict: Verdict,
+}
+
+/// Map a comparison warning to a stable machine kind for the human report.
+fn warning_kind(warning: &CompareWarning) -> &'static str {
+    match warning {
+        CompareWarning::ZeroCanaryLeakShape => "zero_canary_leak_shape",
+    }
+}
+
+/// Operator-facing explanation of a comparison warning.
+fn warning_detail(warning: &CompareWarning) -> &'static str {
+    match warning {
+        CompareWarning::ZeroCanaryLeakShape => {
+            "held-out rose while visible stayed flat (the leak signature) but no \
+             canary was injected, so leakage could not be confirmed — inject \
+             canaries for this suite"
+        }
+    }
 }
 
 /// Map a gap-comparison error to a stable machine kind for the report.
@@ -211,11 +235,13 @@ pub fn run(args: &R0bArgs) -> Result<i32> {
             gap_delta,
             held_out_delta,
             label,
+            warnings,
         }) => (
             Verdict::Labeled {
                 gap_delta,
                 held_out_delta,
                 label,
+                warnings,
             },
             0,
         ),
@@ -268,11 +294,20 @@ fn render_human(report: &R0bReport) -> String {
             gap_delta,
             held_out_delta,
             label,
+            warnings,
         } => {
             let _ = writeln!(
                 out,
                 "  verdict: label={label:?} gap_delta={gap_delta:+.4} held_out_delta={held_out_delta:+.4}",
             );
+            for warning in warnings {
+                let _ = writeln!(
+                    out,
+                    "  WARNING [{}]: {}",
+                    warning_kind(warning),
+                    warning_detail(warning)
+                );
+            }
         }
         Verdict::Refused { kind, error } => {
             let _ = writeln!(out, "  REFUSED [{kind}]: {error}");

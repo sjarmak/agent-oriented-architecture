@@ -15,7 +15,7 @@ use crate::task::CodeprobeTask;
 /// neither leg is `None`, which drives `aoa_gap::compute_gap` to `Unavailable`
 /// (gap:unavailable); `SynthesizedFromVisible` is never produced here because
 /// codeprobe never derives the held-out answer from the visible spec.
-pub fn classify_provenance(task: &CodeprobeTask) -> HeldOutProvenance {
+pub(crate) fn classify_provenance(task: &CodeprobeTask) -> HeldOutProvenance {
     let externally_composed = task.ground_truth_commit.is_some() && !task.oracle_files.is_empty();
     if externally_composed {
         return HeldOutProvenance::External;

@@ -26,5 +26,4 @@ mod task;
 pub use bridge::EditLocalityAnchors;
 pub use error::BenchError;
 pub use loader::load_task;
-pub use provenance::classify_provenance;
 pub use task::{AcceptedSolution, CodeprobeTask};

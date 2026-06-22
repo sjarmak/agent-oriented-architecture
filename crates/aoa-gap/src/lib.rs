@@ -30,7 +30,7 @@ mod gap;
 mod provenance;
 mod run;
 
-pub use compare::{compare, CompareOutcome, Label};
+pub use compare::{compare, CompareOutcome, CompareWarning, Label};
 pub use construct::{
     build_report, classify_metric, current_determination, ConstructValidityReport,
     CorrelationReport, ExternalOutcome, GatingThresholds, MetricClassification, MetricMode,
