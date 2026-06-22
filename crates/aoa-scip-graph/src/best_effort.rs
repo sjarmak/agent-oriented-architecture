@@ -67,12 +67,12 @@ pub fn index_best_effort(repo_dir: &Path) -> Result<IndexedRepo, ScipGraphError>
 /// scan trades that completeness for not following links out of the repo tree.
 fn collect_py_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<(), ScipGraphError> {
     let entries = std::fs::read_dir(dir).map_err(|source| ScipGraphError::Io {
-        path: dir.display().to_string(),
+        path: dir.to_path_buf(),
         source,
     })?;
     for entry in entries {
         let entry = entry.map_err(|source| ScipGraphError::Io {
-            path: dir.display().to_string(),
+            path: dir.to_path_buf(),
             source,
         })?;
         let name = entry.file_name();
@@ -81,7 +81,7 @@ fn collect_py_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<(),
             continue;
         }
         let file_type = entry.file_type().map_err(|source| ScipGraphError::Io {
-            path: entry.path().display().to_string(),
+            path: entry.path(),
             source,
         })?;
         let path = entry.path();

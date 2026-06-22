@@ -30,11 +30,26 @@ struct ScipDocument {
     occurrences: Vec<ScipOccurrence>,
 }
 
+/// A semantic role on a SCIP occurrence.
+///
+/// SCIP's role vocabulary is closed, so the two roles the symbol graph cares
+/// about are modeled explicitly; any other role a tool emits deserializes to
+/// [`ScipRole::Unknown`] (preserving forward compatibility without matching
+/// against bare string literals).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ScipRole {
+    Definition,
+    Reference,
+    #[serde(other)]
+    Unknown,
+}
+
 #[derive(Debug, Deserialize)]
 struct ScipOccurrence {
     symbol: String,
     #[serde(default)]
-    roles: Vec<String>,
+    roles: Vec<ScipRole>,
     /// The defining symbol this occurrence sits inside, for reference edges.
     #[serde(default)]
     enclosing: Option<String>,
@@ -48,7 +63,7 @@ struct ScipOccurrence {
 pub fn index_with_scip(index_path: &Path) -> Result<IndexedRepo, ScipGraphError> {
     let raw = read_capped(index_path, MAX_SCIP_BYTES)?;
     let index: ScipIndex = serde_json::from_str(&raw).map_err(|source| ScipGraphError::Parse {
-        path: index_path.display().to_string(),
+        path: index_path.to_path_buf(),
         source,
     })?;
 
@@ -57,10 +72,10 @@ pub fn index_with_scip(index_path: &Path) -> Result<IndexedRepo, ScipGraphError>
 
     for doc in &index.documents {
         for occ in &doc.occurrences {
-            if occ.roles.iter().any(|r| r == "definition") {
+            if occ.roles.contains(&ScipRole::Definition) {
                 nodes.insert(occ.symbol.clone());
             }
-            if occ.roles.iter().any(|r| r == "reference") {
+            if occ.roles.contains(&ScipRole::Reference) {
                 if let Some(from) = &occ.enclosing {
                     edges.insert((from.clone(), occ.symbol.clone()));
                 }
@@ -91,6 +106,36 @@ mod tests {
     fn missing_file_is_an_io_error() {
         let err = index_with_scip(Path::new("/nope/index.scip.json")).unwrap_err();
         assert!(matches!(err, ScipGraphError::Io { .. }));
+    }
+
+    #[test]
+    fn roles_deserialize_definition_reference_and_unknown() {
+        let occ: ScipOccurrence = serde_json::from_str(
+            r#"{ "symbol": "s", "roles": ["definition", "reference", "import"] }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            occ.roles,
+            vec![ScipRole::Definition, ScipRole::Reference, ScipRole::Unknown]
+        );
+    }
+
+    #[test]
+    fn unknown_role_drives_neither_a_node_nor_an_edge() {
+        let dir = std::env::temp_dir().join(format!("aoa-scip-role-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("idx.json");
+        std::fs::write(
+            &path,
+            r#"{ "documents": [ { "occurrences": [
+                { "symbol": "only_imported", "roles": ["import"] }
+            ] } ] }"#,
+        )
+        .unwrap();
+        let repo = index_with_scip(&path).unwrap();
+        assert!(repo.graph.nodes.is_empty());
+        assert!(repo.graph.edges.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
