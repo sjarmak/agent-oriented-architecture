@@ -142,7 +142,9 @@ pub enum MetricMode {
 }
 
 impl MetricMode {
-    /// The operator-facing label for this mode, matching the serde rename.
+    /// The human-readable label for this mode, used in the operator-facing
+    /// text output. Intentionally PascalCase — distinct from the snake_case
+    /// serde representation used on the JSON path.
     pub fn as_str(self) -> &'static str {
         match self {
             MetricMode::Advisory => "Advisory",
@@ -267,6 +269,7 @@ impl ConstructValidityReport {
     /// the data source consulted. Surfaces the R9c discipline so an operator can
     /// see which metrics may gate a decision and which are advisory-only —
     /// rather than the discipline being documented but never shown.
+    #[must_use]
     pub fn render_human(&self) -> String {
         let gating = self
             .metrics
@@ -358,7 +361,10 @@ mod tests {
             assert!(rendered.contains(metric), "missing candidate {metric}");
         }
         assert!(rendered.contains("Advisory"));
-        assert!(!rendered.contains("Gating]"), "nothing gates absent a corpus");
+        assert!(
+            !rendered.contains("Gating]"),
+            "nothing gates absent a corpus"
+        );
         assert!(rendered.contains("0 gating"));
         // Surfaces the consulted data source.
         assert!(rendered.contains(NO_EXTERNAL_OUTCOME_SOURCE));

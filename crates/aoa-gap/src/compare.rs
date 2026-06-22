@@ -62,10 +62,11 @@ fn figures(run: &RunResult) -> Result<RunFigures, GapError> {
     }
 }
 
-/// Whether the leakage canary trips: held-out rose while the visible leg stayed
-/// flat and an injected canary flipped against its expected outcome. Held-out
-/// improving without matching visible movement is the leakage signature; a
-/// flipped known-held-out canary confirms the suite was contaminated.
+/// Whether the held-out rate rose while the visible leg stayed flat — the
+/// leakage signature on its own, independent of any canary. Confirming a leak
+/// still requires a flipped known-held-out canary (see [`leakage_detected`]);
+/// this predicate isolates the shape so it can both feed that confirmation and
+/// drive a zero-canary warning when no canary exists to adjudicate it.
 ///
 /// "Flat" tolerates one task's worth of movement (`1/N`) rather than demanding
 /// an exact-equal visible rate: a real leak that also nudges the visible leg by
@@ -74,11 +75,6 @@ fn figures(run: &RunResult) -> Result<RunFigures, GapError> {
 /// for the common same-task-set case both counts are N. A broad gain that lifts
 /// visible well beyond one task is honest capability, not a held-out-specific
 /// leak, and is deliberately left outside the band.
-/// Whether the held-out rate rose while the visible leg stayed flat — the
-/// leakage signature on its own, independent of any canary. Confirming a leak
-/// still requires a flipped known-held-out canary (see [`leakage_detected`]);
-/// this predicate isolates the shape so it can both feed that confirmation and
-/// drive a zero-canary warning when no canary exists to adjudicate it.
 fn leak_shaped(baseline: &RunResult, migrated: &RunResult) -> bool {
     let held_out_rose = migrated.held_out_rate() > baseline.held_out_rate();
     let n = baseline.tasks.len().min(migrated.tasks.len());
@@ -87,6 +83,10 @@ fn leak_shaped(baseline: &RunResult, migrated: &RunResult) -> bool {
     held_out_rose && visible_flat
 }
 
+/// Whether the leakage canary trips: held-out rose while the visible leg stayed
+/// flat and an injected canary flipped against its expected outcome. Held-out
+/// improving without matching visible movement is the leakage signature; a
+/// flipped known-held-out canary confirms the suite was contaminated.
 fn leakage_detected(baseline: &RunResult, migrated: &RunResult) -> bool {
     let canary_flipped = baseline.any_canary_flipped() || migrated.any_canary_flipped();
     leak_shaped(baseline, migrated) && canary_flipped
