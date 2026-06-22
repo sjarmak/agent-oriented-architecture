@@ -11,6 +11,10 @@ pub enum TraceError {
         source: std::io::Error,
     },
 
+    /// The trace file exceeded the byte cap before it could be read into memory.
+    #[error("trace file {path} exceeds {max} byte cap (DoS guard)")]
+    TooLarge { path: PathBuf, max: u64 },
+
     /// The file was not structurally valid JSON matching the trace schema.
     #[error("trace file {path} is not schema-valid: {source}")]
     Schema {

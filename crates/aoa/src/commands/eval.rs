@@ -8,6 +8,7 @@ use aoa_gap::RunResult;
 use aoa_trace::TraceReport;
 
 use crate::cli::{EvalArgs, EvalCommand};
+use crate::commands::fsutil::{read_to_string_capped, MAX_JSON_BYTES};
 use crate::commands::{eval_run, falsify_build, r0b};
 use crate::output::{print_human, print_json};
 
@@ -69,7 +70,7 @@ fn validate_trace(path: &Path, json: bool) -> Result<i32> {
 }
 
 fn load_run(path: &Path) -> Result<RunResult> {
-    let raw = std::fs::read_to_string(path)
+    let raw = read_to_string_capped(path, MAX_JSON_BYTES)
         .with_context(|| format!("failed to read run file {}", path.display()))?;
     serde_json::from_str(&raw)
         .with_context(|| format!("failed to parse run file {}", path.display()))
@@ -91,4 +92,22 @@ fn compare(baseline_path: &Path, migrated_path: &Path, json: bool) -> Result<i32
         ));
     }
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_run_rejects_oversized_input() {
+        let dir = std::env::temp_dir().join(format!("aoa-eval-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("run.json");
+        std::fs::write(&path, vec![b'x'; (MAX_JSON_BYTES + 1) as usize]).unwrap();
+
+        let err = load_run(&path).unwrap_err();
+        assert!(format!("{err:#}").contains("byte cap"), "got: {err:#}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

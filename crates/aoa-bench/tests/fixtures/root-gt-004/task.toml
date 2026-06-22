@@ -1,0 +1,16 @@
+version = "1.0"
+
+[metadata]
+name = "root-gt-004"
+difficulty = "hard"
+task_type = "sdlc_code_change"
+
+[task]
+id = "root-gt-004"
+name = "root-gt-004"
+repo = "sample/widget"
+category = "change-scope-audit"
+
+[verification]
+type = "oracle"
+oracle_type = "file_list"

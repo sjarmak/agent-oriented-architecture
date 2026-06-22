@@ -1,17 +1,23 @@
-//! Byte-bounded file reads for attacker-controlled inputs reached by the CLI.
+//! Byte-bounded file reads for untrusted and operator-supplied JSON reached by
+//! the CLI.
 //!
-//! `aoa eval-run` and `aoa r0b` walk an untrusted `--codeprobe-run` / `--tasks`
-//! directory and read per-trial JSON from it. These helpers bound the bytes held
-//! in memory from any one such file so a crafted run dir cannot exhaust memory.
+//! Two threat classes route through here. `aoa eval-run` / `aoa r0b` walk an
+//! untrusted `--codeprobe-run` / `--tasks` directory and read per-trial JSON from
+//! it (attacker-controlled). Other commands (`falsify`, `eval compare`, `eval
+//! experiment`, the canary manifest) read operator-supplied JSON paths and
+//! external-tool output (codeprobe `aggregate.json`). Both bound the bytes held
+//! in memory from any one file so a crafted or pathological input cannot exhaust
+//! memory.
 
 use std::io::Read;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 
-/// Largest per-trial JSON file (`scoring.json`) read into memory. These files are
-/// small by nature; the cap only trips pathological or hostile input.
-pub(crate) const MAX_TRIAL_JSON_BYTES: u64 = 16 * 1024 * 1024;
+/// Largest single JSON file read into memory by the CLI. These files (per-trial
+/// `scoring.json`, run files, manifests, `aggregate.json`) are small by nature;
+/// the cap only trips pathological or hostile input.
+pub(crate) const MAX_JSON_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Largest number of task-trial subdirectories accepted under one run dir. Bounds
 /// the work a crafted run dir of millions of empty subdirs can induce.

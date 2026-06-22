@@ -778,7 +778,13 @@ fn migrate_apply_then_rollback_round_trips() {
         .args(["migrate", "--apply", "--repo"])
         .arg(repo.path())
         .assert()
-        .success();
+        .success()
+        // The human verify line attributes the re-audit to the navigability
+        // fix explicitly, so it cannot be read as covering the dead-import
+        // fixes the re-audit does not measure.
+        .stdout(predicate::str::contains(
+            "Re-audit (navigability-anchor) verifies 0 navigability site(s) remaining",
+        ));
     assert!(
         repo.path().join("README.md").exists(),
         "apply writes the anchor"
@@ -806,6 +812,8 @@ fn migrate_apply_json_reports_verified_remaining_zero() {
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8");
     let v: Value = serde_json::from_str(&stdout).expect("json");
     assert_eq!(v["mode"], "apply");
+    // Present (not null) because the navigability fix ran and was re-audited;
+    // the count it re-measured is zero.
     assert_eq!(v["navigability_sites_remaining"], 0);
     // Per-fix eligibility: the navigability fix's note is tagged with its id.
     let notes = v["eligibility_notes"]
@@ -814,6 +822,40 @@ fn migrate_apply_json_reports_verified_remaining_zero() {
     assert_eq!(notes.len(), 1);
     assert_eq!(notes[0]["fix_id"], "navigability-anchor");
     assert!(notes[0]["note"].as_str().unwrap().contains("code-layer"));
+}
+
+#[test]
+fn migrate_apply_json_navigability_remaining_is_null_when_nav_fix_excluded() {
+    // When the navigability fix is excluded via --fix, its re-audit count is
+    // not applicable. The JSON field must serialize as null (not 0, not
+    // absent) so a consumer can distinguish "not measured" from "measured
+    // zero" — the contract the Option<u64> change introduced.
+    let repo = migrate_repo();
+    let assert = aoa()
+        .args([
+            "migrate",
+            "--apply",
+            "--json",
+            "--fix",
+            "dead-imports",
+            "--repo",
+        ])
+        .arg(repo.path())
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8");
+    let v: Value = serde_json::from_str(&stdout).expect("json");
+    assert_eq!(v["mode"], "apply");
+    assert!(
+        v["navigability_sites_remaining"].is_null(),
+        "expected null when the navigability fix did not run, got {:?}",
+        v["navigability_sites_remaining"]
+    );
+    // The navigability anchor must not have been written (fix was excluded).
+    assert!(
+        !repo.path().join("README.md").exists(),
+        "navigability fix was excluded via --fix, so no anchor should be written"
+    );
 }
 
 #[test]

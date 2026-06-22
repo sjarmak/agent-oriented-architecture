@@ -37,6 +37,15 @@
 //! This shim never emits `symbol.lookup`. That span is produced by joining tool
 //! results against the SCIP graph (tracked separately as aoa-671), which may not
 //! exist yet — so it is documented-absent here rather than fabricated.
+//!
+//! # Secrets
+//!
+//! This shim does **not** sanitize. Tool targets are lifted verbatim into span
+//! attributes — the full `Bash` `command` and the `Read`/`Edit`/`Write` paths.
+//! codeprobe strips secrets upstream when it writes `agent_output.txt`, so
+//! callers MUST pass a codeprobe-sanitized transcript; feeding raw agent output
+//! would carry any inline secret straight into the emitted trace. See
+//! [`parse_transcript`] § Secrets.
 
 mod error;
 mod mapping;

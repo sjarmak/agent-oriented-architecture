@@ -13,7 +13,7 @@ use serde::Deserialize;
 
 use aoa_gap::HeldOutProvenance;
 
-use crate::commands::fsutil::{read_to_string_capped, MAX_TASK_DIRS, MAX_TRIAL_JSON_BYTES};
+use crate::commands::fsutil::{read_to_string_capped, MAX_JSON_BYTES, MAX_TASK_DIRS};
 
 /// A leg `score_*` at or above this counts as a pass when the explicit
 /// `passed_*` boolean is absent (exact-match scorers emit 0.0/1.0).
@@ -44,7 +44,7 @@ pub(crate) struct DualScoring {
 impl DualScoring {
     /// Read and validate a trial's `scoring.json` as a clean dual-verifier result.
     pub(crate) fn load(scoring_path: &Path, task_id: &str) -> Result<Self> {
-        let raw = read_to_string_capped(scoring_path, MAX_TRIAL_JSON_BYTES)?;
+        let raw = read_to_string_capped(scoring_path, MAX_JSON_BYTES)?;
         let scoring: DualScoring = serde_json::from_str(&raw)
             .with_context(|| format!("failed to parse {}", scoring_path.display()))?;
         scoring.ensure_dual(task_id)?;
