@@ -1,0 +1,12 @@
+{
+  "name": "aoa-migrate-vendored-eslint",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pinned, hermetic ESLint toolchain for the AOA TypeScript/JS dead-import adapter. Not published; resolved at runtime via CARGO_MANIFEST_DIR. See crates/aoa-migrate/src/imports/typescript.rs.",
+  "type": "module",
+  "dependencies": {
+    "@typescript-eslint/parser": "8.46.0",
+    "eslint": "9.39.4",
+    "eslint-plugin-unused-imports": "4.4.1"
+  }
+}

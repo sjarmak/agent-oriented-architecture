@@ -8,10 +8,12 @@
 //! silent empty plan rather than passing vacuously.
 
 use std::fs;
-use std::path::Path;
 
 use aoa_migrate::{apply, rollback, ChangeAction, DeadImportFix, MigrationPlan};
 use tempfile::TempDir;
+
+mod common;
+use common::tree_snapshot;
 
 /// A minimal, dependency-free cargo crate carrying one plainly-unused import.
 fn crate_with_unused_import() -> TempDir {
@@ -37,7 +39,7 @@ fn plan_removes_unused_import_and_leaves_real_repo_byte_unchanged() {
     let before = fs::read_to_string(&lib).unwrap();
     let before_entries = tree_snapshot(repo);
 
-    let plan = MigrationPlan::build(repo, &[&DeadImportFix]).unwrap();
+    let plan = MigrationPlan::build(repo, &[&DeadImportFix::rust()]).unwrap();
 
     // Exactly one Overwrite change, dropping the unused import.
     assert_eq!(plan.changes.len(), 1, "one file changed");
@@ -93,8 +95,8 @@ fn plan_is_byte_identical_across_runs() {
     let dir = crate_with_unused_import();
     let repo = dir.path();
 
-    let a = MigrationPlan::build(repo, &[&DeadImportFix]).unwrap();
-    let b = MigrationPlan::build(repo, &[&DeadImportFix]).unwrap();
+    let a = MigrationPlan::build(repo, &[&DeadImportFix::rust()]).unwrap();
+    let b = MigrationPlan::build(repo, &[&DeadImportFix::rust()]).unwrap();
     assert_eq!(a.changes, b.changes, "planned changes are byte-identical");
 }
 
@@ -105,7 +107,7 @@ fn apply_writes_overwrite_rebuilds_clean_then_rollback_restores_baseline() {
     let lib = repo.join("src/lib.rs");
     let baseline = fs::read_to_string(&lib).unwrap();
 
-    let plan = MigrationPlan::build(repo, &[&DeadImportFix]).unwrap();
+    let plan = MigrationPlan::build(repo, &[&DeadImportFix::rust()]).unwrap();
     apply(repo, &plan).unwrap();
 
     // The Overwrite landed and the import is gone from disk.
@@ -118,7 +120,7 @@ fn apply_writes_overwrite_rebuilds_clean_then_rollback_restores_baseline() {
 
     // Re-planning the now-clean crate finds nothing further to remove (the audit
     // signal the fix verifies against: a clean build => empty plan).
-    let replan = MigrationPlan::build(repo, &[&DeadImportFix]).unwrap();
+    let replan = MigrationPlan::build(repo, &[&DeadImportFix::rust()]).unwrap();
     assert!(replan.is_empty(), "no unused imports remain after apply");
 
     rollback(repo).unwrap();
@@ -149,35 +151,10 @@ fn feature_gated_import_is_preserved_under_all_features() {
     )
     .unwrap();
 
-    let plan = MigrationPlan::build(repo, &[&DeadImportFix]).unwrap();
+    let plan = MigrationPlan::build(repo, &[&DeadImportFix::rust()]).unwrap();
     assert!(
         plan.is_empty(),
         "the feature-gated import is used under --all-features and must be kept; got {:?}",
         plan.changes
     );
-}
-
-/// Sorted list of (relative path, bytes-len) for every regular file under `root`,
-/// excluding the throwaway `target/` a build would create. Used to assert the
-/// real repo is structurally unchanged by a dry-run plan.
-fn tree_snapshot(root: &Path) -> Vec<(String, u64)> {
-    fn walk(dir: &Path, base: &Path, out: &mut Vec<(String, u64)>) {
-        for entry in fs::read_dir(dir).unwrap().flatten() {
-            let path = entry.path();
-            let ft = entry.file_type().unwrap();
-            if ft.is_dir() {
-                if entry.file_name() == "target" {
-                    continue;
-                }
-                walk(&path, base, out);
-            } else if ft.is_file() {
-                let rel = path.strip_prefix(base).unwrap().display().to_string();
-                out.push((rel, entry.metadata().unwrap().len()));
-            }
-        }
-    }
-    let mut out = Vec::new();
-    walk(root, root, &mut out);
-    out.sort();
-    out
 }

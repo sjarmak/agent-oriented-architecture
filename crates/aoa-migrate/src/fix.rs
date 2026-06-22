@@ -105,7 +105,9 @@ pub trait CodeFix {
 pub fn all_fixes() -> Vec<Box<dyn CodeFix>> {
     vec![
         Box::new(NavigabilityAnchorFix),
-        Box::new(crate::imports::DeadImportFix),
+        Box::new(crate::imports::DeadImportFix::rust()),
+        Box::new(crate::imports::DeadImportFix::python()),
+        Box::new(crate::imports::DeadImportFix::typescript()),
     ]
 }
 
@@ -279,6 +281,23 @@ mod tests {
             .unwrap();
         assert_eq!(nav.eligibility_note(), NAVIGABILITY_ELIGIBILITY);
         assert!(nav.eligibility_note().contains("code-layer"));
+    }
+
+    #[test]
+    fn all_fixes_registry_exposes_every_dead_import_adapter() {
+        // Guards against silently dropping a language adapter from the registry.
+        let fixes = all_fixes();
+        let ids: Vec<&str> = fixes.iter().map(|f| f.id()).collect();
+        for expected in [
+            "dead-imports",
+            "dead-imports-python",
+            "dead-imports-typescript",
+        ] {
+            assert!(
+                ids.contains(&expected),
+                "{expected} missing from all_fixes()"
+            );
+        }
     }
 
     #[test]
