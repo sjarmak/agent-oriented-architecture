@@ -825,6 +825,40 @@ fn migrate_apply_json_reports_verified_remaining_zero() {
 }
 
 #[test]
+fn migrate_apply_json_navigability_remaining_is_null_when_nav_fix_excluded() {
+    // When the navigability fix is excluded via --fix, its re-audit count is
+    // not applicable. The JSON field must serialize as null (not 0, not
+    // absent) so a consumer can distinguish "not measured" from "measured
+    // zero" — the contract the Option<u64> change introduced.
+    let repo = migrate_repo();
+    let assert = aoa()
+        .args([
+            "migrate",
+            "--apply",
+            "--json",
+            "--fix",
+            "dead-imports",
+            "--repo",
+        ])
+        .arg(repo.path())
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8");
+    let v: Value = serde_json::from_str(&stdout).expect("json");
+    assert_eq!(v["mode"], "apply");
+    assert!(
+        v["navigability_sites_remaining"].is_null(),
+        "expected null when the navigability fix did not run, got {:?}",
+        v["navigability_sites_remaining"]
+    );
+    // The navigability anchor must not have been written (fix was excluded).
+    assert!(
+        !repo.path().join("README.md").exists(),
+        "navigability fix was excluded via --fix, so no anchor should be written"
+    );
+}
+
+#[test]
 fn migrate_fix_selector_rejects_unknown_id() {
     let repo = migrate_repo();
     aoa()

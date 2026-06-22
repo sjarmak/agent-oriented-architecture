@@ -55,15 +55,16 @@ fn loads_root_level_ground_truth_when_no_tests_dir() {
     let task = load("root-gt-004");
     assert_eq!(task.id, "root-gt-004");
     assert_eq!(task.repo, "sample/widget");
-    // oracle_files must come from the root-level ground_truth.json `expected` set.
+    // oracle_files must come from the root-level ground_truth.json `expected`
+    // set. Assert by membership + count (oracle_files is a set; an ordered Vec
+    // comparison would be fragile to its iteration order).
     assert_eq!(
-        task.oracle_files.iter().cloned().collect::<Vec<_>>(),
-        vec![
-            "src/widget/cache.py".to_string(),
-            "src/widget/store.py".to_string(),
-        ],
+        task.oracle_files.len(),
+        2,
         "oracle_files must be read from the root-level ground_truth.json"
     );
+    assert!(task.oracle_files.contains("src/widget/cache.py"));
+    assert!(task.oracle_files.contains("src/widget/store.py"));
 }
 
 #[test]

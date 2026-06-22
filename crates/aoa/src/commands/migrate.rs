@@ -279,7 +279,10 @@ mod tests {
         // not re-audited) — the summary never claims the re-audit covered it.
         let out = render_apply_summary(
             3,
-            &["navigability-anchor".to_string(), "dead-imports".to_string()],
+            &[
+                "navigability-anchor".to_string(),
+                "dead-imports".to_string(),
+            ],
             Some(0),
             "/repo/.aoa/migrate/manifest.json",
         );
