@@ -38,6 +38,15 @@ const MANIFEST_MARKERS: &[&str] = &[
     "build.gradle",
 ];
 
+/// Directory names that conventionally hold workspace member packages one level
+/// deeper (`crates/foo/Cargo.toml`, `packages/bar/package.json`). A well-known
+/// monorepo-layout list — the language-agnostic, mechanical equivalent of
+/// parsing each ecosystem's `[workspace] members`, in the same documented
+/// well-known-name style as [`MANIFEST_MARKERS`] and [`SKIP_DIRS`]. Members are
+/// discovered exactly one level inside such a dir; deeper nesting is out of
+/// scope (see [`navigability_sites`]).
+const WORKSPACE_CONTAINER_DIRS: &[&str] = &["crates", "packages", "apps", "libs"];
+
 /// Source-file extensions counted for the module-size measure. A documented,
 /// well-known set — extension matching is mechanical, like the plane candidates.
 const SOURCE_EXTENSIONS: &[&str] = &[
@@ -85,7 +94,16 @@ pub(crate) fn structure_items(
 
 /// The package roots under `repo` that lack a navigability anchor (README):
 /// the repo root, plus every immediate child directory carrying a build
-/// manifest, minus those that already have a README.
+/// manifest, plus workspace member packages nested one level inside a
+/// well-known container dir (`crates/foo/`, `packages/bar/`; see
+/// [`WORKSPACE_CONTAINER_DIRS`]) — minus any that already have a README.
+///
+/// Discovery is deliberately *bounded*, not a full-tree manifest sweep: an
+/// unbounded walk would fold in trybuild test-fixture crates, `examples/`
+/// sub-crates, and partially-vendored trees, inflating the count past the
+/// construct it names ("workspace member crate") and — because `aoa-migrate`
+/// *writes* READMEs into these sites — writing anchors into test fixtures. The
+/// container-dir convention captures real members while excluding those.
 ///
 /// This is the per-site finding behind the navigability measure. The audit
 /// reports only its *count* (a measured fact), but `aoa-migrate` consumes the
@@ -98,13 +116,49 @@ pub fn navigability_sites(repo: &Path) -> Result<Vec<PathBuf>, AuditError> {
         let path = entry.path();
         let file_type = entry.file_type().map_err(|source| io_err(&path, source))?;
         // `file_type` does not follow symlinks, so a symlinked dir is skipped.
-        if file_type.is_dir() && has_manifest(&path) {
+        if !file_type.is_dir() {
+            continue;
+        }
+        // A `crates/` (etc.) dir holds members one level deeper; scan its own
+        // immediate children for manifests. Membership is by directory name —
+        // the same mechanical well-known-name match as elsewhere in the family.
+        // Done before the manifest push so `path` need not be cloned, and so a
+        // dir that is *both* a container and a package itself contributes both
+        // its members and itself.
+        if is_workspace_container(&path) {
+            collect_container_members(&path, &mut roots)?;
+        }
+        if has_manifest(&path) {
             roots.push(path);
         }
     }
 
     roots.retain(|root| !has_readme(root));
     Ok(roots)
+}
+
+/// Whether `dir`'s name is a conventional workspace-container dir
+/// ([`WORKSPACE_CONTAINER_DIRS`]).
+fn is_workspace_container(dir: &Path) -> bool {
+    dir.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| WORKSPACE_CONTAINER_DIRS.contains(&n))
+}
+
+/// Push every immediate child of `container` that carries a build manifest. One
+/// level only — `crates/foo/Cargo.toml` is a member, `crates/foo/bar/Cargo.toml`
+/// is not (deeper nesting is out of scope). Never follows symlinked dirs.
+fn collect_container_members(container: &Path, out: &mut Vec<PathBuf>) -> Result<(), AuditError> {
+    for entry in read_dir(container)? {
+        let entry = entry.map_err(|source| io_err(container, source))?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|source| io_err(&path, source))?;
+        // `file_type` does not follow symlinks, so a symlinked member is skipped.
+        if file_type.is_dir() && has_manifest(&path) {
+            out.push(path);
+        }
+    }
+    Ok(())
 }
 
 /// Count package roots that have no README. A package without a navigability
@@ -615,6 +669,120 @@ mod tests {
             "only the manifest child counts"
         );
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn navigability_discovers_a_nested_member_crate() {
+        // The motivating case: a Cargo workspace whose members live one level
+        // deeper under crates/. crates/foo/Cargo.toml without a README is a site.
+        let dir = tmp("nav-nested-member");
+        fs::write(dir.join("Cargo.toml"), "[workspace]\n").unwrap();
+        fs::write(dir.join("README.md"), "# root\n").unwrap();
+        let member = dir.join("crates").join("foo");
+        fs::create_dir_all(&member).unwrap();
+        fs::write(member.join("Cargo.toml"), "[package]\n").unwrap();
+
+        let sites = navigability_sites(&dir).unwrap();
+        assert!(
+            sites.contains(&member),
+            "crates/foo is a member crate lacking a README -> a site"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn navigability_discovers_members_in_a_js_container_dir() {
+        // Multi-language: packages/bar/package.json is a member just like a crate.
+        let dir = tmp("nav-js-container");
+        fs::write(dir.join("README.md"), "# root\n").unwrap();
+        let member = dir.join("packages").join("bar");
+        fs::create_dir_all(&member).unwrap();
+        fs::write(member.join("package.json"), "{}\n").unwrap();
+
+        let sites = navigability_sites(&dir).unwrap();
+        assert!(
+            sites.contains(&member),
+            "packages/bar is a member -> a site"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn navigability_excludes_a_member_with_a_readme() {
+        let dir = tmp("nav-member-readme");
+        fs::write(dir.join("README.md"), "# root\n").unwrap();
+        let member = dir.join("crates").join("foo");
+        fs::create_dir_all(&member).unwrap();
+        fs::write(member.join("Cargo.toml"), "[package]\n").unwrap();
+        fs::write(member.join("README.md"), "# foo\n").unwrap();
+
+        let sites = navigability_sites(&dir).unwrap();
+        assert!(
+            !sites.contains(&member),
+            "a member with a README is not a site"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn navigability_does_not_discover_manifests_outside_a_container_dir() {
+        // The C1 guard: a manifest nested under a NON-container dir (a trybuild
+        // test fixture) must NOT be a site — discovery is bounded to known
+        // workspace-container dirs, so migrate never writes a README into it.
+        let dir = tmp("nav-bounded");
+        fs::write(dir.join("README.md"), "# root\n").unwrap();
+        // One level under a NON-container dir: if the container-name guard were
+        // removed, the one-level member scan WOULD reach and push this. The
+        // guard is what excludes it — so this test fails if the bound is lost.
+        let fixture = dir.join("tests").join("bad");
+        fs::create_dir_all(&fixture).unwrap();
+        fs::write(fixture.join("Cargo.toml"), "[package]\n").unwrap();
+
+        let sites = navigability_sites(&dir).unwrap();
+        assert!(
+            !sites.contains(&fixture),
+            "a fixture crate outside a container dir must not be a site"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn navigability_does_not_recurse_deeper_than_one_container_level() {
+        // crates/foo/bar/Cargo.toml (two levels inside crates/) is out of scope.
+        let dir = tmp("nav-too-deep");
+        fs::write(dir.join("README.md"), "# root\n").unwrap();
+        let deep = dir.join("crates").join("foo").join("bar");
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("Cargo.toml"), "[package]\n").unwrap();
+
+        let sites = navigability_sites(&dir).unwrap();
+        assert!(
+            !sites.contains(&deep),
+            "a manifest two levels inside a container dir is out of scope"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn navigability_does_not_follow_a_symlinked_member() {
+        use std::os::unix::fs::symlink;
+        let base = tmp("nav-symlink");
+        let repo = base.join("repo");
+        let outside = base.join("outside");
+        fs::create_dir_all(repo.join("crates")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(repo.join("README.md"), "# root\n").unwrap();
+        // An out-of-repo package symlinked in as a member must not be a site.
+        fs::write(outside.join("Cargo.toml"), "[package]\n").unwrap();
+        symlink(&outside, repo.join("crates").join("escaped")).unwrap();
+
+        let sites = navigability_sites(&repo).unwrap();
+        assert!(
+            !sites.iter().any(|s| s.ends_with("escaped")),
+            "a symlinked member dir must not be followed"
+        );
+        fs::remove_dir_all(&base).ok();
     }
 
     #[test]
