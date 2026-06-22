@@ -778,7 +778,13 @@ fn migrate_apply_then_rollback_round_trips() {
         .args(["migrate", "--apply", "--repo"])
         .arg(repo.path())
         .assert()
-        .success();
+        .success()
+        // The human verify line attributes the re-audit to the navigability
+        // fix explicitly, so it cannot be read as covering the dead-import
+        // fixes the re-audit does not measure.
+        .stdout(predicate::str::contains(
+            "Re-audit (navigability-anchor) verifies 0 navigability site(s) remaining",
+        ));
     assert!(
         repo.path().join("README.md").exists(),
         "apply writes the anchor"
@@ -806,6 +812,8 @@ fn migrate_apply_json_reports_verified_remaining_zero() {
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8");
     let v: Value = serde_json::from_str(&stdout).expect("json");
     assert_eq!(v["mode"], "apply");
+    // Present (not null) because the navigability fix ran and was re-audited;
+    // the count it re-measured is zero.
     assert_eq!(v["navigability_sites_remaining"], 0);
     // Per-fix eligibility: the navigability fix's note is tagged with its id.
     let notes = v["eligibility_notes"]

@@ -84,7 +84,10 @@ fn run_apply(args: &MigrateArgs, plan: MigrationPlan) -> Result<i32> {
             print_json(&MigrateView::Apply {
                 fixes_applied: Vec::new(),
                 files_written: 0,
-                navigability_sites_remaining: navigability_count(&args.repo)?,
+                // No fix ran, so no fix was re-audited: report a re-measurement
+                // for none of them rather than a navigability count unrelated to
+                // any applied change.
+                navigability_sites_remaining: None,
                 manifest_path: String::new(),
                 eligibility_notes: Vec::new(),
                 provenance: Vec::new(),
@@ -97,31 +100,74 @@ fn run_apply(args: &MigrateArgs, plan: MigrationPlan) -> Result<i32> {
 
     let manifest = aoa_migrate::apply(&args.repo, &plan)
         .with_context(|| format!("failed to apply migration to {}", args.repo.display()))?;
-    let remaining = navigability_count(&args.repo)?;
+    // Re-audit the one signal the audit family exposes — the navigability-site
+    // count — and only when the navigability fix actually ran, so the verify
+    // line never reports a count unrelated to the applied fixes. The
+    // dead-import fixes are compiler-verified at plan time; the audit does not
+    // re-expose its unused-import proxy to migrate (verify-not-define), so there
+    // is no symmetric re-measurement for them.
+    let navigability_remaining = if ran_navigability_fix(&manifest.fixes_applied) {
+        Some(navigability_count(&args.repo)?)
+    } else {
+        None
+    };
 
     if args.json {
         print_json(&MigrateView::Apply {
             files_written: manifest.entries.len(),
             fixes_applied: manifest.fixes_applied,
-            navigability_sites_remaining: remaining,
+            navigability_sites_remaining: navigability_remaining,
             manifest_path: aoa_migrate::manifest_path(&args.repo).display().to_string(),
             eligibility_notes: manifest.eligibility_notes,
             provenance: manifest.provenance,
         })?;
     } else {
-        let mut out = format!(
-            "AOA migrate (applied): wrote {} file(s) via fix(es) [{}].\n\
-             Re-audit verifies {remaining} navigability site(s) remaining.\n\
-             Rollback record: {}\n",
+        let mut out = render_apply_summary(
             manifest.entries.len(),
-            manifest.fixes_applied.join(", "),
-            aoa_migrate::manifest_path(&args.repo).display(),
+            &manifest.fixes_applied,
+            navigability_remaining,
+            &aoa_migrate::manifest_path(&args.repo).display().to_string(),
         );
         out.push_str(&render_eligibility(&manifest.eligibility_notes));
         out.push_str(&render_provenance(&manifest.provenance));
         print_human(&out);
     }
     Ok(0)
+}
+
+/// The fix id whose effect the audit re-measures post-apply. The other fixes
+/// (dead-imports*) are compiler-verified at plan time, and the audit does not
+/// re-expose its unused-import proxy to migrate, so navigability is the one
+/// signal the re-audit covers.
+const NAVIGABILITY_FIX_ID: &str = "navigability-anchor";
+
+/// Whether the navigability-anchor fix is among the applied fixes — the only
+/// case in which a navigability re-audit count describes an applied fix.
+fn ran_navigability_fix(fixes_applied: &[String]) -> bool {
+    fixes_applied.iter().any(|f| f == NAVIGABILITY_FIX_ID)
+}
+
+/// Render the human-facing apply summary. The re-audit line is emitted *only*
+/// when `navigability_remaining` is `Some` (the navigability fix ran); it then
+/// names that fix explicitly so the count is never read as covering the
+/// dead-import fixes, which the re-audit does not measure.
+fn render_apply_summary(
+    files_written: usize,
+    fixes_applied: &[String],
+    navigability_remaining: Option<u64>,
+    manifest_path: &str,
+) -> String {
+    let mut out = format!(
+        "AOA migrate (applied): wrote {files_written} file(s) via fix(es) [{}].\n",
+        fixes_applied.join(", "),
+    );
+    if let Some(remaining) = navigability_remaining {
+        out.push_str(&format!(
+            "Re-audit ({NAVIGABILITY_FIX_ID}) verifies {remaining} navigability site(s) remaining.\n",
+        ));
+    }
+    out.push_str(&format!("Rollback record: {manifest_path}\n"));
+    out
 }
 
 /// Undo the recorded migration, restoring the baseline checkout.
@@ -184,6 +230,69 @@ fn render_provenance(provenance: &[FixProvenance]) -> String {
         .collect()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summary_scopes_the_reaudit_line_to_the_navigability_fix() {
+        // A navigability apply re-measures navigability sites: the verify line
+        // names that fix explicitly so it cannot be read as covering the others.
+        let out = render_apply_summary(
+            1,
+            &["navigability-anchor".to_string()],
+            Some(0),
+            "/repo/.aoa/migrate/manifest.json",
+        );
+        assert!(out.contains("navigability-anchor"));
+        assert!(
+            out.contains("0 navigability site(s) remaining"),
+            "the re-audit count is attributed to the navigability fix"
+        );
+    }
+
+    #[test]
+    fn summary_omits_the_navigability_line_when_that_fix_did_not_run() {
+        // A dead-import-only apply does NOT re-measure navigability. The summary
+        // must not print a navigability re-audit count (it would be unrelated to
+        // the applied fix and over-imply coverage).
+        let out = render_apply_summary(
+            2,
+            &["dead-imports".to_string()],
+            None,
+            "/repo/.aoa/migrate/manifest.json",
+        );
+        assert!(
+            !out.contains("navigability site"),
+            "no navigability re-audit line when the navigability fix did not run"
+        );
+        assert!(
+            out.contains("dead-imports"),
+            "the applied fix is still reported"
+        );
+    }
+
+    #[test]
+    fn summary_reaudits_only_navigability_in_a_mixed_apply() {
+        // Both fixes ran: the re-audit line is scoped to navigability, and the
+        // dead-import fix is reported as applied (compiler-verified at plan time,
+        // not re-audited) — the summary never claims the re-audit covered it.
+        let out = render_apply_summary(
+            3,
+            &["navigability-anchor".to_string(), "dead-imports".to_string()],
+            Some(0),
+            "/repo/.aoa/migrate/manifest.json",
+        );
+        assert!(out.contains("navigability-anchor"));
+        assert!(out.contains("dead-imports"));
+        let nav_mentions = out.matches("navigability site").count();
+        assert_eq!(
+            nav_mentions, 1,
+            "exactly one re-audit line, scoped to the navigability fix"
+        );
+    }
+}
+
 fn change_views(plan: &MigrationPlan) -> Vec<ChangeView> {
     plan.changes
         .iter()
@@ -216,7 +325,10 @@ enum MigrateView {
     Apply {
         fixes_applied: Vec<String>,
         files_written: usize,
-        navigability_sites_remaining: u64,
+        /// `None` when the navigability-anchor fix did not run: the re-audit
+        /// measures only that fix's signal, so it is absent rather than a count
+        /// unrelated to the fixes actually applied.
+        navigability_sites_remaining: Option<u64>,
         manifest_path: String,
         eligibility_notes: Vec<FixEligibility>,
         provenance: Vec<FixProvenance>,
