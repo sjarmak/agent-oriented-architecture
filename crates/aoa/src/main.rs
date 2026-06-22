@@ -18,6 +18,7 @@ fn main() -> ExitCode {
         Command::Migrate(args) => commands::run_migrate(args),
         Command::LintContext(args) => commands::run_lint(args),
         Command::Eval(args) => commands::run_eval(args),
+        Command::Gap(args) => commands::run_gap(args),
         Command::Falsify(args) => commands::run_falsify(args),
         Command::Policy(args) => commands::run_policy(args),
     };
