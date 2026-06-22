@@ -46,6 +46,27 @@ fn loads_probe_toml_task_into_aoa_inputs() {
 }
 
 #[test]
+fn loads_root_level_ground_truth_when_no_tests_dir() {
+    // Org-scale tasks can carry ground_truth.json at the task root rather than
+    // under tests/, and with no inline oracle_answer in the manifest. This is the
+    // only layout that exercises the ground_truth_dir() task-root fallback to feed
+    // oracle_files — every other fixture either has an inline oracle or a
+    // tests/ground_truth.json, so the fallback path was previously untested.
+    let task = load("root-gt-004");
+    assert_eq!(task.id, "root-gt-004");
+    assert_eq!(task.repo, "sample/widget");
+    // oracle_files must come from the root-level ground_truth.json `expected` set.
+    assert_eq!(
+        task.oracle_files.iter().cloned().collect::<Vec<_>>(),
+        vec![
+            "src/widget/cache.py".to_string(),
+            "src/widget/store.py".to_string(),
+        ],
+        "oracle_files must be read from the root-level ground_truth.json"
+    );
+}
+
+#[test]
 fn missing_manifest_is_rejected_loudly() {
     let err = load_task(fixture("does-not-exist")).unwrap_err();
     assert!(matches!(err, BenchError::NotATask(_)));
