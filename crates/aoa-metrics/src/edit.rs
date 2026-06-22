@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::ConditionedOn;
 use crate::error::MetricError;
-use crate::input::{Confidence, MetricInput};
+use crate::input::{Confidence, MetricInputRef};
 
 /// Edit-locality: file inflation measured against both an intersection floor and
 /// a union ceiling drawn from two or more accepted solutions.
@@ -32,7 +32,7 @@ pub struct EditLocality {
 
 /// Compute edit-locality. Requires at least two accepted solutions so that the
 /// intersection floor and union ceiling are both well-defined.
-pub fn compute_edit_locality(input: &MetricInput) -> Result<EditLocality, MetricError> {
+pub fn compute_edit_locality(input: MetricInputRef<'_>) -> Result<EditLocality, MetricError> {
     if input.accepted_solutions.len() < 2 {
         return Err(MetricError::InsufficientAcceptedSolutions(
             input.accepted_solutions.len(),

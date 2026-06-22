@@ -113,3 +113,52 @@ pub struct MetricInput {
     /// on held-out success; a visible pass with a held-out fail is `false` here.
     pub held_out_success: bool,
 }
+
+/// A borrowing view of [`MetricInput`] consumed by every metric extractor.
+///
+/// The extractors only read their input, so they take this `Copy` reference
+/// bundle rather than `&MetricInput`. That lets a caller hold the large,
+/// task-invariant fields (the symbol graph, the invariant set) once and borrow
+/// them across a task loop, mixing in per-task fields by reference — without
+/// cloning the graph into a fresh `MetricInput` every iteration. Owned callers
+/// convert with [`MetricInput::as_view`].
+#[derive(Debug, Clone, Copy)]
+pub struct MetricInputRef<'a> {
+    /// The instrumented tool-call trace for the run.
+    pub trace: &'a Trace,
+    /// Base-repo gold artifact symbols `G_t` (anchored via `transform`).
+    pub gold_set: &'a BTreeSet<String>,
+    /// Base-repo invariant artifact symbols `I_t` (anchored via `transform`).
+    pub invariant_set: &'a BTreeSet<String>,
+    /// Base-to-migrated symbol map.
+    pub transform: &'a TransformMap,
+    /// The files changed by the agent's final patch (`F_edit`).
+    pub edited_files: &'a BTreeSet<String>,
+    /// Two or more accepted solution file-sets; their intersection is the floor
+    /// and their union is the ceiling for edit-locality inflation.
+    pub accepted_solutions: &'a [BTreeSet<String>],
+    /// The SCIP-style symbol graph.
+    pub graph: &'a SymbolGraph,
+    /// Mutation-surface reachability depth bound.
+    pub k: u32,
+    /// Whether the run passed the held-out check. Records are always conditioned
+    /// on held-out success; a visible pass with a held-out fail is `false` here.
+    pub held_out_success: bool,
+}
+
+impl MetricInput {
+    /// Borrow this owned input as a [`MetricInputRef`] for the extractors.
+    pub fn as_view(&self) -> MetricInputRef<'_> {
+        MetricInputRef {
+            trace: &self.trace,
+            gold_set: &self.gold_set,
+            invariant_set: &self.invariant_set,
+            transform: &self.transform,
+            edited_files: &self.edited_files,
+            accepted_solutions: &self.accepted_solutions,
+            graph: &self.graph,
+            k: self.k,
+            held_out_success: self.held_out_success,
+        }
+    }
+}

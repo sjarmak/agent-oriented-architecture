@@ -140,7 +140,7 @@ fn mutation_surface_item(cfg: &AuditConfig) -> PunchItem {
         held_out_success: true,
     };
 
-    let surface = compute_mutation_surface(&input);
+    let surface = compute_mutation_surface(input.as_view());
 
     PunchItem {
         title: format!("writable mutation surface within depth {}", cfg.k),

@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, VecDeque};
 use serde::{Deserialize, Serialize};
 
 use crate::common::ConditionedOn;
-use crate::input::{Confidence, IndexQuality, MetricInput, SymbolGraph};
+use crate::input::{Confidence, IndexQuality, MetricInputRef, SymbolGraph};
 
 /// Mutation-surface: the count of writable files reachable in the symbol graph
 /// at depth `<= k`. This is an over-approximation of the true blast radius.
@@ -61,8 +61,8 @@ fn reachable_writable(graph: &SymbolGraph, k: u32) -> BTreeSet<String> {
 }
 
 /// Compute mutation-surface over the input's symbol graph at depth `<= k`.
-pub fn compute_mutation_surface(input: &MetricInput) -> MutationSurface {
-    let reachable = reachable_writable(&input.graph, input.k);
+pub fn compute_mutation_surface(input: MetricInputRef<'_>) -> MutationSurface {
+    let reachable = reachable_writable(input.graph, input.k);
 
     MutationSurface {
         writable_reachable: reachable.len(),

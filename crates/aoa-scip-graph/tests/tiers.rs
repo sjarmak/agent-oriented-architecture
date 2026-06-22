@@ -180,7 +180,7 @@ fn produced_graph_drives_metric_extractors_across_tiers() {
         held_out_success: true,
     };
 
-    let record = compute_metrics(&input).expect("compute metrics on scip graph");
+    let record = compute_metrics(input.as_view()).expect("compute metrics on scip graph");
     assert_eq!(record.confidence, Confidence::High);
     assert_eq!(record.weight, 1.0);
     assert!(record.repo_eligible_for_r0);
@@ -192,7 +192,7 @@ fn produced_graph_drives_metric_extractors_across_tiers() {
         graph: degraded(None).graph,
         ..input.clone()
     };
-    let degraded_record = compute_metrics(&degraded_input).expect("compute on degraded");
+    let degraded_record = compute_metrics(degraded_input.as_view()).expect("compute on degraded");
     assert_eq!(degraded_record.weight, 0.0);
     assert!(!degraded_record.repo_eligible_for_r0);
     assert!(degraded_record.mutation_surface.reachable.is_empty());
@@ -227,7 +227,7 @@ fn transform_map_anchors_gold_set_to_migrated_names() {
         held_out_success: true,
     };
 
-    let record = compute_metrics(&input).expect("compute metrics");
+    let record = compute_metrics(input.as_view()).expect("compute metrics");
     // The renamed gold artifact is matched via the transform map.
     assert_eq!(
         record

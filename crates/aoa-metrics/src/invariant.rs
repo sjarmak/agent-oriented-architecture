@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use aoa_trace::SpanType;
 
 use crate::common::{is_read_span, span_artifact, ConditionedOn};
-use crate::input::{Confidence, MetricInput};
+use crate::input::{Confidence, MetricInputRef};
 
 /// Invariant-discoverability: whether the invariant set `I_t` was accessed via a
 /// file.read or symbol.lookup span before the first write.attempt.
@@ -24,8 +24,8 @@ pub struct InvariantDiscoverability {
 
 /// Compute invariant-discoverability. When no write was attempted, any invariant
 /// read at all counts as discovered-before-write (the write boundary is open).
-pub fn compute_invariant_discoverability(input: &MetricInput) -> InvariantDiscoverability {
-    let anchored: BTreeSet<String> = input.transform.anchor(&input.invariant_set);
+pub fn compute_invariant_discoverability(input: MetricInputRef<'_>) -> InvariantDiscoverability {
+    let anchored: BTreeSet<String> = input.transform.anchor(input.invariant_set);
 
     let mut spans: Vec<_> = input.trace.spans.iter().collect();
     spans.sort_by_key(|s| s.seq);
