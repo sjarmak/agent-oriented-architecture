@@ -23,7 +23,7 @@ pub(crate) const MAX_SOURCE_BYTES: u64 = 8 * 1024 * 1024;
 /// accepted while a larger one is rejected.
 pub(crate) fn read_capped(path: &Path, max: u64) -> Result<String, ScipGraphError> {
     let file = std::fs::File::open(path).map_err(|source| ScipGraphError::Io {
-        path: path.display().to_string(),
+        path: path.to_path_buf(),
         source,
     })?;
     let mut raw = String::new();
@@ -31,12 +31,12 @@ pub(crate) fn read_capped(path: &Path, max: u64) -> Result<String, ScipGraphErro
         .take(max + 1)
         .read_to_string(&mut raw)
         .map_err(|source| ScipGraphError::Io {
-            path: path.display().to_string(),
+            path: path.to_path_buf(),
             source,
         })?;
     if read as u64 > max {
         return Err(ScipGraphError::TooLarge {
-            path: path.display().to_string(),
+            path: path.to_path_buf(),
             max,
         });
     }
