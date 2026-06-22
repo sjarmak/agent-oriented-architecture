@@ -1,0 +1,6 @@
+{"type":"system","subtype":"init","session_id":"sanitized-blocked","tools":["Read","Grep","Write"]}
+{"type":"assistant","message":{"id":"msg_01","role":"assistant","content":[{"type":"text","text":"Let me read the policy file before attempting the change."},{"type":"tool_use","id":"toolu_01","name":"Read","input":{"file_path":"src/policy.rs"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"contents of src/policy.rs ...","is_error":false}]}}
+{"type":"assistant","message":{"id":"msg_02","role":"assistant","content":[{"type":"tool_use","id":"toolu_02","name":"Write","input":{"file_path":"/etc/forbidden.conf","content":"nope"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_02","content":"Permission denied: write to /etc/forbidden.conf was blocked by policy","is_error":true}]}}
+{"type":"result","subtype":"error_during_execution","is_error":true,"result":"Write was blocked; no change made.","session_id":"sanitized-blocked"}

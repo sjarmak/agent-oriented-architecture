@@ -137,3 +137,37 @@ fn no_write_trial_ends_with_abstain() {
         "abstain trial must not contain write spans"
     );
 }
+
+#[test]
+fn blocked_only_trial_has_no_abstain_and_only_write_blocked() {
+    // A transcript whose ONLY write is denied: the write.attempt sets `saw_write`
+    // before the errored tool_result reclassifies it to write.blocked, so NO
+    // trailing abstain is appended. This locks the "denied write is still a write"
+    // edge — a blocked attempt is distinct from an abstain, never collapsed into one.
+    let result =
+        parse_transcript_file(&fixture("agent_output_blocked_only.txt")).expect("read fixture");
+    validate_trace_value(&result.trace).expect("trace validates");
+
+    let last = result.trace.spans.last().expect("at least one span");
+    assert_eq!(
+        last.span_type,
+        SpanType::WriteBlocked,
+        "the denied write is the final span, not an abstain"
+    );
+    assert!(
+        result
+            .trace
+            .spans
+            .iter()
+            .all(|s| s.span_type != SpanType::Abstain),
+        "a blocked write must not also yield an abstain"
+    );
+    assert!(
+        result
+            .trace
+            .spans
+            .iter()
+            .all(|s| s.span_type != SpanType::WriteAttempt),
+        "the sole write was denied, so no write.attempt survives"
+    );
+}

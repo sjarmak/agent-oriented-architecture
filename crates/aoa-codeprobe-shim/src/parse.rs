@@ -44,6 +44,10 @@ pub struct ShimResult {
 /// check so a file that grows (or a symlink whose target swaps) between stat and
 /// read cannot blow past the cap — the threat model is attacker-controlled local
 /// files.
+///
+/// The byte cap is the only sanitizing this layer does: tool targets are still
+/// lifted verbatim, so the caller must point this at a codeprobe-sanitized
+/// transcript. See [`parse_transcript`] § Secrets.
 pub fn parse_transcript_file(path: &Path) -> Result<ShimResult, ShimError> {
     let raw = read_capped(path, MAX_TRANSCRIPT_BYTES)?;
     parse_transcript(&raw)
@@ -93,6 +97,15 @@ pub(crate) fn read_capped(path: &Path, max: u64) -> Result<String, ShimError> {
 /// [`MAX_SPANS`] spans: a silently truncated trace would corrupt the locality
 /// metrics computed from it, so the bound fails loud. Warnings, being lossy
 /// diagnostics, are capped behind a sentinel instead (see [`MAX_WARNINGS`]).
+///
+/// # Secrets
+///
+/// This parser does **not** sanitize. Tool targets are lifted verbatim into span
+/// attributes: the full `Bash` `command` string, and `Read`/`Edit`/`Write` file
+/// paths. Callers MUST pass a codeprobe-sanitized transcript — codeprobe strips
+/// secrets upstream when it writes `agent_output.txt`. An unsanitized transcript
+/// (e.g. a `Bash` command with an inline token) would carry that secret straight
+/// into the emitted [`Trace`], so do not feed raw, un-sanitized agent output here.
 pub fn parse_transcript(raw: &str) -> Result<ShimResult, ShimError> {
     parse_transcript_bounded(raw, Limits::DEFAULT)
 }
