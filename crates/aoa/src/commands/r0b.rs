@@ -40,6 +40,7 @@ use aoa_gap::{
 
 use crate::cli::R0bArgs;
 use crate::commands::codeprobe::{aggregate_provenance, discover_tasks, DualScoring};
+use crate::commands::fsutil::{read_to_string_capped, MAX_JSON_BYTES};
 use crate::output::{print_human, print_json};
 
 /// One operator-declared canary: a known held-out probe and the outcome a clean
@@ -52,7 +53,7 @@ struct CanarySpec {
 
 /// Parse the canary manifest into an id → expected-held-out map.
 fn load_canary_manifest(path: &Path) -> Result<BTreeMap<String, bool>> {
-    let raw = std::fs::read_to_string(path)
+    let raw = read_to_string_capped(path, MAX_JSON_BYTES)
         .with_context(|| format!("failed to read canary manifest {}", path.display()))?;
     let specs: Vec<CanarySpec> = serde_json::from_str(&raw)
         .with_context(|| format!("failed to parse canary manifest {}", path.display()))?;
@@ -292,5 +293,18 @@ mod tests {
         let p =
             aggregate_provenance(&[HeldOutProvenance::External, HeldOutProvenance::None]).unwrap();
         assert_eq!(p, HeldOutProvenance::None);
+    }
+
+    #[test]
+    fn load_canary_manifest_rejects_oversized_input() {
+        let dir = std::env::temp_dir().join(format!("aoa-r0b-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("canary.json");
+        std::fs::write(&path, vec![b'x'; (MAX_JSON_BYTES + 1) as usize]).unwrap();
+
+        let err = load_canary_manifest(&path).unwrap_err();
+        assert!(format!("{err:#}").contains("byte cap"), "got: {err:#}");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

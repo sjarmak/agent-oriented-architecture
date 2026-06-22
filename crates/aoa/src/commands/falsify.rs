@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use aoa_falsify::{FalsifyError, FalsifyInput, FalsifyReport, Verdict};
 
 use crate::cli::FalsifyArgs;
+use crate::commands::fsutil::{read_to_string_capped, MAX_JSON_BYTES};
 use crate::output::{print_human, print_json};
 
 /// A codeprobe measurement-bias warning, surfaced verbatim alongside the verdict.
@@ -134,7 +135,7 @@ impl FalsificationOutput {
 /// or a genuine R0' abstention); `1` when the verdict comes from an unmet
 /// precondition (the gate could not be exercised).
 pub fn run(args: &FalsifyArgs) -> Result<i32> {
-    let raw = std::fs::read_to_string(&args.repos)
+    let raw = read_to_string_capped(&args.repos, MAX_JSON_BYTES)
         .with_context(|| format!("failed to read falsify input {}", args.repos.display()))?;
     let input: FalsifyInput = serde_json::from_str(&raw)
         .with_context(|| format!("failed to parse falsify input {}", args.repos.display()))?;
@@ -209,14 +210,14 @@ pub fn run(args: &FalsifyArgs) -> Result<i32> {
 }
 
 fn load_build_meta(path: &Path) -> Result<BuildMeta> {
-    let raw = std::fs::read_to_string(path)
+    let raw = read_to_string_capped(path, MAX_JSON_BYTES)
         .with_context(|| format!("failed to read build report {}", path.display()))?;
     serde_json::from_str(&raw)
         .with_context(|| format!("failed to parse build report {}", path.display()))
 }
 
 fn load_bias_warnings(path: &Path) -> Result<Vec<BiasWarning>> {
-    let raw = std::fs::read_to_string(path)
+    let raw = read_to_string_capped(path, MAX_JSON_BYTES)
         .with_context(|| format!("failed to read bias-warnings file {}", path.display()))?;
     let aggregate: AggregateFile = serde_json::from_str(&raw).with_context(|| {
         format!(
@@ -282,4 +283,50 @@ fn render_human(output: &FalsificationOutput, out_path: &Path) -> String {
     }
     let _ = writeln!(s, "  written: {}", out_path.display());
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Write an oversized JSON file (one byte past the cap) and return its path.
+    fn oversized_file(dir: &Path, name: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, vec![b'x'; (MAX_JSON_BYTES + 1) as usize]).unwrap();
+        path
+    }
+
+    #[test]
+    fn all_falsify_load_sites_reject_oversized_input() {
+        let dir = std::env::temp_dir().join(format!("aoa-falsify-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // load_build_meta (--build-meta)
+        let err = load_build_meta(&oversized_file(&dir, "build.json")).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("byte cap"),
+            "build_meta: {err:#}"
+        );
+
+        // load_bias_warnings (codeprobe aggregate.json)
+        let err = load_bias_warnings(&oversized_file(&dir, "aggregate.json")).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("byte cap"),
+            "bias_warnings: {err:#}"
+        );
+
+        // run (--repos falsify input) — the inline capped read trips before parse.
+        let args = FalsifyArgs {
+            repos: oversized_file(&dir, "repos.json"),
+            build_meta: None,
+            bias_warnings: None,
+            out: dir.join("falsification.json"),
+            json: false,
+        };
+        let err = run(&args).unwrap_err();
+        assert!(format!("{err:#}").contains("byte cap"), "repos: {err:#}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
