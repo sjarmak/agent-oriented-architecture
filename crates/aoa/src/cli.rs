@@ -32,6 +32,10 @@ pub enum Command {
     /// Evaluation gates: trace validation and the reward-hacking gap compare.
     Eval(EvalArgs),
 
+    /// Surface the R9c construct-validity determination: which gating-candidate
+    /// metrics may gate a decision (Gating) and which are advisory-only.
+    Gap(GapArgs),
+
     /// Run the wrong-layer falsification gate and write `falsification.json`.
     Falsify(FalsifyArgs),
 
@@ -234,6 +238,13 @@ pub struct ExperimentArgs {
     pub out: PathBuf,
 
     /// Emit the structured JSON build report instead of human text.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct GapArgs {
+    /// Emit the structured JSON rendering instead of human text.
     #[arg(long)]
     pub json: bool,
 }

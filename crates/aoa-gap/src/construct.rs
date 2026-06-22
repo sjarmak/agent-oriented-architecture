@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use serde::{Deserialize, Serialize};
 
 /// An external outcome a metric can be correlated against to earn gating status.
@@ -139,6 +141,16 @@ pub enum MetricMode {
     Gating,
 }
 
+impl MetricMode {
+    /// The operator-facing label for this mode, matching the serde rename.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MetricMode::Advisory => "Advisory",
+            MetricMode::Gating => "Gating",
+        }
+    }
+}
+
 /// Classify a metric as gating or advisory under R9c construct validity.
 ///
 /// A metric is `Gating` only when a correlation report is supplied whose
@@ -249,6 +261,37 @@ pub struct ConstructValidityReport {
     pub metrics: Vec<MetricClassification>,
 }
 
+impl ConstructValidityReport {
+    /// Render the determination for the human register: a header, every gating
+    /// candidate with its earned mode (Gating vs Advisory) and orientation, and
+    /// the data source consulted. Surfaces the R9c discipline so an operator can
+    /// see which metrics may gate a decision and which are advisory-only —
+    /// rather than the discipline being documented but never shown.
+    pub fn render_human(&self) -> String {
+        let gating = self
+            .metrics
+            .iter()
+            .filter(|m| m.mode == MetricMode::Gating)
+            .count();
+        let mut out = String::new();
+        let _ = writeln!(
+            out,
+            "R9c construct validity: {} candidate(s), {gating} gating, {} advisory",
+            self.metrics.len(),
+            self.metrics.len() - gating,
+        );
+        for m in &self.metrics {
+            let dir = match m.orientation {
+                MetricOrientation::HigherIsBetter => "higher-is-better",
+                MetricOrientation::LowerIsBetter => "lower-is-better",
+            };
+            let _ = writeln!(out, "  [{}] {} ({dir})", m.mode.as_str(), m.metric);
+        }
+        let _ = writeln!(out, "data source: {}", self.data_source);
+        out
+    }
+}
+
 /// Build a construct-validity artifact: classify each supplied per-metric
 /// correlation report under `thresholds`, recording the `data_source` so the
 /// result is reproducible and its provenance inspectable.
@@ -301,4 +344,23 @@ pub fn current_determination() -> ConstructValidityReport {
         &reports,
         &GatingThresholds::default(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_human_lists_every_candidate_as_advisory_with_source() {
+        let rendered = current_determination().render_human();
+        // Names each pre-registered candidate and marks it Advisory.
+        for (metric, _) in GATING_CANDIDATES {
+            assert!(rendered.contains(metric), "missing candidate {metric}");
+        }
+        assert!(rendered.contains("Advisory"));
+        assert!(!rendered.contains("Gating]"), "nothing gates absent a corpus");
+        assert!(rendered.contains("0 gating"));
+        // Surfaces the consulted data source.
+        assert!(rendered.contains(NO_EXTERNAL_OUTCOME_SOURCE));
+    }
 }
