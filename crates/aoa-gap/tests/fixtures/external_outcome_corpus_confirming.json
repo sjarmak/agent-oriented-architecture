@@ -1,0 +1,90 @@
+{
+  "repos": [
+    {
+      "repo_id": "sample/alpha",
+      "structure_counts": {
+        "navigability_anchor_absence": 0,
+        "module_size_outliers": 4,
+        "unused_import_proxy": 2
+      },
+      "mined_commits": [
+        { "sha": "a0000000000000000000000000000000000000a0", "reverted": false, "churn": 10 },
+        { "sha": "a0000000000000000000000000000000000000a1", "reverted": false, "churn": 12 },
+        { "sha": "a0000000000000000000000000000000000000a2", "reverted": false, "churn": 8 },
+        { "sha": "a0000000000000000000000000000000000000a3", "reverted": false, "churn": 11 }
+      ]
+    },
+    {
+      "repo_id": "sample/bravo",
+      "structure_counts": {
+        "navigability_anchor_absence": 1,
+        "module_size_outliers": 1,
+        "unused_import_proxy": 9
+      },
+      "mined_commits": [
+        { "sha": "b0000000000000000000000000000000000000b0", "reverted": true, "churn": 30 },
+        { "sha": "b0000000000000000000000000000000000000b1", "reverted": false, "churn": 14 },
+        { "sha": "b0000000000000000000000000000000000000b2", "reverted": false, "churn": 9 },
+        { "sha": "b0000000000000000000000000000000000000b3", "reverted": false, "churn": 13 },
+        { "sha": "b0000000000000000000000000000000000000b4", "reverted": false, "churn": 7 }
+      ]
+    },
+    {
+      "repo_id": "sample/charlie",
+      "structure_counts": {
+        "navigability_anchor_absence": 2,
+        "module_size_outliers": 6,
+        "unused_import_proxy": 0
+      },
+      "mined_commits": [
+        { "sha": "c0000000000000000000000000000000000000c0", "reverted": true, "churn": 22 },
+        { "sha": "c0000000000000000000000000000000000000c1", "reverted": true, "churn": 25 },
+        { "sha": "c0000000000000000000000000000000000000c2", "reverted": false, "churn": 10 },
+        { "sha": "c0000000000000000000000000000000000000c3", "reverted": false, "churn": 16 },
+        { "sha": "c0000000000000000000000000000000000000c4", "reverted": false, "churn": 12 }
+      ]
+    },
+    {
+      "repo_id": "sample/delta",
+      "structure_counts": {
+        "navigability_anchor_absence": 3,
+        "module_size_outliers": 2,
+        "unused_import_proxy": 5
+      },
+      "mined_commits": [
+        { "sha": "d0000000000000000000000000000000000000d0", "reverted": true, "churn": 40 },
+        { "sha": "d0000000000000000000000000000000000000d1", "reverted": true, "churn": 33 },
+        { "sha": "d0000000000000000000000000000000000000d2", "reverted": false, "churn": 18 },
+        { "sha": "d0000000000000000000000000000000000000d3", "reverted": false, "churn": 15 }
+      ]
+    },
+    {
+      "repo_id": "sample/echo",
+      "structure_counts": {
+        "navigability_anchor_absence": 4,
+        "module_size_outliers": 5,
+        "unused_import_proxy": 3
+      },
+      "mined_commits": [
+        { "sha": "e0000000000000000000000000000000000000e0", "reverted": true, "churn": 50 },
+        { "sha": "e0000000000000000000000000000000000000e1", "reverted": true, "churn": 48 },
+        { "sha": "e0000000000000000000000000000000000000e2", "reverted": true, "churn": 44 },
+        { "sha": "e0000000000000000000000000000000000000e3", "reverted": false, "churn": 20 }
+      ]
+    },
+    {
+      "repo_id": "sample/foxtrot",
+      "structure_counts": {
+        "navigability_anchor_absence": 5,
+        "module_size_outliers": 3,
+        "unused_import_proxy": 6
+      },
+      "mined_commits": [
+        { "sha": "f0000000000000000000000000000000000000f0", "reverted": true, "churn": 60 },
+        { "sha": "f0000000000000000000000000000000000000f1", "reverted": true, "churn": 58 },
+        { "sha": "f0000000000000000000000000000000000000f2", "reverted": true, "churn": 55 },
+        { "sha": "f0000000000000000000000000000000000000f3", "reverted": true, "churn": 52 }
+      ]
+    }
+  ]
+}

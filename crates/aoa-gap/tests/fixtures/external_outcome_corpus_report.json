@@ -1,0 +1,85 @@
+{
+  "data_source": "fixture: external_outcome_corpus_confirming.json (offline synthetic corpus; revert rate per repo over mined commits, paired with aoa-audit structure counts)",
+  "thresholds": {
+    "min_magnitude": 0.3,
+    "min_n": 5,
+    "max_p_value": 0.05
+  },
+  "metrics": [
+    {
+      "metric": "retrieval_locality",
+      "orientation": "higher_is_better",
+      "correlations": [],
+      "mode": "advisory"
+    },
+    {
+      "metric": "edit_locality",
+      "orientation": "higher_is_better",
+      "correlations": [],
+      "mode": "advisory"
+    },
+    {
+      "metric": "invariant_discoverability",
+      "orientation": "higher_is_better",
+      "correlations": [],
+      "mode": "advisory"
+    },
+    {
+      "metric": "mutation_surface",
+      "orientation": "lower_is_better",
+      "correlations": [],
+      "mode": "advisory"
+    },
+    {
+      "metric": "budget_adherence",
+      "orientation": "higher_is_better",
+      "correlations": [],
+      "mode": "advisory"
+    },
+    {
+      "metric": "reward_hacking_gap",
+      "orientation": "lower_is_better",
+      "correlations": [],
+      "mode": "advisory"
+    },
+    {
+      "metric": "navigability_anchor_absence",
+      "orientation": "lower_is_better",
+      "correlations": [
+        {
+          "outcome": "revert_rate",
+          "coefficient": 1.0,
+          "n": 6,
+          "p_value": 0.002777777777777778
+        }
+      ],
+      "mode": "gating"
+    },
+    {
+      "metric": "module_size_outliers",
+      "orientation": "lower_is_better",
+      "correlations": [
+        {
+          "outcome": "revert_rate",
+          "coefficient": 0.08571428571428572,
+          "n": 6,
+          "p_value": 0.9194444444444444
+        }
+      ],
+      "mode": "advisory"
+    },
+    {
+      "metric": "unused_import_proxy",
+      "orientation": "lower_is_better",
+      "correlations": [
+        {
+          "outcome": "revert_rate",
+          "coefficient": 0.2571428571428571,
+          "n": 6,
+          "p_value": 0.6583333333333333
+        }
+      ],
+      "mode": "advisory"
+    }
+  ]
+}
