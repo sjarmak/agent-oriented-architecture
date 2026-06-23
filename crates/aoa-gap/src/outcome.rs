@@ -295,15 +295,42 @@ mod tests {
 
     #[test]
     fn observation_pairs_skip_repos_missing_the_metric() {
-        // A metric absent from a repo's structure_counts contributes no pair.
-        let c = corpus(NOISE);
-        let present = c
-            .repos
-            .iter()
-            .filter(|r| r.structure_counts.contains_key("module_size_outliers"))
-            .count();
+        // The skip branch fires only when a repo lacks the metric in its
+        // structure_counts. Build a corpus where exactly one of three repos is
+        // missing "module_size_outliers" — and that repo still has a defined
+        // revert rate, so the drop is attributable to the absent metric alone,
+        // not to a missing outcome.
+        let with_metric = |id: &str, count: u64| Repo {
+            repo_id: id.into(),
+            structure_counts: std::collections::BTreeMap::from([(
+                "module_size_outliers".to_string(),
+                count,
+            )]),
+            mined_commits: vec![MinedCommit {
+                sha: "x".into(),
+                reverted: true,
+                churn: 1,
+            }],
+        };
+        let without_metric = Repo {
+            repo_id: "missing".into(),
+            structure_counts: std::collections::BTreeMap::new(),
+            mined_commits: vec![MinedCommit {
+                sha: "y".into(),
+                reverted: false, // defined revert rate (0.0), so the metric is the only reason to skip
+                churn: 1,
+            }],
+        };
+        let c = Corpus {
+            repos: vec![with_metric("r1", 1), without_metric, with_metric("r2", 2)],
+        };
         let pairs = c.observation_pairs("module_size_outliers");
-        assert_eq!(pairs.len(), present);
+        // The metric-less middle repo is dropped: 2 pairs from 3 repos, in order.
+        assert!(
+            pairs.len() < c.repos.len(),
+            "skip branch must drop the metric-less repo"
+        );
+        assert_eq!(pairs, vec![(1.0, 1.0), (2.0, 1.0)]);
     }
 
     // --- F3: end-to-end wiring, known-answer ---
