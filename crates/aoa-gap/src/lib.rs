@@ -27,6 +27,7 @@ mod construct;
 mod correlation;
 mod error;
 mod gap;
+mod outcome;
 mod provenance;
 mod run;
 
@@ -40,5 +41,9 @@ pub use construct::{
 pub use correlation::{spearman, CorrelationError, RankCorrelation, MAX_EXACT_N};
 pub use error::GapError;
 pub use gap::{compute_gap, GapOutcome};
+pub use outcome::{
+    build_report_from_corpus, mine_reverts, parse_reverted_shas, revert_log_command, Corpus,
+    GitRunner, MinedCommit, Repo,
+};
 pub use provenance::HeldOutProvenance;
 pub use run::{CanaryItem, RunResult, TaskOutcome};
