@@ -26,6 +26,13 @@ pub enum FindingKind {
     ModuleSizeOutlier,
     /// Likely-unused imports by the Rust syntactic proxy.
     UnusedImportProxy,
+    /// The generated-artifact-protection convention (`.gitattributes`
+    /// `linguist-generated`) is absent — generated files are not marked
+    /// off-limits to an agent (R6).
+    GeneratedArtifactProtection,
+    /// Well-known write-boundary declaration surfaces (CODEOWNERS / safe-write
+    /// zone policy) are absent — no declared narrow write surface (R5).
+    WriteSafetyZone,
 }
 
 impl FindingKind {
@@ -39,6 +46,8 @@ impl FindingKind {
         FindingKind::NavigabilityAnchor,
         FindingKind::ModuleSizeOutlier,
         FindingKind::UnusedImportProxy,
+        FindingKind::GeneratedArtifactProtection,
+        FindingKind::WriteSafetyZone,
     ];
 }
 
@@ -104,10 +113,12 @@ mod tests {
                 | FindingKind::MissingPlane
                 | FindingKind::NavigabilityAnchor
                 | FindingKind::ModuleSizeOutlier
-                | FindingKind::UnusedImportProxy => {}
+                | FindingKind::UnusedImportProxy
+                | FindingKind::GeneratedArtifactProtection
+                | FindingKind::WriteSafetyZone => {}
             }
         }
-        assert_eq!(FindingKind::ALL.len(), 6);
+        assert_eq!(FindingKind::ALL.len(), 8);
     }
 
     #[test]

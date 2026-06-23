@@ -59,6 +59,18 @@
       "orientation": "lower_is_better",
       "correlations": [],
       "mode": "advisory"
+    },
+    {
+      "metric": "generated_artifact_protection_absence",
+      "orientation": "lower_is_better",
+      "correlations": [],
+      "mode": "advisory"
+    },
+    {
+      "metric": "write_safety_zone_absence",
+      "orientation": "lower_is_better",
+      "correlations": [],
+      "mode": "advisory"
     }
   ]
 }
