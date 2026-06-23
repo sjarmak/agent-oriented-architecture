@@ -176,7 +176,7 @@ pub fn classify_metric(
 /// `mutation_surface` and `reward_hacking_gap` are harms (smaller is better);
 /// the rest are goods.
 ///
-/// The trailing three are the code-structure measures emitted by `aoa-audit`
+/// The trailing five are the code-structure measures emitted by `aoa-audit`
 /// (see [`STRUCTURE_MEASURE_SPECS`]). They are registered here so they ride the
 /// same Advisory→Gating discipline as every other candidate — never gating
 /// until [`classify_metric`] sees a confirming external-outcome correlation.
@@ -198,6 +198,14 @@ pub const GATING_CANDIDATES: &[(&str, MetricOrientation)] = &[
     ),
     ("module_size_outliers", MetricOrientation::LowerIsBetter),
     ("unused_import_proxy", MetricOrientation::LowerIsBetter),
+    (
+        "generated_artifact_protection_absence",
+        MetricOrientation::LowerIsBetter,
+    ),
+    (
+        "write_safety_zone_absence",
+        MetricOrientation::LowerIsBetter,
+    ),
 ];
 
 /// The pre-registered spec for the code-structure measures: each metric paired
@@ -214,14 +222,17 @@ pub const GATING_CANDIDATES: &[(&str, MetricOrientation)] = &[
 /// count, or review acceptance) clearing [`GatingThresholds`] — the same gate
 /// as every other candidate. The external-outcome corpus that would supply such
 /// a correlation does not yet exist (see [`NO_EXTERNAL_OUTCOME_SOURCE`]), so all
-/// three are currently Advisory.
+/// five are currently Advisory.
 ///
-/// `module_size_outliers` carries a caveat the other two do not: its
+/// Three measures carry a caveat the navigability and unused-import ones do not:
+/// `module_size_outliers`, `generated_artifact_protection_absence`, and
+/// `write_safety_zone_absence` have no backing `aoa-migrate` migration, so their
 /// `LowerIsBetter` orientation is a *registered, falsifiable directional
 /// hypothesis*, not an earned best-practice. The navigability and unused-import
 /// measures each have a mechanical migration that drives them down
-/// (`aoa-migrate`); module size has none (splitting a large module is not
-/// mechanically safe and was ruled out of scope). Its direction therefore earns
+/// (`aoa-migrate`); these three do not (splitting a large module is not
+/// mechanically safe; declaring a generated-artifact marker or a write boundary
+/// is a human policy choice the audit only *observes*). Their direction earns
 /// nothing until external-outcome correlation confirms it — which is exactly
 /// what pre-registering a hypothesis under R9c means.
 pub const STRUCTURE_MEASURE_SPECS: &[(&str, &str)] = &[
@@ -241,6 +252,23 @@ migration), promotable only by external-outcome correlation",
         "unused_import_proxy",
         "count of likely-unused imports by a syntactic proxy (a use-bound name \
 absent from the file body), per aoa-audit unused_import_proxy_item",
+    ),
+    (
+        "generated_artifact_protection_absence",
+        "count (0 or 1) of the well-known generated-artifact-protection marker \
+(a root .gitattributes declaring linguist-generated) that is absent, per aoa-audit \
+generated_artifact_protection_item; a pure convention-existence fact (R6 'mark \
+generated files off-limits'), never a classification of which files are generated; \
+the LowerIsBetter orientation is a registered falsifiable hypothesis (no backing \
+migration), promotable only by external-outcome correlation",
+    ),
+    (
+        "write_safety_zone_absence",
+        "count of well-known write-boundary declaration surfaces (CODEOWNERS \
+ownership map; .aoa safe-write-zone policy) absent from the repo, per aoa-audit \
+write_safety_zone_item; a pure file-existence fact (R5 'narrow mutation gateway / \
+ownership metadata'); the LowerIsBetter orientation is a registered falsifiable \
+hypothesis (no backing migration), promotable only by external-outcome correlation",
     ),
 ];
 

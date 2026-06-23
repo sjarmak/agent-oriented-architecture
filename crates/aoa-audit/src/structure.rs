@@ -72,6 +72,32 @@ const SKIP_DIRS: &[&str] = &[
 /// outlier from noise.
 const MIN_FILES_FOR_MEDIAN: usize = 5;
 
+/// The attribute token a `.gitattributes` entry uses to mark a path as a
+/// generated artifact (so an agent does not edit derived state). A documented,
+/// well-known marker — the same fixed-name style as [`MANIFEST_MARKERS`] — and
+/// the only generated-artifact-protection convention this probe recognizes. The
+/// probe asks one purely structural question (does the repo *declare* this
+/// convention at all), never which files are generated — that classification is
+/// a semantic judgment outside the audit's mechanical contract.
+const LINGUIST_GENERATED_ATTR: &str = "linguist-generated";
+
+/// The well-known write-boundary declaration surfaces the write-safety probe
+/// looks for, grouped by *kind*. Each inner slice is one kind, present if any of
+/// its candidate paths exists; the measure counts the kinds that are absent. A
+/// repository that declares such a surface is funnelling writes through a narrow,
+/// auditable boundary (the report's R5 "mutation gateway / ownership metadata"
+/// signal). The set is a documented well-known-name list, like [`SKIP_DIRS`];
+/// membership is by path existence alone — no parsing, no heuristic.
+///
+/// CODEOWNERS is probed at each of GitHub's three documented locations (repo
+/// root, `.github/`, `docs/`); `.aoa/write-policy.toml` is the toolkit's own
+/// declared safe-write-zone surface (the same `.aoa/` namespace the enforcement
+/// planes probe).
+const WRITE_BOUNDARY_SURFACES: &[&[&str]] = &[
+    &["CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS"],
+    &[".aoa/write-policy.toml"],
+];
+
 /// Run the code-structure audit family over `repo`, returning measured-fact
 /// punch items (each born [`Tier::Tier3`]). `size_outlier_k` is the caller's
 /// documented multiplier for the module-size measure.
@@ -87,6 +113,12 @@ pub(crate) fn structure_items(
         items.push(item);
     }
     if let Some(item) = unused_import_proxy_item(repo)? {
+        items.push(item);
+    }
+    if let Some(item) = generated_artifact_protection_item(repo)? {
+        items.push(item);
+    }
+    if let Some(item) = write_safety_zone_item(repo) {
         items.push(item);
     }
     Ok(items)
@@ -264,6 +296,82 @@ fn unused_import_proxy_item(repo: &Path) -> Result<Option<PunchItem>, AuditError
         measured_cost: MeasuredCost::new(count, "imports"),
         plane: None,
     }))
+}
+
+/// Whether the repo *declares* the generated-artifact-protection convention: a
+/// `.gitattributes` at the repo root carrying at least one
+/// [`LINGUIST_GENERATED_ATTR`] entry. The measure is the count of this single
+/// well-known marker that is ABSENT (0 when declared, 1 when not) — the R6 "mark
+/// generated files off-limits" signal that keeps an agent off derived state.
+///
+/// This reads one fixed-name config file and asks a purely structural question —
+/// does the convention exist at all — and deliberately never decides *which*
+/// files are generated (a semantic classification outside the audit's contract).
+/// Born [`Tier::Tier3`]: a measured fact, not an evidence-backed best-practice.
+/// A non-`.gitattributes` repo and a repo that has not adopted the convention are
+/// the same positive fact (the marker is absent); only a declared marker abstains.
+fn generated_artifact_protection_item(repo: &Path) -> Result<Option<PunchItem>, AuditError> {
+    if declares_linguist_generated(repo)? {
+        return Ok(None);
+    }
+
+    Ok(Some(PunchItem {
+        title: "repository does not mark generated artifacts off-limits (.gitattributes \
+                linguist-generated)"
+            .to_string(),
+        kind: FindingKind::GeneratedArtifactProtection,
+        tier: Tier::Tier3,
+        measured_cost: MeasuredCost::new(1, "protection markers absent"),
+        plane: None,
+    }))
+}
+
+/// Whether `repo`'s root `.gitattributes` declares any `linguist-generated`
+/// attribute. Reads the one fixed-name file lossily (a stray non-UTF-8 byte
+/// cannot abort the probe) and capped (a hostile multi-gigabyte attributes file
+/// cannot exhaust memory); a missing file is `Ok(false)`, only a genuine IO error
+/// (permissions, vanished file) propagates. The token match is a literal
+/// substring — mechanical, not a parse of the attributes grammar.
+fn declares_linguist_generated(repo: &Path) -> Result<bool, AuditError> {
+    let path = repo.join(".gitattributes");
+    if !path.exists() {
+        return Ok(false);
+    }
+    match read_source_capped(&path)? {
+        Some(text) => Ok(text.contains(LINGUIST_GENERATED_ATTR)),
+        // Oversized attributes file: treat as undeclared rather than fail. The
+        // measure is a structural proxy; an 8 MB `.gitattributes` is pathological.
+        None => Ok(false),
+    }
+}
+
+/// Count the well-known write-boundary declaration *kinds* that are ABSENT from
+/// `repo` ([`WRITE_BOUNDARY_SURFACES`]). A repository declaring an ownership map
+/// (CODEOWNERS) or a safe-write-zone policy is funnelling writes through a narrow,
+/// auditable surface — the report's R5 "narrow mutation gateway / ownership
+/// metadata" signal for "the safe place to write". The count is transparent
+/// arithmetic over a fixed set (`k` absent of `N` known surfaces), the same
+/// neutral-fact shape as the missing-enforcement-plane count; it asserts no
+/// opinion beyond "these declared surfaces are absent". Abstains (emits nothing)
+/// only when every known surface is present. Born [`Tier::Tier3`]; infallible —
+/// every check is a fixed-path existence probe, so no IO error can arise.
+fn write_safety_zone_item(repo: &Path) -> Option<PunchItem> {
+    let absent = WRITE_BOUNDARY_SURFACES
+        .iter()
+        .filter(|candidates| !candidates.iter().any(|rel| repo.join(rel).exists()))
+        .count();
+    if absent == 0 {
+        return None;
+    }
+
+    Some(PunchItem {
+        title: "write-boundary declaration surfaces absent (CODEOWNERS / safe-write-zone policy)"
+            .to_string(),
+        kind: FindingKind::WriteSafetyZone,
+        tier: Tier::Tier3,
+        measured_cost: MeasuredCost::new(absent as u64, "write-boundary surfaces absent"),
+        plane: None,
+    })
 }
 
 /// Recursively sum the per-file likely-unused import count over `.rs` files.
@@ -1041,6 +1149,107 @@ mod tests {
         fs::write(target.join("gen.rs"), "use std::fmt::Debug;\nfn g() {}\n").unwrap();
 
         assert!(unused_import_proxy_item(&dir).unwrap().is_none());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- generated-artifact protection (R6) ---
+
+    #[test]
+    fn generated_protection_item_when_no_gitattributes() {
+        let dir = tmp("gen-no-attrs");
+        // A repo with no .gitattributes has not declared the convention: a fact.
+        fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
+
+        let item = generated_artifact_protection_item(&dir)
+            .unwrap()
+            .expect("item");
+        assert_eq!(item.tier, Tier::Tier3);
+        assert_eq!(item.kind, FindingKind::GeneratedArtifactProtection);
+        assert_eq!(item.measured_cost.unit, "protection markers absent");
+        assert_eq!(item.measured_cost.value, 1);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn generated_protection_item_when_gitattributes_lacks_marker() {
+        let dir = tmp("gen-attrs-no-marker");
+        // A .gitattributes that declares other attributes but not linguist-generated
+        // is still the convention absent.
+        fs::write(dir.join(".gitattributes"), "*.rs text eol=lf\n").unwrap();
+
+        let item = generated_artifact_protection_item(&dir)
+            .unwrap()
+            .expect("item");
+        assert_eq!(item.measured_cost.value, 1);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn no_generated_protection_item_when_marker_declared() {
+        let dir = tmp("gen-marker-present");
+        fs::write(
+            dir.join(".gitattributes"),
+            "src/generated/** linguist-generated=true\n",
+        )
+        .unwrap();
+
+        assert!(generated_artifact_protection_item(&dir).unwrap().is_none());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn generated_protection_reads_non_utf8_gitattributes_without_aborting() {
+        let dir = tmp("gen-non-utf8");
+        // A .gitattributes with a stray non-UTF-8 byte must not abort the probe;
+        // it simply does not contain the marker, so the convention is absent.
+        fs::write(dir.join(".gitattributes"), [0xff, b'\n']).unwrap();
+
+        let item = generated_artifact_protection_item(&dir)
+            .unwrap()
+            .expect("item");
+        assert_eq!(item.measured_cost.value, 1);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- write-safety zone (R5) ---
+
+    #[test]
+    fn write_safety_item_when_no_boundary_declared() {
+        let dir = tmp("write-none");
+        fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
+
+        let item = write_safety_zone_item(&dir).expect("item");
+        assert_eq!(item.tier, Tier::Tier3);
+        assert_eq!(item.kind, FindingKind::WriteSafetyZone);
+        assert_eq!(item.measured_cost.unit, "write-boundary surfaces absent");
+        // Both known surface kinds (ownership map + safe-write policy) are absent.
+        assert_eq!(item.measured_cost.value, 2);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn write_safety_counts_one_absent_when_codeowners_present() {
+        let dir = tmp("write-codeowners");
+        // A CODEOWNERS at one of the documented locations satisfies the ownership
+        // surface; only the safe-write-policy surface remains absent.
+        let gh = dir.join(".github");
+        fs::create_dir_all(&gh).unwrap();
+        fs::write(gh.join("CODEOWNERS"), "* @owner\n").unwrap();
+
+        let item = write_safety_zone_item(&dir).expect("item");
+        assert_eq!(item.measured_cost.value, 1);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn no_write_safety_item_when_all_surfaces_declared() {
+        let dir = tmp("write-all");
+        fs::write(dir.join("CODEOWNERS"), "* @owner\n").unwrap();
+        let aoa = dir.join(".aoa");
+        fs::create_dir_all(&aoa).unwrap();
+        fs::write(aoa.join("write-policy.toml"), "[zones]\n").unwrap();
+
+        assert!(write_safety_zone_item(&dir).is_none());
         fs::remove_dir_all(&dir).ok();
     }
 }

@@ -225,6 +225,10 @@ fn join(kind: FindingKind) -> (Option<&'static str>, Option<&'static str>) {
         ),
         FindingKind::ModuleSizeOutlier => (Some("module_size_outliers"), None),
         FindingKind::UnusedImportProxy => (Some("unused_import_proxy"), Some("dead-imports")),
+        FindingKind::GeneratedArtifactProtection => {
+            (Some("generated_artifact_protection_absence"), None)
+        }
+        FindingKind::WriteSafetyZone => (Some("write_safety_zone_absence"), None),
     }
 }
 
