@@ -1,9 +1,22 @@
-# Vendored ESLint toolchain (intentionally committed)
+# Vendored ESLint toolchain (pinned, regenerated locally)
 
 This directory is the pinned, hermetic ESLint toolchain for the TypeScript/JS
-dead-import adapter (`crates/aoa-migrate/src/imports/typescript.rs`). The
-`node_modules/` here is **deliberately committed**, not stray developer cruft —
-do not delete it and do not add it to `.gitignore`.
+dead-import adapter (`crates/aoa-migrate/src/imports/typescript.rs`).
+`package.json` and `package-lock.json` are committed and are the source of
+truth; the `node_modules/` install itself is gitignored.
+
+## Setup
+
+Install the pinned toolchain before running the TypeScript adapter or its tests:
+
+```bash
+npm ci   # in this directory; installs node_modules/ exactly from package-lock.json
+```
+
+`npm ci` is reproducible by construction: it installs the locked versions and
+fails if `package.json` and `package-lock.json` disagree. The adapter checks for
+the install and emits a loud `ToolchainUnavailable` (with this command) when it is
+missing, so a fresh checkout never produces a silently empty migration plan.
 
 ## Why vendored
 
@@ -26,8 +39,8 @@ plugin and parser resolve via Node module resolution relative to `eslint.config.
 - `@typescript-eslint/parser` 8.46.0 (TS/TSX syntax; no type-info needed)
 - `eslint-plugin-unused-imports` 4.4.1
 
-`package.json` + `package-lock.json` are the source of truth. To regenerate after a
-version bump: `npm install --omit=dev` in this directory, then re-run
+To bump a pin: edit `package.json`, run `npm install --omit=dev` in this directory
+to refresh `package-lock.json`, commit the lockfile, then re-run
 `cargo test -p aoa-migrate --test imports_typescript`.
 
 ## Construct-validity disclosure

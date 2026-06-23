@@ -115,6 +115,25 @@ fn eslint_bin() -> PathBuf {
     vendor_dir().join("node_modules/eslint/bin/eslint.js")
 }
 
+/// The vendored `node_modules` is gitignored and regenerated with `npm ci`. A
+/// missing install is a LOUD `ToolchainUnavailable`: `node` would otherwise exit 1
+/// with a "Cannot find module" message that `classify` reads as a clean,
+/// empty-findings run — i.e. a silent empty plan, the one outcome this adapter
+/// promises never to produce.
+fn ensure_vendored_eslint() -> Result<(), MigrateError> {
+    let bin = eslint_bin();
+    if bin.is_file() {
+        return Ok(());
+    }
+    Err(MigrateError::ToolchainUnavailable {
+        detail: format!(
+            "vendored ESLint not installed at {}; run `npm ci` in {}",
+            bin.display(),
+            vendor_dir().display()
+        ),
+    })
+}
+
 fn eslint_config() -> PathBuf {
     vendor_dir().join("eslint.config.mjs")
 }
@@ -135,6 +154,7 @@ fn base_eslint_args() -> Vec<String> {
 /// Run the vendored ESLint in JSON mode (no `--fix`) and classify the outcome.
 /// `Ok(())` means the files parse and any findings are our single rule.
 fn classify(work: &Path, files: &[PathBuf]) -> Result<(), MigrateError> {
+    ensure_vendored_eslint()?;
     let mut args = base_eslint_args();
     args.push("--format".to_string());
     args.push("json".to_string());
@@ -203,6 +223,7 @@ fn run_eslint_fix(work: &Path, files: &[PathBuf]) -> Result<(), MigrateError> {
     if files.is_empty() {
         return Ok(());
     }
+    ensure_vendored_eslint()?;
     let mut args = base_eslint_args();
     args.push("--fix".to_string());
     args.push("--fix-type".to_string());

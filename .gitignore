@@ -9,3 +9,13 @@ target/
 
 # AOA toolkit local state
 .aoa/
+
+# Local tooling / config (kept out of the public repo)
+.beads/
+.claude/
+.prd-build/
+.mcp.json
+
+# Vendored ESLint install; regenerate with `npm ci` in
+# crates/aoa-migrate/assets/eslint (package-lock.json is committed)
+crates/aoa-migrate/assets/eslint/node_modules/

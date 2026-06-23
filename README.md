@@ -1,95 +1,112 @@
 # AOA Toolkit
 
-Measure whether a repository's structure actually helps coding agents, on real agent traces, before changing a line of it.
+Measure how well a repository actually works for AI coding agents, by running agents against it and reading what they do.
 
-Existing "Agent Readiness" graders score a repo by checking which files exist: is there an `AGENTS.md`, a `CODEOWNERS`, a test directory. None of them runs an agent. The AOA Toolkit runs the agent against contamination-free tasks, parses the resulting tool-call stream into a typed trace, and computes four locality metrics from it, each one conditioned on whether the agent actually solved a held-out version of the task. A checklist score that doesn't predict held-out success is the thing this instrument is built to expose.
+Most "is my repo ready for AI agents?" tools check boxes: is there an `AGENTS.md`, a `CODEOWNERS`, a test directory. None of them runs an agent, so none can tell you whether the structure they reward actually helps. The AOA Toolkit runs a coding agent against real tasks drawn from your repository's own history, records every search, file read, and edit the agent makes, and scores how quickly it found the right code and how cleanly it changed it. The numbers come from what the agent did, not from which files happen to exist.
 
-"AOA" is Agent-Oriented Architecture: a repository and workflow design style for codebases edited by both humans and coding agents, where the correct place to read, the safe place to write, and the correct way to verify are made explicit to the agent. The full evidence base and pattern catalog live in [`report.md`](./report.md); the scope decisions and risk register live in [`prd_aoa_toolkit.md`](./prd_aoa_toolkit.md) and [`premortem_aoa_toolkit.md`](./premortem_aoa_toolkit.md).
+Agent-Oriented Architecture (AOA) is the underlying idea: a way of organizing a codebase so the correct place to read, the safe place to write, and the correct way to verify are obvious to an automated agent, not just to a human who already knows the project. This toolkit is the instrument for measuring whether a given repository has those properties, and for changing the repository only where the measurement says it will help.
 
-## The instrument ships before the transforms
+## What you get
 
-The toolkit is split into two waves by a single gate, because it tests rather than assumes the central claim that repository structure is the right layer to improve agent behavior.
+Point the toolkit at a repository and a recorded agent run, and it answers four questions, each one about real agent behavior rather than file presence.
 
-**Wave 0 is read-only and ships first.** `observe` installs trace telemetry without touching a tracked file. `audit` reads the repo and returns a ranked, tiered punch-list with a measured cost per item. `lint-context` enforces a token budget over the transitive closure of context files. `eval` post-processes an agent run into the four metrics. Nothing here writes to the repository under test, and Wave 0 is independently useful: point it at a repo that scores well on a static grader and the score fails to predict held-out success.
+- **Did the agent find the right code fast?** Retrieval locality counts how many tool calls it took to reach the first relevant file, plus recall and ranking quality against the known-correct set of files for the task.
+- **Did it change only what it needed to?** Edit locality compares the size of the agent's patch against the smallest and largest accepted human solutions, so an over-broad change stands out.
+- **Could it discover the rules before writing?** Invariant discoverability checks whether the constraints a task depends on were reachable before the agent started editing.
+- **How much could it have broken?** Mutation surface counts the files an edit could reach through the symbol graph, bounding the blast radius of a change.
 
-**Wave 1 transforms the repo, and only runs once R0 says it should.** `aoa falsify` is itself an eval on the Wave-0 instrument. It compares the held-out improvement from migrating the repo (fixed harness) against the improvement from swapping the harness (fixed repo), across at least five calibrated repos, and emits one of three verdicts: `proceed`, `pivot`, or `inconclusive`. A `proceed` requires repo-delta to beat harness-delta on a strict majority, stable across repeated runs, invariant across scoring conventions, and backed by a power analysis. On a tie the default is `pivot`: the repo layer has the highest reversal cost, so ambiguity favors not touching it. If the verdict reads `pivot`, the migrator never ships and the product is the Wave-0 instrument.
+Every one of these is scored against a hidden version of the task the agent never saw, not against the visible tests. An agent that aces the visible tests while failing the hidden ones has gamed the metric, and the gap between the two is the toolkit's primary signal.
 
-That gate is the whole architecture. Everything in Wave 0 exists to make R0 a measurement rather than an opinion, and the [R0 runbook](./docs/r0_runbook.md) documents how to run it as a codeprobe experiment with paired config arms.
-
-## Every metric reduces to an ordered span stream
-
-The atomic unit is a trace: an ordered, gold-anchored stream of tool-call events emitted as OpenTelemetry-style spans. The schema defines eight span types, covering the agent's whole loop from search to abstain: `retrieval.search`, `file.read`, `symbol.lookup`, `write.attempt`, `write.blocked`, `test.run`, `gateway.invoke`, and `abstain`. A trace either validates against the published schema with correctly ordered spans or it fails loudly; reconstructed spans inferred from logs are tagged and excluded from the metrics that need native instrumentation.
+## Quickstart
 
 ```bash
-aoa eval validate-trace path/to/trace.json   # prints per-type span counts, exits non-zero if invalid
+cargo build --workspace
+
+# 1. Install trace logging. Writes nothing the agent can see beyond an ignored .aoa/ dir.
+aoa observe
+
+# 2. Read the repo and print a ranked, tiered punch-list with a measured cost per item.
+aoa audit
+
+# 3. Check that your agent context files (AGENTS.md and what they reference) fit a token budget.
+aoa lint-context --changed AGENTS.md
+
+# 4. Turn a recorded agent run into per-task metrics.
+aoa eval run --codeprobe-run path/to/run --tasks path/to/tasks
 ```
 
-## Four metrics, all conditioned on held-out success
+`audit` and `lint-context` are read-only. Nothing in the quickstart modifies a tracked file in the repository under test.
 
-`aoa eval run` turns a codeprobe run into per-task metric records. The four metrics are deliberately the surface signature of good agent behavior, and each is reported against the held-out outcome rather than the visible test pass, because visible-pass-plus-small-patch is also the signature of reward hacking.
+## Measure first, change later
 
-- **Retrieval locality:** tool-calls-to-first-relevant-artifact, Recall@k, and MRR, with the gold set anchored to base-repo symbols through `transform-map.json`.
-- **Edit locality:** patch inflation measured against both the intersection floor and the union ceiling of accepted solutions, so an underdetermined ranking stays visible instead of being hidden behind a single number.
-- **Invariant discoverability:** whether the agent had pre-write access to the task's invariants.
-- **Mutation surface:** writable files reachable in the SCIP graph at depth ≤ k, with `k` and `over_approximation: true` emitted in the record rather than pretending the undecidable slice was computed exactly.
+The toolkit is split so that the read-only measurement ships and stands on its own, and the parts that rewrite your repository stay behind a gate until the measurement proves they earn their place.
 
-The primary eval is the reward-hacking gap (`aoa eval compare baseline migrated`): the spread between visible and held-out success. A migration earns the label "good" only if it holds or reduces that gap while improving held-out pass rate. Two guards protect the gap itself. `aoa eval r0b` runs a leakage canary over a baseline and a migrated run and fails when held-out pass rate rises without the visible rate moving; toolkit-side synthesis of held-out tests from visible specs is forbidden. And `aoa gap` surfaces the construct-validity determination from R9c: no metric may gate a feature until a correlation report ties it to an external outcome, so until that report exists the metric is advisory, not gating.
+The read-only side is `observe`, `audit`, `lint-context`, and `eval`. It installs telemetry, reports what an agent struggles with, enforces a context budget, and computes the metrics. You can run all of it against any repository without it touching a single tracked file.
 
-## codeprobe supplies the tasks and runs the agent
+The repository-changing side is `migrate`, which applies code-layer cleanups (dead-import removal and similar structural fixes) as reversible, one-commit-per-fix changes, dry-run by default. Before that side is worth trusting on a given codebase, `aoa falsify` runs the deciding experiment: it compares how much a repository migration improves agent success against how much simply swapping the agent's harness improves it, across several repositories. If swapping the harness helps as much as migrating the repo, then the repo was the wrong thing to change, and the toolkit says so. The verdict is one of `proceed`, `pivot`, or `inconclusive`, and a tie defaults to leaving the repository alone, because the repository is the most expensive layer to get wrong.
 
-The toolkit is the process layer on top of [codeprobe](https://github.com/sjarmak/codeprobe), a separate Python project that does the work the trace layer builds on: it mines contamination-free tasks from a repository's own history (which is what gives the held-out leg its integrity by construction), orchestrates the agent through `claude -p --output-format stream-json --verbose`, scores outcomes with a consensus-plus-AST oracle, and runs the baseline-versus-config experiments that the R0 comparison consumes. AOA reads codeprobe's per-trial transcript, parses it into a native eight-span trace, and computes the metrics, the budget gate, and the falsification verdict that codeprobe alone does not produce.
+That gate is the point of the whole design. The read-only instrument exists, in part, to make the change-the-repo decision a measurement instead of an opinion.
 
-`aoa-bench` is the loader that turns codeprobe task directories into AOA task inputs. `aoa eval experiment` reads a manifest of paired repo-arm and harness-arm run directories and builds the `FalsifyInput` JSON that `aoa falsify` consumes.
+## How a run is scored
+
+The unit of measurement is a trace: the ordered stream of actions an agent took, captured as structured spans covering its whole loop, from searching and reading to writing, running tests, and abstaining. A trace either validates against the published schema with its spans in the right order, or it fails loudly.
+
+```bash
+aoa eval validate-trace path/to/trace.json   # prints span counts per type; non-zero exit if invalid
+aoa eval compare baseline.json migrated.json # prints the visible-vs-hidden success gap delta
+```
+
+The toolkit does not run the agent itself. That job belongs to [codeprobe](https://github.com/sjarmak/codeprobe), a companion project that mines contamination-free tasks from a repository's history (which is what makes the hidden test set genuinely hidden), drives the agent, and scores the outcomes. The AOA Toolkit reads codeprobe's transcript of each run, reconstructs the trace, and computes everything above. codeprobe supplies the tasks and the runs; this toolkit supplies the trace-level metrics and the gate.
 
 ## Commands
 
 ```text
 aoa observe                       Install zero-write trace telemetry under .aoa/
 aoa audit [--fail-on tier1]       Ranked, tiered, read-only audit punch-list
-aoa lint-context [--changed ...]  Token-budget closure check over context files
+aoa lint-context [--changed ...]  Token-budget check over your agent context files
 aoa eval validate-trace <file>    Validate a trace; print span counts per type
-aoa eval run --codeprobe-run DIR  Post-process a codeprobe run into metric records
-aoa eval compare BASE MIGRATED    Print the reward-hacking gap delta
-aoa eval r0b --baseline --migrated --tasks    Held-out integrity leakage canary
-aoa eval experiment --manifest --tasks        Build the R0 falsification input
-aoa gap                           Which metrics may gate a decision vs. advisory-only
-aoa falsify --repos INPUT         Run the wrong-layer gate; write falsification.json
-aoa migrate [--apply|--rollback]  Code-layer repo migration (dry-run by default)
-aoa policy compile --forge NAME   Compile the enforcement plane (fails loud on unknown forge)
+aoa eval run --codeprobe-run DIR  Turn a codeprobe run into per-task metric records
+aoa eval compare BASE MIGRATED    Print the visible-vs-hidden success gap delta
+aoa gap                           Which metrics are trustworthy enough to gate a decision
+aoa falsify --repos INPUT         Run the deciding experiment; write falsification.json
+aoa migrate [--apply|--rollback]  Code-layer repo cleanup (dry-run by default)
+aoa policy compile --forge NAME   Compile enforcement config for a CI forge
 ```
 
-Every subcommand that produces a report takes `--json` for the structured rendering an agent can act on, alongside the colorized human output. `aoa migrate` is a dry-run preview unless given `--apply`, applies each fix as one revertable commit, and undoes the recorded manifest with `--rollback`.
+Every reporting command takes `--json` for a structured rendering alongside the human-readable output. `aoa migrate` previews diffs and writes nothing unless given `--apply`, then applies each fix as its own revertable commit and undoes the last run with `--rollback`. Two further `eval` subcommands, `r0b` and `experiment`, build the inputs the falsification gate consumes; see `docs/r0_runbook.md`.
 
-## Build
+## Install
 
 A Rust workspace, edition 2021, pinned to Rust 1.94, MIT-licensed.
 
 ```bash
 cargo build --workspace
-cargo test  --workspace   # 312 tests
+cargo test  --workspace
 ```
+
+The TypeScript migration adapter runs a pinned, hermetic ESLint. That install is not committed; regenerate it once with `npm ci` in `crates/aoa-migrate/assets/eslint/`, and the adapter (and its tests) will find it. Without it, the adapter fails with a clear message rather than producing an empty result.
 
 ## Layout
 
-The workspace is split so each crate owns one reason to change.
+The workspace is split so each crate owns one responsibility.
 
 | Crate | Responsibility |
 |-------|----------------|
-| `aoa` | The CLI: wires each subcommand to its library crate, with fail-loud forge adapters and dual-register output. |
-| `aoa-trace` | The eight-span trace substrate and its schema. |
-| `aoa-codeprobe-shim` | Parses a codeprobe `stream-json` transcript into a native trace, preserving tool-call order and targets. |
-| `aoa-bench` | Loads codeprobe-mined task directories into AOA task inputs. |
-| `aoa-metrics` | The four metrics and the `SymbolGraph` they read. |
-| `aoa-scip-graph` | Indexes a repo into a `SymbolGraph`: SCIP (high-confidence), AST (best-effort), or degraded, with R15 confidence tiering. |
-| `aoa-budget` | The context-budget gate: transitive closure, dual tokenizer, ceiling enforcement. |
-| `aoa-lint` | Config-smell detectors mapped to the 2606.15828 taxonomy, composed with the budget closure. |
-| `aoa-gap` | The reward-hacking gap, the R0b held-out canary, and R9c construct-validity gating. |
-| `aoa-falsify` | The R0 wrong-layer gate with its robustness, abstention, and monitoring hardening. |
-| `aoa-audit` | Zero-write telemetry install and the read-only tiered audit. |
-| `aoa-migrate` | Reproducible, oracle-blind, code-layer migrations with dry-run preview and rollback. |
+| `aoa` | The CLI: wires each subcommand to its library crate, with human and JSON output. |
+| `aoa-trace` | The span-based trace format and its schema. |
+| `aoa-codeprobe-shim` | Parses a codeprobe transcript into a trace, preserving tool-call order and targets. |
+| `aoa-bench` | Loads codeprobe-mined task directories into toolkit task inputs. |
+| `aoa-metrics` | The four metrics and the symbol graph they read. |
+| `aoa-scip-graph` | Indexes a repo into a symbol graph (SCIP, with an AST fallback) and labels its confidence. |
+| `aoa-budget` | The context-budget check: transitive closure of context files, real tokenizer, ceiling. |
+| `aoa-lint` | Config-file smell detectors composed with the budget closure. |
+| `aoa-gap` | The visible-vs-hidden success gap, its leakage guard, and the metric-trust determination. |
+| `aoa-falsify` | The deciding repo-vs-harness experiment and its robustness checks. |
+| `aoa-audit` | The zero-write telemetry install and the read-only audit. |
+| `aoa-migrate` | Reversible, code-layer migrations with dry-run preview and rollback. |
 
 ## Status
 
-Wave 0 is built and tested. The R0 machinery (the `experiment` builder, `falsify`, and the runbook) is in place; running it at scale on five-plus calibrated repos with live, non-deterministic agent runs is the next milestone, and `inconclusive` is an expected outcome there rather than a defect. Issue tracking runs on [beads](https://github.com/gastownhall/beads); `bd ready` shows what is open.
+The read-only instrument is built and tested. The machinery for the deciding experiment is in place; running it at scale across several real repositories with live agents is the next milestone, and an `inconclusive` verdict is an expected result there, not a defect. This is early software at version 0.1.0; the metric definitions and the gate are the parts most likely to move as that experiment runs.
 </content>
 </invoke>

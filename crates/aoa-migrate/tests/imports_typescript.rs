@@ -1,13 +1,16 @@
 //! End-to-end acceptance for the TypeScript/JS [`DeadImportFix`] adapter against
 //! the vendored, pinned ESLint toolchain.
 //!
-//! These tests need `node` on `PATH` (the vendored `node_modules` supplies ESLint
-//! itself). As with the Python suite, a missing `node` skips with a printed notice
-//! rather than failing — but a skip is not a vacuous pass: the assertions would
-//! still catch a silent empty plan if the adapter were broken. CI must install
-//! `node` so these execute.
+//! These tests need `node` on `PATH` and the vendored ESLint installed. The
+//! `node_modules` tree is gitignored and regenerated with `npm ci` in
+//! `assets/eslint/`, so a fresh clone has `node` but no ESLint until that runs.
+//! Either prerequisite missing skips with a printed notice rather than failing,
+//! but a skip is not a vacuous pass: the assertions would still catch a silent
+//! empty plan if the adapter were broken. CI must install `node` and run
+//! `npm ci` so these execute.
 
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 
 use aoa_migrate::{apply, rollback, ChangeAction, DeadImportFix, MigrateError, MigrationPlan};
@@ -24,10 +27,23 @@ fn node_available() -> bool {
         .unwrap_or(false)
 }
 
+fn vendored_eslint_available() -> bool {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("assets/eslint/node_modules/eslint/bin/eslint.js")
+        .is_file()
+}
+
 macro_rules! require_node {
     ($name:literal) => {
         if !node_available() {
             eprintln!("SKIP {}: `node` not on PATH", $name);
+            return;
+        }
+        if !vendored_eslint_available() {
+            eprintln!(
+                "SKIP {}: vendored ESLint absent; run `npm ci` in crates/aoa-migrate/assets/eslint",
+                $name
+            );
             return;
         }
     };
