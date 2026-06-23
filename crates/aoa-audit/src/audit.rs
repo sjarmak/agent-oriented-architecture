@@ -7,7 +7,7 @@ use aoa_trace::Trace;
 
 use crate::error::AuditError;
 use crate::planes::missing_planes;
-use crate::punch::{rank, MeasuredCost, PunchItem};
+use crate::punch::{rank, FindingKind, MeasuredCost, PunchItem};
 use crate::report::AuditReport;
 use crate::structure::structure_items;
 use crate::tier::Tier;
@@ -118,6 +118,7 @@ fn context_budget_item(repo: &Path, cfg: &AuditConfig) -> Result<Option<PunchIte
             "context closure from {} exceeds the token ceiling",
             root_rel.display()
         ),
+        kind: FindingKind::ContextBudget,
         tier: Tier::Tier2,
         measured_cost: MeasuredCost::new(overflow as u64, "tokens over ceiling"),
         plane: None,
@@ -144,6 +145,7 @@ fn mutation_surface_item(cfg: &AuditConfig) -> PunchItem {
 
     PunchItem {
         title: format!("writable mutation surface within depth {}", cfg.k),
+        kind: FindingKind::MutationSurface,
         tier: Tier::Tier2,
         measured_cost: MeasuredCost::new(
             surface.writable_reachable as u64,
@@ -160,6 +162,7 @@ fn plane_items(repo: &Path) -> Vec<PunchItem> {
         .into_iter()
         .map(|plane| PunchItem {
             title: format!("missing enforcement plane: {}", plane.label()),
+            kind: FindingKind::MissingPlane,
             tier: plane.tier(),
             measured_cost: MeasuredCost::new(1, "missing plane"),
             plane: Some(plane),

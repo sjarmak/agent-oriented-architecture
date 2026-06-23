@@ -25,7 +25,7 @@ mod tier;
 pub use audit::{audit, AuditConfig};
 pub use error::AuditError;
 pub use observe::{observe, write_trace, ObserveOutcome};
-pub use punch::{rank, MeasuredCost, PunchItem};
+pub use punch::{rank, FindingKind, MeasuredCost, PunchItem};
 pub use report::{exit_code, AuditReport};
 pub use structure::navigability_sites;
 pub use tier::{EnforcementPlane, Tier};

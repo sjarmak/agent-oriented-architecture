@@ -11,6 +11,7 @@ mod migrate;
 mod observe;
 mod policy;
 mod r0b;
+mod recommend;
 
 pub use audit::run as run_audit;
 pub use eval::run as run_eval;
@@ -20,3 +21,4 @@ pub use lint::run as run_lint;
 pub use migrate::run as run_migrate;
 pub use observe::run as run_observe;
 pub use policy::run as run_policy;
+pub use recommend::run as run_recommend;

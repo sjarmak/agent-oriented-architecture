@@ -36,6 +36,10 @@ pub enum Command {
     /// metrics may gate a decision (Gating) and which are advisory-only.
     Gap(GapArgs),
 
+    /// Join audit findings, construct-validity mode, and migration availability
+    /// into per-finding recommendations (actionable-now vs advisory-only).
+    Recommend(RecommendArgs),
+
     /// Run the wrong-layer falsification gate and write `falsification.json`.
     Falsify(FalsifyArgs),
 
@@ -244,6 +248,17 @@ pub struct ExperimentArgs {
 
 #[derive(Debug, Args)]
 pub struct GapArgs {
+    /// Emit the structured JSON rendering instead of human text.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct RecommendArgs {
+    /// Repository root to audit and recommend over. Defaults to the cwd.
+    #[arg(long, default_value = ".")]
+    pub repo: PathBuf,
+
     /// Emit the structured JSON rendering instead of human text.
     #[arg(long)]
     pub json: bool,

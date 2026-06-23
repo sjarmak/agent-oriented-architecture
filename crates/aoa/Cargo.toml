@@ -17,6 +17,7 @@ aoa-lint = { path = "../aoa-lint" }
 aoa-gap = { path = "../aoa-gap" }
 aoa-audit = { path = "../aoa-audit" }
 aoa-migrate = { path = "../aoa-migrate" }
+aoa-recommend = { path = "../aoa-recommend" }
 aoa-falsify = { path = "../aoa-falsify" }
 aoa-metrics = { path = "../aoa-metrics" }
 aoa-bench = { path = "../aoa-bench" }

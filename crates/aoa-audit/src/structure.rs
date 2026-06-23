@@ -17,7 +17,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::AuditError;
-use crate::punch::{MeasuredCost, PunchItem};
+use crate::punch::{FindingKind, MeasuredCost, PunchItem};
 use crate::tier::Tier;
 
 /// Largest single source file read while counting lines. A hand-written module
@@ -173,6 +173,7 @@ fn navigability_anchor_item(repo: &Path) -> Result<Option<PunchItem>, AuditError
 
     Ok(Some(PunchItem {
         title: "package roots without a navigability anchor (README)".to_string(),
+        kind: FindingKind::NavigabilityAnchor,
         tier: Tier::Tier3,
         measured_cost: MeasuredCost::new(missing as u64, "package roots"),
         plane: None,
@@ -213,6 +214,7 @@ fn module_size_outlier_item(repo: &Path, k: f64) -> Result<Option<PunchItem>, Au
 
     Ok(Some(PunchItem {
         title: format!("source files exceeding {k:.1}x the repo median size"),
+        kind: FindingKind::ModuleSizeOutlier,
         tier: Tier::Tier3,
         measured_cost: MeasuredCost::new(outliers as u64, "outlier files"),
         plane: None,
@@ -257,6 +259,7 @@ fn unused_import_proxy_item(repo: &Path) -> Result<Option<PunchItem>, AuditError
 
     Ok(Some(PunchItem {
         title: "likely-unused imports (syntactic proxy)".to_string(),
+        kind: FindingKind::UnusedImportProxy,
         tier: Tier::Tier3,
         measured_cost: MeasuredCost::new(count, "imports"),
         plane: None,

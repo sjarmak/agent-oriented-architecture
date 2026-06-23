@@ -1,0 +1,16 @@
+[package]
+name = "aoa-recommend"
+description = "The recommend pillar: joins audit findings, construct-validity gating mode, and migration availability into per-finding operator recommendations"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aoa-audit = { path = "../aoa-audit" }
+aoa-gap = { path = "../aoa-gap" }
+aoa-migrate = { path = "../aoa-migrate" }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

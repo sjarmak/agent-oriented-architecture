@@ -172,12 +172,14 @@ fn every_item_has_a_tier() {
 fn exit_code_table() {
     let tier1_item = aoa_audit::PunchItem {
         title: "tier1 gap".into(),
+        kind: aoa_audit::FindingKind::MissingPlane,
         tier: Tier::Tier1,
         measured_cost: aoa_audit::MeasuredCost::new(1, "missing plane"),
         plane: Some(aoa_audit::EnforcementPlane::RuntimeHook),
     };
     let tier2_item = aoa_audit::PunchItem {
         title: "tier2 gap".into(),
+        kind: aoa_audit::FindingKind::MissingPlane,
         tier: Tier::Tier2,
         measured_cost: aoa_audit::MeasuredCost::new(1, "missing plane"),
         plane: Some(aoa_audit::EnforcementPlane::PreCommit),
