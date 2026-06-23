@@ -16,6 +16,11 @@ target/
 .prd-build/
 .mcp.json
 
+# Internal planning docs (not public)
+prd_aoa_toolkit.md
+premortem_aoa_toolkit.md
+report.md
+
 # Vendored ESLint install; regenerate with `npm ci` in
 # crates/aoa-migrate/assets/eslint (package-lock.json is committed)
 crates/aoa-migrate/assets/eslint/node_modules/
