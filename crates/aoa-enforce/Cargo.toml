@@ -1,0 +1,11 @@
+[package]
+name = "aoa-enforce"
+description = "Operator-policy enforcement primitives (reproduction-before-mutation gate, R7) for the AOA Toolkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aoa-trace = { path = "../aoa-trace" }
+serde_json = { workspace = true }
