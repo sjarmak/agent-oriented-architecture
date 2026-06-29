@@ -325,10 +325,28 @@ pub struct PolicyArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum PolicyCommand {
-    /// Compile the enforcement plane for a forge. Fails loudly on an unknown forge.
+    /// Compile `aoa-policy.yaml` into the three enforcement planes (R5): the
+    /// runtime hooks, the pre-commit guard, and the CI workflow + CODEOWNERS.
+    /// Deterministic and idempotent — a re-run is a no-op diff.
     Compile {
-        /// The forge to compile enforcement for (e.g. `github-actions`).
-        #[arg(long)]
+        /// Repository root holding `aoa-policy.yaml`. Defaults to the cwd.
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+
+        /// The forge to compile the CI plane for. Fails loudly on an unknown forge.
+        #[arg(long, default_value = "github-actions")]
         forge: String,
+    },
+
+    /// Pre-commit plane entry point: exit non-zero if any of the given staged
+    /// files matches a protected path in `aoa-policy.yaml`.
+    GuardStaged {
+        /// Repository root holding `aoa-policy.yaml`. Defaults to the cwd.
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+
+        /// Staged files to check (supplied by pre-commit).
+        #[arg(value_name = "FILE")]
+        files: Vec<PathBuf>,
     },
 }

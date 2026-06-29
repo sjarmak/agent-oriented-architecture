@@ -24,7 +24,8 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use aoa_codeprobe_shim::bash_runs_tests;
-use aoa_enforce::{blocked_span, reproduction_gate, Decision};
+use aoa_enforce::{blocked_span, reproduction_gate, BlockReason, Decision};
+use aoa_policy::Policy;
 use aoa_trace::{Span, SpanSource, SpanType};
 
 use crate::cli::{EnforceArgs, EnforceCommand};
@@ -75,25 +76,73 @@ fn run_record(event: &HookEvent) -> Result<i32> {
     Ok(0)
 }
 
-/// PreToolUse: block the pending write unless reproduction precedes it.
+/// PreToolUse: block the pending write when it targets a policy-protected path
+/// (R5) or when no reproduction precedes it (R7). Protected-path takes
+/// precedence — it is unconditional, while the reproduction gate is skippable by
+/// policy.
 fn run_check(event: &HookEvent) -> Result<i32> {
     if !MUTATION_TOOLS.contains(&event.tool_name.as_str()) {
         // Not a guarded mutation; nothing to gate.
         return Ok(0);
     }
 
+    let base = resolve_base(event)?;
+    let policy = load_policy(&base)?;
+
+    // R5: protected paths are forbidden outright, regardless of reproduction.
+    if let (Some(policy), Some(target)) = (&policy, write_target(event)) {
+        if policy.compile()?.is_protected(target) {
+            return block(event, BlockReason::ProtectedPath(target.to_string()));
+        }
+    }
+
+    // R7: reproduction gate, on unless the policy explicitly disables it.
+    let reproduction_required = policy.as_ref().is_none_or(|p| p.reproduction_required);
+    if !reproduction_required {
+        return Ok(0);
+    }
+
     let log = live_log_path(event)?;
     let prior = read_spans(&log)?;
-
     match reproduction_gate(&prior) {
         Decision::Allow => Ok(0),
-        Decision::Block(reason) => {
-            append_span_value(&log, blocked_span(prior.len() as u64, reason))?;
-            eprintln!("aoa: blocked {} — {reason}", event.tool_name,);
-            // Exit 2 is the Claude Code PreToolUse signal that denies the call
-            // and feeds stderr back to the agent.
-            Ok(2)
+        Decision::Block(reason) => block(event, reason),
+    }
+}
+
+/// Emit the `write.blocked` span, surface the reason on stderr, and return the
+/// exit code (2) that signals Claude Code to deny the pending tool call.
+fn block(event: &HookEvent, reason: BlockReason) -> Result<i32> {
+    let log = live_log_path(event)?;
+    let next_seq = read_spans(&log)?.len() as u64;
+    let message = reason.to_string();
+    append_span_value(&log, blocked_span(next_seq, reason))?;
+    eprintln!("aoa: blocked {} — {message}", event.tool_name);
+    Ok(2)
+}
+
+/// The repo-relative path a write event targets, if any (`file_path` for the
+/// edit tools, `notebook_path` for notebooks).
+fn write_target(event: &HookEvent) -> Option<&str> {
+    event
+        .tool_input
+        .get("file_path")
+        .or_else(|| event.tool_input.get("notebook_path"))
+        .and_then(Value::as_str)
+}
+
+/// Load `<base>/aoa-policy.yaml` if it exists, failing loud on a malformed file
+/// — a broken policy must not silently disable enforcement.
+fn load_policy(base: &Path) -> Result<Option<Policy>> {
+    let path = base.join("aoa-policy.yaml");
+    match std::fs::read_to_string(&path) {
+        Ok(raw) => {
+            Ok(Some(Policy::from_yaml(&raw).with_context(|| {
+                format!("invalid policy at {}", path.display())
+            })?))
         }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(anyhow!(err)).with_context(|| format!("failed to read {}", path.display())),
     }
 }
 
@@ -108,17 +157,23 @@ fn recorded_span_type(event: &HookEvent) -> Option<SpanType> {
     bash_runs_tests(command).then_some(SpanType::TestRun)
 }
 
+/// The repo root the hook fired from: the payload `cwd`, falling back to the
+/// process working directory. Both the live log and `aoa-policy.yaml` are rooted
+/// here.
+fn resolve_base(event: &HookEvent) -> Result<PathBuf> {
+    if event.cwd.is_empty() {
+        std::env::current_dir().context("failed to resolve current directory")
+    } else {
+        Ok(PathBuf::from(&event.cwd))
+    }
+}
+
 /// Resolve the append-only live-log path for this session, under the ignored
 /// `.aoa/traces/` tree. The session id is sanitized to a bare filename token so
 /// a hostile payload cannot escape the traces directory.
 fn live_log_path(event: &HookEvent) -> Result<PathBuf> {
-    let base = if event.cwd.is_empty() {
-        std::env::current_dir().context("failed to resolve current directory for the live log")?
-    } else {
-        PathBuf::from(&event.cwd)
-    };
     let session = sanitize_session(&event.session_id);
-    Ok(base
+    Ok(resolve_base(event)?
         .join(".aoa")
         .join("traces")
         .join(format!("live-{session}.jsonl")))
@@ -220,6 +275,37 @@ pub(crate) fn merge_enforce_hooks(mut settings: Value) -> Value {
         "aoa enforce check",
     );
     settings
+}
+
+/// Merge the enforcement hooks into `<repo>/.claude/settings.json`, creating the
+/// file and its parent if absent. Idempotent: an existing file is parsed,
+/// merged, and rewritten, so a re-run that changes nothing is byte-stable.
+/// Shared by `observe --enforce` and `policy compile`.
+pub(crate) fn install_enforce_hooks(repo: &Path) -> Result<PathBuf> {
+    let settings_path = repo.join(".claude").join("settings.json");
+
+    let existing = match std::fs::read_to_string(&settings_path) {
+        Ok(raw) => serde_json::from_str::<Value>(&raw)
+            .with_context(|| format!("{} is not valid JSON", settings_path.display()))?,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Value::Object(Default::default()),
+        Err(err) => {
+            return Err(anyhow!(err))
+                .with_context(|| format!("failed to read {}", settings_path.display()))
+        }
+    };
+
+    let merged = merge_enforce_hooks(existing);
+
+    if let Some(parent) = settings_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let rendered =
+        serde_json::to_string_pretty(&merged).context("failed to render settings.json")?;
+    std::fs::write(&settings_path, format!("{rendered}\n"))
+        .with_context(|| format!("failed to write {}", settings_path.display()))?;
+
+    Ok(settings_path)
 }
 
 /// Ensure `hooks[event]` contains a matcher group running `command`. Idempotent:

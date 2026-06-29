@@ -38,10 +38,13 @@ impl Decision {
 
 /// Why a pending action was blocked. One variant per policy; extended as the
 /// R5/R6 planes land (protected paths, generated artifacts).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockReason {
     /// R7: a write was attempted before any reproduction (`test.run`) span.
     ReproductionRequired,
+    /// R5: a write targeted a path the policy declares protected. Carries the
+    /// offending repo-relative path for the diagnostic.
+    ProtectedPath(String),
 }
 
 impl BlockReason {
@@ -50,6 +53,7 @@ impl BlockReason {
     pub fn policy_key(&self) -> &'static str {
         match self {
             BlockReason::ReproductionRequired => "reproduction_before_mutation",
+            BlockReason::ProtectedPath(_) => "protected_path",
         }
     }
 }
@@ -60,6 +64,9 @@ impl fmt::Display for BlockReason {
             BlockReason::ReproductionRequired => f.write_str(
                 "reproduction-before-mutation: a test.run span must precede the first write.attempt",
             ),
+            BlockReason::ProtectedPath(path) => {
+                write!(f, "protected path: policy forbids writing '{path}'")
+            }
         }
     }
 }

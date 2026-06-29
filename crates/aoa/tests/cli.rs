@@ -557,10 +557,31 @@ fn policy_compile_unknown_forge_fails_loudly() {
 
 #[test]
 fn policy_compile_known_forge_succeeds() {
+    let repo = TempDir::new().unwrap();
+    std::fs::write(repo.path().join("aoa-policy.yaml"), "protected_paths: []\n").unwrap();
     aoa()
-        .args(["policy", "compile", "--forge", "github-actions"])
+        .args([
+            "policy",
+            "compile",
+            "--repo",
+            repo.path().to_str().unwrap(),
+            "--forge",
+            "github-actions",
+        ])
         .assert()
         .success();
+}
+
+// A known forge but no aoa-policy.yaml fails loud — compiling from a missing
+// policy is a user error, not a silent empty default.
+#[test]
+fn policy_compile_without_policy_file_fails_loud() {
+    let repo = TempDir::new().unwrap();
+    aoa()
+        .args(["policy", "compile", "--repo", repo.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no policy file"));
 }
 
 fn init_git_repo(path: &Path) {
@@ -1067,6 +1088,134 @@ fn enforce_allows_write_after_a_test_run_is_recorded() {
     let contents = std::fs::read_to_string(&log).expect("live log written");
     assert!(contents.contains("test.run"));
     assert!(contents.contains("write.blocked"));
+}
+
+#[test]
+fn enforce_check_blocks_protected_path_even_without_reproduction() {
+    let repo = TempDir::new().unwrap();
+    std::fs::write(
+        repo.path().join("aoa-policy.yaml"),
+        "protected_paths: [\".github/**\"]\nreproduction_required: false\n",
+    )
+    .unwrap();
+
+    let mut input = serde_json::Map::new();
+    input.insert(
+        "file_path".into(),
+        Value::String(".github/workflows/ci.yml".into()),
+    );
+    let payload = serde_json::to_string(&serde_json::json!({
+        "session_id": "it-prot",
+        "tool_name": "Write",
+        "tool_input": input,
+        "cwd": repo.path().to_str().unwrap(),
+    }))
+    .unwrap();
+
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(payload)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("protected path"));
+}
+
+#[test]
+fn enforce_reproduction_toggle_off_allows_unprotected_write() {
+    let repo = TempDir::new().unwrap();
+    std::fs::write(
+        repo.path().join("aoa-policy.yaml"),
+        "protected_paths: [\".github/**\"]\nreproduction_required: false\n",
+    )
+    .unwrap();
+    // Unprotected path, gate disabled by policy -> allowed with no test.run.
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(hook_payload("Write", None, repo.path()))
+        .assert()
+        .success();
+}
+
+#[test]
+fn policy_compile_writes_three_planes_idempotently() {
+    let repo = TempDir::new().unwrap();
+    std::fs::write(
+        repo.path().join("aoa-policy.yaml"),
+        "protected_paths: [\"migrations/**\"]\ngateway_allowlist: [\"src/db/gateway.rs\"]\n",
+    )
+    .unwrap();
+
+    let compile = || {
+        aoa_stdin()
+            .args(["policy", "compile", "--repo", repo.path().to_str().unwrap()])
+            .assert()
+            .success();
+    };
+    compile();
+
+    let settings = repo.path().join(".claude/settings.json");
+    let precommit = repo.path().join(".pre-commit-config.yaml");
+    let workflow = repo.path().join(".github/workflows/aoa-policy.yml");
+    let owners = repo.path().join(".github/CODEOWNERS");
+    for p in [&settings, &precommit, &workflow, &owners] {
+        assert!(p.exists(), "missing plane artifact: {}", p.display());
+    }
+    let snapshot: Vec<String> = [&settings, &precommit, &workflow, &owners]
+        .iter()
+        .map(|p| std::fs::read_to_string(p).unwrap())
+        .collect();
+
+    // Re-compile: every artifact is byte-stable.
+    compile();
+    for (p, before) in [&settings, &precommit, &workflow, &owners]
+        .iter()
+        .zip(&snapshot)
+    {
+        assert_eq!(
+            &std::fs::read_to_string(p).unwrap(),
+            before,
+            "{} not idempotent",
+            p.display()
+        );
+    }
+    // CI workflow embeds the protected glob; CODEOWNERS lists the gateway.
+    assert!(snapshot[2].contains("'migrations/**'"));
+    assert!(snapshot[3].contains("src/db/gateway.rs @owners"));
+}
+
+#[test]
+fn policy_guard_staged_rejects_protected_file() {
+    let repo = TempDir::new().unwrap();
+    std::fs::write(
+        repo.path().join("aoa-policy.yaml"),
+        "protected_paths: [\"migrations/**\"]\n",
+    )
+    .unwrap();
+
+    // A protected staged file fails the pre-commit guard.
+    aoa_stdin()
+        .args([
+            "policy",
+            "guard-staged",
+            "--repo",
+            repo.path().to_str().unwrap(),
+        ])
+        .arg("migrations/0001.sql")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("protected path"));
+
+    // An ordinary file passes.
+    aoa_stdin()
+        .args([
+            "policy",
+            "guard-staged",
+            "--repo",
+            repo.path().to_str().unwrap(),
+        ])
+        .arg("src/lib.rs")
+        .assert()
+        .success();
 }
 
 #[test]

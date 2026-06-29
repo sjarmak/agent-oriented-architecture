@@ -1,0 +1,13 @@
+[package]
+name = "aoa-policy"
+description = "Single-source policy schema (aoa-policy.yaml) compiled to the three enforcement planes (R5) for the AOA Toolkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_yaml = "0.9.34"
+thiserror = { workspace = true }
+globset = "0.4.16"
