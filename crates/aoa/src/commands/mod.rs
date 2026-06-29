@@ -1,5 +1,6 @@
 mod audit;
 mod codeprobe;
+mod enforce;
 mod eval;
 mod eval_run;
 mod falsify;
@@ -14,6 +15,7 @@ mod r0b;
 mod recommend;
 
 pub use audit::run as run_audit;
+pub use enforce::run as run_enforce;
 pub use eval::run as run_eval;
 pub use falsify::run as run_falsify;
 pub use gap::run as run_gap;

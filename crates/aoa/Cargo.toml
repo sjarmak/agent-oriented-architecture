@@ -23,6 +23,7 @@ aoa-metrics = { path = "../aoa-metrics" }
 aoa-bench = { path = "../aoa-bench" }
 aoa-scip-graph = { path = "../aoa-scip-graph" }
 aoa-codeprobe-shim = { path = "../aoa-codeprobe-shim" }
+aoa-enforce = { path = "../aoa-enforce" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

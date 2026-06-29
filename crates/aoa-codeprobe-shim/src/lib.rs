@@ -52,4 +52,5 @@ mod mapping;
 mod parse;
 
 pub use error::ShimError;
+pub use mapping::bash_runs_tests;
 pub use parse::{parse_transcript, parse_transcript_file, ShimResult};

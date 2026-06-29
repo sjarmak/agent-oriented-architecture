@@ -76,6 +76,7 @@ dependencies = [
  "aoa-bench",
  "aoa-budget",
  "aoa-codeprobe-shim",
+ "aoa-enforce",
  "aoa-falsify",
  "aoa-gap",
  "aoa-lint",
@@ -136,6 +137,14 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "aoa-enforce"
+version = "0.1.0"
+dependencies = [
+ "aoa-trace",
+ "serde_json",
 ]
 
 [[package]]

@@ -22,6 +22,7 @@ fn main() -> ExitCode {
         Command::Recommend(args) => commands::run_recommend(args),
         Command::Falsify(args) => commands::run_falsify(args),
         Command::Policy(args) => commands::run_policy(args),
+        Command::Enforce(args) => commands::run_enforce(args),
     };
 
     match result {

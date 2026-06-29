@@ -45,6 +45,10 @@ pub enum Command {
 
     /// Enforcement-plane policy utilities (fail-loud forge adapters).
     Policy(PolicyArgs),
+
+    /// Runtime enforcement hook entry points (R7). Invoked by the Claude Code
+    /// hooks that `aoa observe --enforce` installs; reads the payload on stdin.
+    Enforce(EnforceArgs),
 }
 
 #[derive(Debug, Args)]
@@ -52,6 +56,27 @@ pub struct ObserveArgs {
     /// Repository root to install telemetry into. Defaults to the cwd.
     #[arg(long, default_value = ".")]
     pub repo: PathBuf,
+
+    /// Also install the runtime reproduction-before-mutation gate (R7) by
+    /// merging the enforcement hooks into `.claude/settings.json`. Without this
+    /// flag `observe` stays zero-write toward tracked files.
+    #[arg(long)]
+    pub enforce: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct EnforceArgs {
+    #[command(subcommand)]
+    pub command: EnforceCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum EnforceCommand {
+    /// PostToolUse: append a `test.run` span when a Bash command runs tests.
+    Record,
+
+    /// PreToolUse: block a pending write unless reproduction precedes it.
+    Check,
 }
 
 #[derive(Debug, Args)]

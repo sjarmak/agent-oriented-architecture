@@ -997,3 +997,125 @@ fn recommend_json_joins_findings_with_metric_and_fix() {
     assert!(plane["fix_id"].is_null(), "no migration for a plane gap");
     assert_eq!(plane["advisory_reason"], "no_fix_available");
 }
+
+// R7 keystone end-to-end: the reproduction-before-mutation gate blocks a write
+// when no test ran, and allows it once a reproduction span is recorded.
+//
+// These exercise stdin, so they use `assert_cmd::Command` (which has
+// `write_stdin`) rather than the `std::process::Command` helper above.
+fn aoa_stdin() -> assert_cmd::Command {
+    assert_cmd::Command::cargo_bin("aoa").expect("aoa binary builds")
+}
+
+fn hook_payload(tool: &str, command: Option<&str>, cwd: &Path) -> String {
+    let mut input = serde_json::Map::new();
+    match command {
+        Some(c) => {
+            input.insert("command".into(), Value::String(c.into()));
+        }
+        None => {
+            input.insert("file_path".into(), Value::String("src/lib.rs".into()));
+        }
+    }
+    serde_json::to_string(&serde_json::json!({
+        "session_id": "it-session",
+        "tool_name": tool,
+        "tool_input": input,
+        "cwd": cwd.to_str().unwrap(),
+    }))
+    .unwrap()
+}
+
+#[test]
+fn enforce_check_blocks_write_without_reproduction() {
+    let repo = TempDir::new().unwrap();
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(hook_payload("Write", None, repo.path()))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("blocked Write"));
+}
+
+#[test]
+fn enforce_allows_write_after_a_test_run_is_recorded() {
+    let repo = TempDir::new().unwrap();
+
+    // 1. Pre-reproduction write is blocked (exit 2).
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(hook_payload("Write", None, repo.path()))
+        .assert()
+        .code(2);
+
+    // 2. A test command records a test.run span (PostToolUse, never blocks).
+    aoa_stdin()
+        .args(["enforce", "record"])
+        .write_stdin(hook_payload("Bash", Some("cargo test --all"), repo.path()))
+        .assert()
+        .success();
+
+    // 3. The same write now passes the gate (exit 0).
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(hook_payload("Write", None, repo.path()))
+        .assert()
+        .success();
+
+    // The live log carries the test.run and the earlier write.blocked span.
+    let log = repo.path().join(".aoa/traces/live-it-session.jsonl");
+    let contents = std::fs::read_to_string(&log).expect("live log written");
+    assert!(contents.contains("test.run"));
+    assert!(contents.contains("write.blocked"));
+}
+
+#[test]
+fn enforce_ignores_non_mutation_tools() {
+    let repo = TempDir::new().unwrap();
+    // A Read is not a guarded mutation: allowed even with no reproduction.
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(hook_payload("Read", None, repo.path()))
+        .assert()
+        .success();
+}
+
+#[test]
+fn observe_enforce_writes_idempotent_settings_and_plain_observe_does_not() {
+    let repo = TempDir::new().unwrap();
+    let settings = repo.path().join(".claude/settings.json");
+
+    aoa_stdin()
+        .args([
+            "observe",
+            "--repo",
+            repo.path().to_str().unwrap(),
+            "--enforce",
+        ])
+        .assert()
+        .success();
+    let first = std::fs::read_to_string(&settings).expect("settings written");
+    assert!(first.contains("aoa enforce check"));
+    assert!(first.contains("aoa enforce record"));
+
+    // Re-running is byte-stable (idempotent merge).
+    aoa_stdin()
+        .args([
+            "observe",
+            "--repo",
+            repo.path().to_str().unwrap(),
+            "--enforce",
+        ])
+        .assert()
+        .success();
+    let second = std::fs::read_to_string(&settings).unwrap();
+    assert_eq!(first, second, "second observe --enforce must be a no-op");
+
+    // Plain observe (no --enforce) installs no hook.
+    let plain = TempDir::new().unwrap();
+    aoa_stdin()
+        .args(["observe", "--repo", plain.path().to_str().unwrap()])
+        .assert()
+        .success();
+    assert!(!plain.path().join(".claude/settings.json").exists());
+}

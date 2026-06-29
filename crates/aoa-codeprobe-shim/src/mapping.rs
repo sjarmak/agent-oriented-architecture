@@ -31,7 +31,11 @@ pub(crate) enum Mapping {
 /// `test.run`. Common runners across ecosystems are matched. Anything else
 /// stays a generic write/exec and is treated as an unmapped Bash command by the
 /// caller.
-pub(crate) fn bash_runs_tests(command: &str) -> bool {
+///
+/// Exposed as the canonical "is this a reproduction step?" detector so the live
+/// enforcement hook (R7) classifies a Bash command exactly as the offline shim
+/// does — one source of truth, no drift between the two paths.
+pub fn bash_runs_tests(command: &str) -> bool {
     const TEST_MARKERS: [&str; 7] = [
         "pytest",
         "test.sh",
