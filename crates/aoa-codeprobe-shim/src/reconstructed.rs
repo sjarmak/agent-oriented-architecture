@@ -37,7 +37,7 @@ use serde_json::{Map, Value};
 
 use crate::backend::{TraceBackend, CONTRACT_VERSION};
 use crate::error::ShimError;
-use crate::parse::ShimResult;
+use crate::parse::{ShimResult, MAX_SPANS};
 
 /// The reconstructed-provenance example backend (see module docs).
 #[derive(Debug, Clone, Copy, Default)]
@@ -93,6 +93,9 @@ pub(crate) fn parse_generic_log(raw: &str) -> Result<ShimResult, ShimError> {
 
         match map_verb(verb) {
             Some((span_type, target_key)) => {
+                if spans.len() >= MAX_SPANS {
+                    return Err(ShimError::TooManySpans { max: MAX_SPANS });
+                }
                 let mut attributes = Map::new();
                 if !target.is_empty() {
                     attributes.insert(target_key.to_string(), Value::String(target.to_string()));
@@ -164,5 +167,14 @@ mod tests {
             .spans
             .iter()
             .all(|s| s.source == SpanSource::Reconstructed));
+    }
+
+    #[test]
+    fn pathological_log_fails_loud_at_the_span_cap() {
+        // The public GenericLogBackend must not materialise an unbounded trace —
+        // it enforces the same MAX_SPANS guard as the native parser.
+        let raw = "read p\n".repeat(MAX_SPANS + 1);
+        let err = parse_generic_log(&raw).unwrap_err();
+        assert!(matches!(err, ShimError::TooManySpans { max } if max == MAX_SPANS));
     }
 }

@@ -345,13 +345,17 @@ fn has_doc_test_command(repo: &Path) -> Result<bool, AuditError> {
 }
 
 /// Whether `path`'s name is a root context doc: `README*` / `CONTRIBUTING*`
-/// (case-insensitive) or `AGENTS.md`.
+/// (case-insensitive), `AGENTS.md`, or `CLAUDE.md` — the de-facto agent context
+/// files where a project's test command is commonly documented.
 fn is_context_doc(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
         return false;
     };
     let lower = name.to_ascii_lowercase();
-    lower.starts_with("readme") || lower.starts_with("contributing") || lower == "agents.md"
+    lower.starts_with("readme")
+        || lower.starts_with("contributing")
+        || lower == "agents.md"
+        || lower == "claude.md"
 }
 
 /// Whether `path`'s (capped) text contains any documented test-command token. An
@@ -363,11 +367,12 @@ fn file_mentions_test_command(path: &Path) -> Result<bool, AuditError> {
     Ok(TEST_INVOCATION_MARKERS.iter().any(|m| src.contains(m)))
 }
 
-/// Whether a verification entrypoint is reachable *within* `root` by a bounded
-/// walk: a [`TEST_DIRS`] directory, a [`TEST_CONFIG_MARKERS`] file, a test-named
-/// source file, or a `.rs` file with an in-source `cfg(test)` module. Short-
-/// circuits on the first hit. Skips hidden / build-output dirs and never follows
-/// symlinks — `.github` (hidden) is therefore handled only by [`has_ci_test_step`].
+/// Whether a verification entrypoint is reachable *within* `root` by a walk
+/// bounded by [`SKIP_DIRS`] and hidden-dir exclusions (depth-unlimited within
+/// those bounds): a [`TEST_DIRS`] directory, a [`TEST_CONFIG_MARKERS`] file, a
+/// test-named source file, or a `.rs` file with an in-source `cfg(test)` module.
+/// Short-circuits on the first hit. Never follows symlinks — `.github` (hidden)
+/// is therefore handled only by [`has_ci_test_step`].
 fn has_local_verification(root: &Path) -> Result<bool, AuditError> {
     for entry in read_dir(root)? {
         let entry = entry.map_err(|source| io_err(root, source))?;
@@ -1458,6 +1463,53 @@ mod tests {
             sites.contains(&dir),
             "tests under target/ or hidden dirs do not count"
         );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn verification_walk_does_not_follow_symlinked_dirs() {
+        // A test entrypoint reachable only by following a symlink out of the
+        // package must NOT confer reachability — mirrors the symlink non-follow
+        // invariant the navigability and size walks already guard.
+        use std::os::unix::fs::symlink;
+        let base = tmp("verify-symlink");
+        let repo = base.join("repo");
+        let outside = base.join("outside");
+        fs::create_dir_all(&repo).unwrap();
+        fs::create_dir_all(outside.join("tests")).unwrap();
+        fs::write(repo.join("main.rs"), "fn main() {}\n").unwrap();
+        fs::write(outside.join("tests").join("it.rs"), "#[test]\nfn t() {}\n").unwrap();
+        symlink(&outside, repo.join("link")).unwrap();
+
+        let sites = verification_sites(&repo).unwrap();
+        assert!(
+            sites.contains(&repo),
+            "a tests/ dir reachable only through a symlink does not count"
+        );
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn verification_root_reachable_only_via_a_member_crate_is_not_a_site() {
+        // The root has no test path, CI, or doc of its own; reachability is
+        // conferred solely by a member crate's #[cfg(test)] under crates/ (not a
+        // SKIP_DIR). The probe is biased toward finding reachability, so neither
+        // the root nor the member is a site. Locks that documented direction.
+        let dir = tmp("verify-root-via-member");
+        fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
+        let foo = dir.join("crates").join("foo");
+        fs::create_dir_all(foo.join("src")).unwrap();
+        fs::write(foo.join("Cargo.toml"), "[package]\n").unwrap();
+        fs::write(foo.join("src").join("lib.rs"), "#[cfg(test)]\nmod t {}\n").unwrap();
+
+        let sites = verification_sites(&dir).unwrap();
+        assert!(
+            !sites.contains(&dir),
+            "root is reachable via the member crate's #[cfg(test)]"
+        );
+        assert!(!sites.contains(&foo), "foo's own #[cfg(test)] is reachable");
+        assert!(sites.is_empty());
         fs::remove_dir_all(&dir).ok();
     }
 

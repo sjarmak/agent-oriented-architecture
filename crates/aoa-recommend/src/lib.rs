@@ -493,6 +493,28 @@ mod tests {
     }
 
     #[test]
+    fn verification_reachability_has_no_metric_and_no_fix() {
+        // The "correct way to verify is discoverable" probe is a pure presence
+        // fact: like MissingPlane it joins neither a gating metric nor a fix, so
+        // it is advisory-only with no migration.
+        let finding = item(
+            FindingKind::VerificationReachability,
+            "package roots without a discoverable verification entrypoint",
+            Tier::Tier3,
+            1,
+            "package roots",
+        );
+        let audit = AuditReport::new(vec![finding]);
+
+        let rec = &recommend(&audit, &aoa_gap::current_determination(), &all_fixes()).items[0];
+        assert_eq!(rec.metric, None);
+        assert_eq!(rec.metric_mode, None);
+        assert_eq!(rec.fix_id, None);
+        assert_eq!(rec.actionability, Actionability::AdvisoryOnly);
+        assert_eq!(rec.advisory_reason, Some(AdvisoryReason::NoFixAvailable));
+    }
+
+    #[test]
     fn fix_absent_from_registry_is_treated_as_no_fix() {
         // The navigability finding's fix exists in the full registry, but a
         // campaign that excludes it (empty registry) must see no fix — the

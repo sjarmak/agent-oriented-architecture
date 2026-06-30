@@ -100,7 +100,10 @@ pub struct ConformanceOutcome {
     pub declared_provenance: SpanSource,
     /// Number of spans in the produced trace.
     pub span_count: usize,
-    /// Whether the trace contains reconstructed spans (excluded from R7/R8).
+    /// Whether the backend declares reconstructed provenance (its spans are
+    /// excluded from R7/R8). Mirrors `declared_provenance`; the provenance gate
+    /// guarantees every span agrees with the declaration, so an empty trace from
+    /// a reconstructed backend conservatively reports `true`.
     pub has_reconstructed: bool,
     /// Number of non-fatal warnings the backend surfaced (e.g. unmapped tools).
     pub warnings: usize,
