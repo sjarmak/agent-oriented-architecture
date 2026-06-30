@@ -1,0 +1,10 @@
+# Illustrative heterogeneous-agent log: one `<verb> <target>` per line.
+# Reconstructed (not natively instrumented) — every emitted span is tagged
+# source=reconstructed and is therefore excluded from R7/R8 ground-truth metrics.
+search fn parse_config
+read src/config.rs
+gateway mcp__codegraph__codegraph_search
+blocked /etc/forbidden.conf
+write src/config.rs
+test pytest tests/test_config.py -q
+frobnicate something-unmapped

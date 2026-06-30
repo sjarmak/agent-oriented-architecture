@@ -38,6 +38,15 @@
 //! results against the SCIP graph (tracked separately as aoa-671), which may not
 //! exist yet — so it is documented-absent here rather than fabricated.
 //!
+//! # Cross-agent conformance contract
+//!
+//! The Claude path above is one [`TraceBackend`] behind a versioned, testable
+//! contract (see [`backend`]). Other agents' logs are scored by adding a backend
+//! that maps their transcript to a [`Trace`](aoa_trace::Trace) and declares its
+//! native-vs-reconstructed provenance; [`run_conformance`] validates any backend
+//! against [`CONTRACT_VERSION`]. [`GenericLogBackend`] is a reconstructed example
+//! proving the contract generalizes beyond Claude.
+//!
 //! # Secrets
 //!
 //! This shim does **not** sanitize. Tool targets are lifted verbatim into span
@@ -47,10 +56,16 @@
 //! would carry any inline secret straight into the emitted trace. See
 //! [`parse_transcript`] § Secrets.
 
+mod backend;
 mod error;
 mod mapping;
 mod parse;
+mod reconstructed;
 
+pub use backend::{
+    run_conformance, ClaudeStreamJson, ConformanceOutcome, TraceBackend, CONTRACT_VERSION,
+};
 pub use error::ShimError;
 pub use mapping::bash_runs_tests;
 pub use parse::{parse_transcript, parse_transcript_file, ShimResult};
+pub use reconstructed::GenericLogBackend;

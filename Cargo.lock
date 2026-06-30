@@ -145,6 +145,7 @@ name = "aoa-enforce"
 version = "0.1.0"
 dependencies = [
  "aoa-trace",
+ "globset",
  "serde_json",
 ]
 

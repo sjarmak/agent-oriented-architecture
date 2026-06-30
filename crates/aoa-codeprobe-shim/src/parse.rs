@@ -17,7 +17,7 @@ const MAX_TRANSCRIPT_BYTES: u64 = 64 * 1024 * 1024;
 /// Largest span count a single transcript may produce. Well above any real run
 /// (a 64 MiB transcript of minimal tool_use blocks tops out near ~1.3M spans);
 /// hitting this means the input is pathological and parsing fails loud.
-const MAX_SPANS: usize = 200_000;
+pub(crate) const MAX_SPANS: usize = 200_000;
 
 /// Largest number of warnings retained. Warnings are lossy diagnostics, so the
 /// cap drops extras behind a sentinel rather than erroring — this bounds the
