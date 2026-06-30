@@ -8,4 +8,5 @@ license.workspace = true
 
 [dependencies]
 aoa-trace = { path = "../aoa-trace" }
+globset = "0.4.16"
 serde_json = { workspace = true }
