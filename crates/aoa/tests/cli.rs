@@ -1136,6 +1136,72 @@ fn enforce_reproduction_toggle_off_allows_unprotected_write() {
         .success();
 }
 
+/// A hook payload writing to an explicit `file_path` (the generated/protected
+/// path tests need a target other than the default `src/lib.rs`).
+fn write_payload(file_path: &str, session: &str, cwd: &Path) -> String {
+    let mut input = serde_json::Map::new();
+    input.insert("file_path".into(), Value::String(file_path.into()));
+    serde_json::to_string(&serde_json::json!({
+        "session_id": session,
+        "tool_name": "Write",
+        "tool_input": input,
+        "cwd": cwd.to_str().unwrap(),
+    }))
+    .unwrap()
+}
+
+#[test]
+fn enforce_check_blocks_write_to_declared_generated_path() {
+    let repo = TempDir::new().unwrap();
+    // Gate off so only the R6 generated-artifact block can fire — isolates it.
+    std::fs::write(
+        repo.path().join("aoa-policy.yaml"),
+        "reproduction_required: false\n\
+         generated_paths:\n  - glob: \"**/*.gen.rs\"\n    source: \"schema.json\"\n",
+    )
+    .unwrap();
+
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(write_payload(
+            "crates/api/types.gen.rs",
+            "it-gen",
+            repo.path(),
+        ))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("generated artifact"))
+        .stderr(predicate::str::contains("schema.json"));
+
+    // The write.blocked span records the source as its own machine-readable attr.
+    let log = repo.path().join(".aoa/traces/live-it-gen.jsonl");
+    let contents = std::fs::read_to_string(&log).expect("live log written");
+    assert!(contents.contains("write.blocked"));
+    assert!(contents.contains("generated_artifact"));
+    assert!(contents.contains("\"source\":\"schema.json\""));
+}
+
+#[test]
+fn enforce_check_allows_write_to_non_generated_path() {
+    let repo = TempDir::new().unwrap();
+    std::fs::write(
+        repo.path().join("aoa-policy.yaml"),
+        "reproduction_required: false\n\
+         generated_paths:\n  - glob: \"**/*.gen.rs\"\n    source: \"schema.json\"\n",
+    )
+    .unwrap();
+    // A hand-written source file is not generated -> allowed.
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(write_payload(
+            "crates/api/handler.rs",
+            "it-gen-ok",
+            repo.path(),
+        ))
+        .assert()
+        .success();
+}
+
 #[test]
 fn policy_compile_writes_three_planes_idempotently() {
     let repo = TempDir::new().unwrap();
@@ -1181,6 +1247,38 @@ fn policy_compile_writes_three_planes_idempotently() {
     // CI workflow embeds the protected glob; CODEOWNERS lists the gateway.
     assert!(snapshot[2].contains("'migrations/**'"));
     assert!(snapshot[3].contains("src/db/gateway.rs @owners"));
+}
+
+#[test]
+fn policy_compile_emits_gitattributes_marking_for_generated_paths() {
+    let repo = TempDir::new().unwrap();
+    std::fs::write(
+        repo.path().join("aoa-policy.yaml"),
+        "generated_paths:\n  - glob: \"**/*.gen.rs\"\n    source: \"schema.json\"\n",
+    )
+    .unwrap();
+    // A pre-existing user entry must survive the compile (non-destructive merge).
+    let gitattributes = repo.path().join(".gitattributes");
+    std::fs::write(&gitattributes, "* text=auto\n").unwrap();
+
+    let compile = || {
+        aoa_stdin()
+            .args(["policy", "compile", "--repo", repo.path().to_str().unwrap()])
+            .assert()
+            .success();
+    };
+    compile();
+
+    let attrs = std::fs::read_to_string(&gitattributes).unwrap();
+    // User content preserved + the R6 entry and provenance header emitted.
+    assert!(attrs.contains("* text=auto"), "user line preserved");
+    assert!(attrs.contains("**/*.gen.rs linguist-generated -diff"));
+    assert!(attrs.contains("@generated"));
+    assert!(attrs.contains("schema.json"));
+
+    // Idempotent: a second compile rewrites byte-identical content.
+    compile();
+    assert_eq!(std::fs::read_to_string(&gitattributes).unwrap(), attrs);
 }
 
 #[test]
