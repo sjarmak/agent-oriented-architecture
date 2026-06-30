@@ -213,10 +213,11 @@ fn mode_for(determination: &ConstructValidityReport, metric: &str) -> Option<Met
 /// is irrelevant. `UnusedImportProxy` joins the Rust `dead-imports` fix; the
 /// audit's unused-import proxy is Rust-only, so the `dead-imports-python` /
 /// `dead-imports-typescript` adapters in [`aoa_migrate::all_fixes`] correspond to
-/// no audit finding and intentionally appear in no join row. `MissingPlane` and
-/// `VerificationReachability` join neither a metric nor a fix: both are pure
-/// reachability/presence facts with no construct-validity metric and no migration
-/// that mechanically resolves them, so they are advisory-only by construction.
+/// no audit finding and intentionally appear in no join row. `MissingPlane`,
+/// `VerificationReachability`, and `InvariantDiscoverability` join neither a
+/// metric nor a fix: all three are pure reachability/presence facts with no
+/// construct-validity metric and no migration that mechanically resolves them, so
+/// they are advisory-only by construction.
 fn join(kind: FindingKind) -> (Option<&'static str>, Option<&'static str>) {
     match kind {
         FindingKind::ContextBudget => (Some("budget_adherence"), None),
@@ -229,6 +230,7 @@ fn join(kind: FindingKind) -> (Option<&'static str>, Option<&'static str>) {
         FindingKind::ModuleSizeOutlier => (Some("module_size_outliers"), None),
         FindingKind::UnusedImportProxy => (Some("unused_import_proxy"), Some("dead-imports")),
         FindingKind::VerificationReachability => (None, None),
+        FindingKind::InvariantDiscoverability => (None, None),
     }
 }
 
@@ -500,6 +502,28 @@ mod tests {
         let finding = item(
             FindingKind::VerificationReachability,
             "package roots without a discoverable verification entrypoint",
+            Tier::Tier3,
+            1,
+            "package roots",
+        );
+        let audit = AuditReport::new(vec![finding]);
+
+        let rec = &recommend(&audit, &aoa_gap::current_determination(), &all_fixes()).items[0];
+        assert_eq!(rec.metric, None);
+        assert_eq!(rec.metric_mode, None);
+        assert_eq!(rec.fix_id, None);
+        assert_eq!(rec.actionability, Actionability::AdvisoryOnly);
+        assert_eq!(rec.advisory_reason, Some(AdvisoryReason::NoFixAvailable));
+    }
+
+    #[test]
+    fn invariant_discoverability_has_no_metric_and_no_fix() {
+        // The "declared rules are discoverable" probe is a pure presence fact:
+        // like MissingPlane and VerificationReachability it joins neither a gating
+        // metric nor a fix, so it is advisory-only with no migration.
+        let finding = item(
+            FindingKind::InvariantDiscoverability,
+            "package roots without discoverable rules/invariants",
             Tier::Tier3,
             1,
             "package roots",
