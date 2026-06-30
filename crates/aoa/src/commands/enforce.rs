@@ -24,11 +24,14 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use aoa_codeprobe_shim::bash_runs_tests;
-use aoa_enforce::{blocked_span, reproduction_gate, BlockReason, Decision};
+use aoa_enforce::{
+    blocked_span, generated_artifact_gate, reproduction_gate, BlockReason, Decision,
+};
 use aoa_policy::Policy;
 use aoa_trace::{Span, SpanSource, SpanType};
 
 use crate::cli::{EnforceArgs, EnforceCommand};
+use crate::commands::generated::generated_rules;
 
 /// The tools whose writes the gate guards. A pending call to any of these is a
 /// mutation and must be preceded by a reproduction (`test.run`) span.
@@ -77,9 +80,10 @@ fn run_record(event: &HookEvent) -> Result<i32> {
 }
 
 /// PreToolUse: block the pending write when it targets a policy-protected path
-/// (R5) or when no reproduction precedes it (R7). Protected-path takes
-/// precedence — it is unconditional, while the reproduction gate is skippable by
-/// policy.
+/// (R5), a declared generated artifact (R6), or when no reproduction precedes it
+/// (R7). Protected-path and generated-artifact are unconditional; the
+/// reproduction gate is skippable by policy. Protected-path is checked first —
+/// "may not write at all" outranks "edit the source instead".
 fn run_check(event: &HookEvent) -> Result<i32> {
     if !MUTATION_TOOLS.contains(&event.tool_name.as_str()) {
         // Not a guarded mutation; nothing to gate.
@@ -89,10 +93,16 @@ fn run_check(event: &HookEvent) -> Result<i32> {
     let base = resolve_base(event)?;
     let policy = load_policy(&base)?;
 
-    // R5: protected paths are forbidden outright, regardless of reproduction.
     if let (Some(policy), Some(target)) = (&policy, write_target(event)) {
+        // R5: protected paths are forbidden outright, regardless of reproduction.
         if policy.compile()?.is_protected(target) {
             return block(event, BlockReason::ProtectedPath(target.to_string()));
+        }
+        // R6: generated artifacts are derived — redirect the agent to the source
+        // rather than letting it hand-edit the artifact.
+        if let Decision::Block(reason) = generated_artifact_gate(&generated_rules(policy)?, target)
+        {
+            return block(event, reason);
         }
     }
 

@@ -5,6 +5,7 @@ use aoa_policy::{ci_workflow, codeowners, precommit_config, Policy};
 
 use crate::cli::{PolicyArgs, PolicyCommand};
 use crate::commands::enforce::install_enforce_hooks;
+use crate::commands::generated::write_gitattributes_plane;
 use crate::forge::compile_enforcement;
 use crate::output::print_human;
 
@@ -52,6 +53,12 @@ fn compile(repo: &Path, forge: &str) -> Result<i32> {
         &repo.join(".github").join("CODEOWNERS"),
         &codeowners(&policy),
     )?);
+
+    // R6 generated-artifact marking: a non-destructive `.gitattributes` block
+    // (linguist-generated + provenance headers), only when a write changes it.
+    if let Some(path) = write_gitattributes_plane(repo, &policy)? {
+        written.push(path);
+    }
 
     let mut message = String::from("compiled aoa-policy.yaml -> 3 enforcement planes\n");
     for path in &written {
