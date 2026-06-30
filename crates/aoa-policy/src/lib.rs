@@ -39,6 +39,21 @@ pub enum PolicyError {
         glob: String,
         source: globset::Error,
     },
+
+    /// A declared value carries a newline or control character that would inject
+    /// extra lines into the emitted `.gitattributes` block (a `source` like
+    /// `"schema.json\n* filter=smudge"` would write an unrelated git attribute).
+    #[error("unsafe value in {field}: must not contain newline or control characters")]
+    UnsafeValue { field: &'static str },
+}
+
+/// Reject a value that would break out of its line when written to a generated
+/// artifact's `.gitattributes` entry or provenance header.
+fn reject_unsafe(field: &'static str, value: &str) -> Result<(), PolicyError> {
+    if value.chars().any(char::is_control) {
+        return Err(PolicyError::UnsafeValue { field });
+    }
+    Ok(())
 }
 
 /// The operator's declared policy. Every field is optional and defaults to the
@@ -54,7 +69,7 @@ pub struct Policy {
     /// Globs that are generated artifacts (edit the source instead). Declared
     /// here; the in-band marking is R6.
     #[serde(default)]
-    pub generated_paths: Vec<String>,
+    pub generated_paths: Vec<GeneratedPath>,
 
     /// Modules permitted to perform state-changing writes (mutation gateways);
     /// becomes the CODEOWNERS spine.
@@ -68,6 +83,48 @@ pub struct Policy {
 
 fn default_true() -> bool {
     true
+}
+
+/// A declared generated-artifact path: a glob, optionally paired with the
+/// `source` it derives from so a block can redirect the agent to the file it
+/// should edit instead. A bare YAML string is a glob with no declared source
+/// (back-compat); a mapping carries both.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum GeneratedPath {
+    /// `- "**/*.gen.rs"` — glob only, no source pointer.
+    Glob(String),
+    /// `- { glob: "**/*.gen.rs", source: "schema.json" }`.
+    Sourced(SourcedPath),
+}
+
+/// The mapping form of a [`GeneratedPath`]: a glob paired with the source it
+/// derives from. `deny_unknown_fields` makes a mistyped key (`srource:`) fail
+/// loud — `#[serde(untagged)]` does not inherit the outer `Policy`'s strictness,
+/// so the contract lives here.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourcedPath {
+    pub glob: String,
+    pub source: String,
+}
+
+impl GeneratedPath {
+    /// The glob this entry matches against — present in either form.
+    pub fn glob(&self) -> &str {
+        match self {
+            GeneratedPath::Glob(glob) => glob.as_str(),
+            GeneratedPath::Sourced(sourced) => sourced.glob.as_str(),
+        }
+    }
+
+    /// The declared source to edit instead, when the entry carries one.
+    pub fn source(&self) -> Option<&str> {
+        match self {
+            GeneratedPath::Sourced(sourced) => Some(&sourced.source),
+            GeneratedPath::Glob(_) => None,
+        }
+    }
 }
 
 impl Default for Policy {
@@ -107,6 +164,20 @@ impl Policy {
             glob: self.protected_paths.join(", "),
             source,
         })?;
+        // Validate the generated globs at load too, for fail-loud parity with
+        // protected paths. The matchers themselves are built lazily by the R6
+        // wiring in the CLI; here we only reject a malformed pattern early.
+        for entry in &self.generated_paths {
+            reject_unsafe("generated_paths glob", entry.glob())?;
+            if let Some(source) = entry.source() {
+                reject_unsafe("generated_paths source", source)?;
+            }
+            globset::Glob::new(entry.glob()).map_err(|source| PolicyError::Glob {
+                field: "generated_paths",
+                glob: entry.glob().to_string(),
+                source,
+            })?;
+        }
         Ok(CompiledPolicy { protected })
     }
 }
@@ -161,6 +232,73 @@ reproduction_required: true
     fn bad_glob_fails_loud_at_load() {
         let err = Policy::from_yaml("protected_paths: [\"[unclosed\"]").unwrap_err();
         assert!(matches!(err, PolicyError::Glob { .. }));
+    }
+
+    #[test]
+    fn generated_path_parses_bare_glob_and_sourced_forms() {
+        let yaml = r#"
+generated_paths:
+  - "**/*.gen.rs"
+  - glob: "api/openapi.yaml"
+    source: "api/spec.toml"
+"#;
+        let policy = Policy::from_yaml(yaml).unwrap();
+        assert_eq!(policy.generated_paths.len(), 2);
+        // Bare string: glob with no declared source (back-compat).
+        assert_eq!(policy.generated_paths[0].glob(), "**/*.gen.rs");
+        assert_eq!(policy.generated_paths[0].source(), None);
+        // Mapping: glob paired with the source to edit instead.
+        assert_eq!(policy.generated_paths[1].glob(), "api/openapi.yaml");
+        assert_eq!(policy.generated_paths[1].source(), Some("api/spec.toml"));
+    }
+
+    #[test]
+    fn bad_generated_glob_fails_loud_at_load() {
+        let err = Policy::from_yaml("generated_paths: [\"[unclosed\"]").unwrap_err();
+        assert!(matches!(
+            err,
+            PolicyError::Glob {
+                field: "generated_paths",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn sourced_generated_path_rejects_unknown_keys() {
+        // deny_unknown_fields on SourcedPath: a mistyped key must fail loud, not
+        // silently drop, matching the strictness of the rest of the schema.
+        let yaml = "generated_paths:\n  - glob: \"x.gen.rs\"\n    source: \"x.toml\"\n    srource: \"oops\"\n";
+        let err = Policy::from_yaml(yaml).unwrap_err();
+        assert!(matches!(err, PolicyError::Parse(_)));
+    }
+
+    #[test]
+    fn generated_path_with_newline_in_source_is_rejected() {
+        // A newline in source would inject an unrelated line into the emitted
+        // .gitattributes block (e.g. `* filter=smudge`). Reject it at load.
+        let yaml =
+            "generated_paths:\n  - glob: \"x.gen.rs\"\n    source: \"x.toml\\n* filter=smudge\"\n";
+        let err = Policy::from_yaml(yaml).unwrap_err();
+        assert!(matches!(
+            err,
+            PolicyError::UnsafeValue {
+                field: "generated_paths source"
+            }
+        ));
+    }
+
+    #[test]
+    fn generated_glob_with_newline_is_rejected() {
+        let yaml =
+            "generated_paths:\n  - glob: \"x.gen.rs\\n* filter=smudge\"\n    source: \"x.toml\"\n";
+        let err = Policy::from_yaml(yaml).unwrap_err();
+        assert!(matches!(
+            err,
+            PolicyError::UnsafeValue {
+                field: "generated_paths glob"
+            }
+        ));
     }
 
     #[test]

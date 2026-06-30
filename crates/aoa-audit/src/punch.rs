@@ -29,6 +29,10 @@ pub enum FindingKind {
     /// Package roots with no statically discoverable way to verify a change
     /// (no test dir/files, test config, CI test step, or documented command).
     VerificationReachability,
+    /// Package roots with no statically discoverable declared rules/invariants
+    /// (no policy file, agent-context/CONTRIBUTING doc, lint/format config,
+    /// pre-commit config, or CODEOWNERS) reachable before editing.
+    InvariantDiscoverability,
 }
 
 impl FindingKind {
@@ -43,6 +47,7 @@ impl FindingKind {
         FindingKind::ModuleSizeOutlier,
         FindingKind::UnusedImportProxy,
         FindingKind::VerificationReachability,
+        FindingKind::InvariantDiscoverability,
     ];
 }
 
@@ -109,10 +114,11 @@ mod tests {
                 | FindingKind::NavigabilityAnchor
                 | FindingKind::ModuleSizeOutlier
                 | FindingKind::UnusedImportProxy
-                | FindingKind::VerificationReachability => {}
+                | FindingKind::VerificationReachability
+                | FindingKind::InvariantDiscoverability => {}
             }
         }
-        assert_eq!(FindingKind::ALL.len(), 7);
+        assert_eq!(FindingKind::ALL.len(), 8);
     }
 
     #[test]

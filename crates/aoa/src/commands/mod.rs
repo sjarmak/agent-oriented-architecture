@@ -7,6 +7,7 @@ mod falsify;
 mod falsify_build;
 mod fsutil;
 mod gap;
+mod generated;
 mod lint;
 mod migrate;
 mod observe;
