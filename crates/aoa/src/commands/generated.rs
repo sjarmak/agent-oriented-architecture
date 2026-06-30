@@ -64,16 +64,25 @@ fn gitattributes_body(policy: &Policy) -> Option<String> {
 /// newline when non-empty.
 fn strip_block(existing: &str) -> String {
     let lines: Vec<&str> = existing.lines().collect();
+    // Scan for the END *after* the BEGIN, not the first END anywhere: a stray
+    // BLOCK_BEGIN copied into user content earlier in the file must not anchor a
+    // strip that severs unrelated lines. An orphaned BEGIN (no END after it) is
+    // left intact and self-heals on the next compile once a full block follows.
     let begin = lines.iter().position(|l| *l == BLOCK_BEGIN);
-    let end = lines.iter().position(|l| *l == BLOCK_END);
-    let kept: Vec<&str> = match (begin, end) {
-        (Some(b), Some(e)) if b <= e => lines
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i < b || *i > e)
-            .map(|(_, l)| *l)
-            .collect(),
-        _ => lines,
+    let kept: Vec<&str> = match begin {
+        Some(b) => match lines.iter().skip(b + 1).position(|l| *l == BLOCK_END) {
+            Some(rel) => {
+                let e = b + 1 + rel;
+                lines
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i < b || *i > e)
+                    .map(|(_, l)| *l)
+                    .collect()
+            }
+            None => lines,
+        },
+        None => lines,
     };
     if kept.is_empty() {
         String::new()
@@ -182,6 +191,44 @@ mod tests {
         let once = merge_gitattributes("* text=auto\n", Some(body));
         let twice = merge_gitattributes(&once, Some(body));
         assert_eq!(once, twice, "second merge must be a no-op");
+    }
+
+    #[test]
+    fn strip_finds_end_after_begin_not_a_stray_earlier_sentinel() {
+        // A BLOCK_END copied into user content BEFORE the managed block must not
+        // anchor the strip — the real block (begin..end) is removed, user lines
+        // survive verbatim.
+        let existing = format!(
+            "{BLOCK_END}\n* text=auto\n{BLOCK_BEGIN}\nX linguist-generated -diff\n{BLOCK_END}\n"
+        );
+        let stripped = strip_block(&existing);
+        assert!(stripped.contains("* text=auto"), "user line survives");
+        assert!(
+            stripped.contains(BLOCK_END),
+            "the stray earlier sentinel is kept"
+        );
+        assert!(
+            !stripped.contains(BLOCK_BEGIN),
+            "the managed block is removed"
+        );
+    }
+
+    #[test]
+    fn orphaned_begin_self_heals_after_one_more_compile() {
+        // BLOCK_END manually deleted -> orphaned BLOCK_BEGIN. The next merge
+        // appends a fresh block (transient duplicate begin); a subsequent merge
+        // converges to a single clean block with no user content lost.
+        let body = "X linguist-generated -diff\n";
+        let corrupted = format!("* text=auto\n{BLOCK_BEGIN}\nstale\n");
+        let once = merge_gitattributes(&corrupted, Some(body));
+        let twice = merge_gitattributes(&once, Some(body));
+        assert_eq!(
+            twice.matches(BLOCK_BEGIN).count(),
+            1,
+            "converges to exactly one managed block"
+        );
+        assert!(twice.contains("* text=auto"), "user content preserved");
+        assert_eq!(merge_gitattributes(&twice, Some(body)), twice, "stable");
     }
 
     #[test]

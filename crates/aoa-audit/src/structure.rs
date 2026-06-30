@@ -66,6 +66,12 @@ const SKIP_DIRS: &[&str] = &[
     "__pycache__",
 ];
 
+/// Recursion-depth ceiling for the reachability walks. Real repos nest a few
+/// dozen levels at most; the cap is defense-in-depth so a pathologically (or
+/// maliciously) deep tree degrades to "no signal found below here" rather than
+/// overflowing the stack.
+const MAX_WALK_DEPTH: usize = 64;
+
 /// Minimum number of source files required before the module-size measure is
 /// meaningful: a median computed from a handful of files cannot self-calibrate,
 /// so below this the check abstains (emits nothing) rather than assert an
@@ -433,6 +439,13 @@ fn has_root_invariant_marker(repo: &Path) -> Result<bool, AuditError> {
 /// *directories* are pruned. The hidden `.aoa` dir is therefore a repo-global
 /// signal only ([`has_repo_global_invariants`]), never found by this walk.
 fn has_local_invariants(root: &Path) -> Result<bool, AuditError> {
+    has_local_invariants_bounded(root, 0)
+}
+
+fn has_local_invariants_bounded(root: &Path, depth: usize) -> Result<bool, AuditError> {
+    if depth >= MAX_WALK_DEPTH {
+        return Ok(false);
+    }
     for entry in read_dir(root)? {
         let entry = entry.map_err(|source| io_err(root, source))?;
         let name = entry.file_name();
@@ -443,7 +456,7 @@ fn has_local_invariants(root: &Path) -> Result<bool, AuditError> {
             if name.starts_with('.') || SKIP_DIRS.contains(&name.as_ref()) {
                 continue;
             }
-            if has_local_invariants(&path)? {
+            if has_local_invariants_bounded(&path, depth + 1)? {
                 return Ok(true);
             }
         } else if file_type.is_file() && is_invariant_file(&name) {
@@ -540,6 +553,13 @@ fn file_mentions_test_command(path: &Path) -> Result<bool, AuditError> {
 /// Short-circuits on the first hit. Never follows symlinks — `.github` (hidden)
 /// is therefore handled only by [`has_ci_test_step`].
 fn has_local_verification(root: &Path) -> Result<bool, AuditError> {
+    has_local_verification_bounded(root, 0)
+}
+
+fn has_local_verification_bounded(root: &Path, depth: usize) -> Result<bool, AuditError> {
+    if depth >= MAX_WALK_DEPTH {
+        return Ok(false);
+    }
     for entry in read_dir(root)? {
         let entry = entry.map_err(|source| io_err(root, source))?;
         let name = entry.file_name();
@@ -550,7 +570,9 @@ fn has_local_verification(root: &Path) -> Result<bool, AuditError> {
         let path = entry.path();
         let file_type = entry.file_type().map_err(|source| io_err(&path, source))?;
         if file_type.is_dir() {
-            if TEST_DIRS.contains(&name.as_ref()) || has_local_verification(&path)? {
+            if TEST_DIRS.contains(&name.as_ref())
+                || has_local_verification_bounded(&path, depth + 1)?
+            {
                 return Ok(true);
             }
         } else if file_type.is_file() {

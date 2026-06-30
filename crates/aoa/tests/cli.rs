@@ -1182,6 +1182,37 @@ fn enforce_check_blocks_write_to_declared_generated_path() {
 }
 
 #[test]
+fn enforce_check_blocks_write_to_bare_glob_generated_path() {
+    // Back-compat form: a bare-string generated_paths entry (no `source:`). The
+    // block must still fire; the redirect falls back to the glob itself.
+    let repo = TempDir::new().unwrap();
+    std::fs::write(
+        repo.path().join("aoa-policy.yaml"),
+        "reproduction_required: false\n\
+         generated_paths:\n  - \"**/*.gen.rs\"\n",
+    )
+    .unwrap();
+
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(write_payload(
+            "crates/api/types.gen.rs",
+            "it-bare",
+            repo.path(),
+        ))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("generated artifact"))
+        // No declared source -> the redirect names the glob itself.
+        .stderr(predicate::str::contains("**/*.gen.rs"));
+
+    let log = repo.path().join(".aoa/traces/live-it-bare.jsonl");
+    let contents = std::fs::read_to_string(&log).expect("live log written");
+    assert!(contents.contains("write.blocked"));
+    assert!(contents.contains("\"source\":\"**/*.gen.rs\""));
+}
+
+#[test]
 fn enforce_check_allows_write_to_non_generated_path() {
     let repo = TempDir::new().unwrap();
     std::fs::write(
