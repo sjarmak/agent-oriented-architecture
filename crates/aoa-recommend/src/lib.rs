@@ -213,7 +213,10 @@ fn mode_for(determination: &ConstructValidityReport, metric: &str) -> Option<Met
 /// is irrelevant. `UnusedImportProxy` joins the Rust `dead-imports` fix; the
 /// audit's unused-import proxy is Rust-only, so the `dead-imports-python` /
 /// `dead-imports-typescript` adapters in [`aoa_migrate::all_fixes`] correspond to
-/// no audit finding and intentionally appear in no join row.
+/// no audit finding and intentionally appear in no join row. `MissingPlane` and
+/// `VerificationReachability` join neither a metric nor a fix: both are pure
+/// reachability/presence facts with no construct-validity metric and no migration
+/// that mechanically resolves them, so they are advisory-only by construction.
 fn join(kind: FindingKind) -> (Option<&'static str>, Option<&'static str>) {
     match kind {
         FindingKind::ContextBudget => (Some("budget_adherence"), None),
@@ -225,6 +228,7 @@ fn join(kind: FindingKind) -> (Option<&'static str>, Option<&'static str>) {
         ),
         FindingKind::ModuleSizeOutlier => (Some("module_size_outliers"), None),
         FindingKind::UnusedImportProxy => (Some("unused_import_proxy"), Some("dead-imports")),
+        FindingKind::VerificationReachability => (None, None),
     }
 }
 

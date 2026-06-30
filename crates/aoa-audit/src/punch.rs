@@ -26,6 +26,9 @@ pub enum FindingKind {
     ModuleSizeOutlier,
     /// Likely-unused imports by the Rust syntactic proxy.
     UnusedImportProxy,
+    /// Package roots with no statically discoverable way to verify a change
+    /// (no test dir/files, test config, CI test step, or documented command).
+    VerificationReachability,
 }
 
 impl FindingKind {
@@ -39,6 +42,7 @@ impl FindingKind {
         FindingKind::NavigabilityAnchor,
         FindingKind::ModuleSizeOutlier,
         FindingKind::UnusedImportProxy,
+        FindingKind::VerificationReachability,
     ];
 }
 
@@ -104,10 +108,11 @@ mod tests {
                 | FindingKind::MissingPlane
                 | FindingKind::NavigabilityAnchor
                 | FindingKind::ModuleSizeOutlier
-                | FindingKind::UnusedImportProxy => {}
+                | FindingKind::UnusedImportProxy
+                | FindingKind::VerificationReachability => {}
             }
         }
-        assert_eq!(FindingKind::ALL.len(), 6);
+        assert_eq!(FindingKind::ALL.len(), 7);
     }
 
     #[test]
