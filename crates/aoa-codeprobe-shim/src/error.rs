@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use aoa_trace::SpanSource;
+
 /// Errors produced while reading or parsing a codeprobe transcript.
 ///
 /// Parsing is lenient at the line level (malformed lines are skipped and
@@ -26,4 +28,36 @@ pub enum ShimError {
     /// silently truncated trace would feed wrong locality metrics.
     #[error("transcript exceeds the {max}-span cap (DoS guard)")]
     TooManySpans { max: usize },
+
+    /// A backend produced a trace that failed [`aoa_trace::validate_trace_value`].
+    /// The conformance contract requires every backend's trace to validate, so
+    /// this fails loud rather than admitting a malformed trace.
+    #[error("backend produced an invalid trace: {0}")]
+    InvalidTrace(#[from] aoa_trace::TraceError),
+
+    /// A span's recorded provenance disagreed with the backend's declared
+    /// posture. A backend that declares `native` must not emit `reconstructed`
+    /// spans (or vice versa) — the conformance harness rejects the mismatch so
+    /// provenance stays trustworthy for R7/R8 exclusion.
+    #[error(
+        "backend '{backend_id}' declares {declared:?} provenance but span {index} is {found:?}"
+    )]
+    ProvenanceMismatch {
+        backend_id: &'static str,
+        index: usize,
+        declared: SpanSource,
+        found: SpanSource,
+    },
+
+    /// A backend declared a contract version other than the live
+    /// [`crate::CONTRACT_VERSION`]. The freshness gate rejects a backend that has
+    /// drifted from the current contract revision.
+    #[error(
+        "backend '{backend_id}' targets contract {declared} but the live contract is {expected}"
+    )]
+    ContractVersionMismatch {
+        backend_id: &'static str,
+        declared: &'static str,
+        expected: &'static str,
+    },
 }
