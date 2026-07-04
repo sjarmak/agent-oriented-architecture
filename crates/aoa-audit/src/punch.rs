@@ -103,6 +103,15 @@ pub struct PunchItem {
     /// plane. `None` for findings that are not plane-shaped (oversized context,
     /// mutation surface).
     pub plane: Option<EnforcementPlane>,
+    /// The workspace subtree this finding is scoped to: a member dir relative
+    /// to the repo root, set when every offending path attributes to a single
+    /// member of a partitioned workspace (`aoa_metrics::SubtreePartition`).
+    /// `None` for findings that carry no path, for single-subtree repos, and
+    /// for findings whose paths span members or fall outside all of them —
+    /// attribution is unanimous or absent, never a majority guess. Omitted
+    /// from the wire form when `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtree: Option<String>,
 }
 
 /// Rank punch-list items deterministically: Tier-1 before Tier-2 before
@@ -155,12 +164,37 @@ mod tests {
             tier: Tier::Tier3,
             measured_cost: MeasuredCost::new(2, "package roots"),
             plane: None,
+            subtree: None,
         };
         let json = serde_json::to_string(&item).expect("serialize");
         // The kind serializes to its snake_case wire name.
         assert!(
             json.contains("\"kind\":\"navigability_anchor\""),
             "kind missing from wire form: {json}"
+        );
+        // An unattributed finding carries no subtree key at all on the wire.
+        assert!(
+            !json.contains("subtree"),
+            "None subtree must be omitted from wire form: {json}"
+        );
+        let parsed: PunchItem = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, item);
+    }
+
+    #[test]
+    fn punch_item_serializes_its_subtree_when_attributed() {
+        let item = PunchItem {
+            title: "source files exceeding 4.0x the repo median size".into(),
+            kind: FindingKind::ModuleSizeOutlier,
+            tier: Tier::Tier3,
+            measured_cost: MeasuredCost::new(1, "outlier files"),
+            plane: None,
+            subtree: Some("crates/foo".into()),
+        };
+        let json = serde_json::to_string(&item).expect("serialize");
+        assert!(
+            json.contains("\"subtree\":\"crates/foo\""),
+            "attributed subtree missing from wire form: {json}"
         );
         let parsed: PunchItem = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed, item);

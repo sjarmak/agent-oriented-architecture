@@ -340,6 +340,7 @@ mod tests {
             tier,
             measured_cost: MeasuredCost::new(value, unit),
             plane: None,
+            subtree: None,
         }
     }
 

@@ -176,6 +176,7 @@ fn exit_code_table() {
         tier: Tier::Tier1,
         measured_cost: aoa_audit::MeasuredCost::new(1, "missing plane"),
         plane: Some(aoa_audit::EnforcementPlane::RuntimeHook),
+        subtree: None,
     };
     let tier2_item = aoa_audit::PunchItem {
         title: "tier2 gap".into(),
@@ -183,6 +184,7 @@ fn exit_code_table() {
         tier: Tier::Tier2,
         measured_cost: aoa_audit::MeasuredCost::new(1, "missing plane"),
         plane: Some(aoa_audit::EnforcementPlane::PreCommit),
+        subtree: None,
     };
 
     let with_tier1 = AuditReport::new(vec![tier1_item.clone(), tier2_item.clone()]);
@@ -239,6 +241,49 @@ fn audit_surfaces_structure_family_items() {
     assert!(
         anchor.plane.is_none(),
         "a structure item is not plane-shaped"
+    );
+}
+
+// aoa-d6t.31: a workspace repo's punch-list scopes path-carrying findings to
+// their member subtree on the wire, and unattributed items omit the key.
+#[test]
+fn audit_scopes_findings_to_workspace_subtrees() {
+    let repo = tempfile::tempdir().expect("temp repo");
+    std::fs::write(
+        repo.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/foo\", \"crates/bar\"]\n",
+    )
+    .expect("write workspace manifest");
+    std::fs::write(repo.path().join("README.md"), "# root\n").expect("write root README");
+    for member in ["foo", "bar"] {
+        let root = repo.path().join("crates").join(member);
+        std::fs::create_dir_all(&root).expect("create member");
+        std::fs::write(root.join("Cargo.toml"), "[package]\n").expect("write member manifest");
+    }
+    // Only crates/foo lacks a README: the navigability finding is scoped to it.
+    std::fs::write(repo.path().join("crates/bar/README.md"), "# bar\n").expect("write bar README");
+
+    let report = audit(repo.path(), &AuditConfig::default()).expect("audit succeeds");
+    let json = serde_json::to_value(&report).expect("serialize report");
+
+    let items = json["items"].as_array().expect("items array");
+    let anchor = items
+        .iter()
+        .find(|item| item["kind"] == "navigability_anchor")
+        .expect("navigability item");
+    assert_eq!(
+        anchor["subtree"], "crates/foo",
+        "the single-member finding must carry its subtree on the wire"
+    );
+
+    // A finding with no path (a missing enforcement plane) never carries the key.
+    let plane = items
+        .iter()
+        .find(|item| item["kind"] == "missing_plane")
+        .expect("missing-plane item");
+    assert!(
+        plane.as_object().expect("object").get("subtree").is_none(),
+        "an unattributed item must omit the subtree key entirely"
     );
 }
 

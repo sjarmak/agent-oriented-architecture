@@ -21,4 +21,10 @@ pub enum AuditError {
     /// Resolving or counting the context-file budget failed.
     #[error(transparent)]
     Budget(#[from] aoa_budget::BudgetError),
+
+    /// Discovering the workspace subtree partition failed: a workspace
+    /// manifest exists but is unreadable or malformed. Absence of a manifest
+    /// is never an error (that is the implicit-root partition).
+    #[error(transparent)]
+    Subtree(#[from] aoa_metrics::SubtreeError),
 }

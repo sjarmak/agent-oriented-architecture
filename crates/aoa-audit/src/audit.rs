@@ -2,7 +2,10 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use aoa_budget::{count_budget, resolve_closure, Config};
-use aoa_metrics::{compute_mutation_surface, IndexQuality, MetricInput, SymbolGraph, TransformMap};
+use aoa_metrics::{
+    compute_mutation_surface, discover_partition, IndexQuality, MetricInput, SymbolGraph,
+    TransformMap,
+};
 use aoa_trace::Trace;
 
 use crate::error::AuditError;
@@ -84,12 +87,17 @@ impl Default for AuditConfig {
 pub fn audit(repo: &Path, cfg: &AuditConfig) -> Result<AuditReport, AuditError> {
     let mut items = Vec::new();
 
+    // The workspace partition scopes path-carrying structure findings to
+    // their member subtree. A manifest that exists but cannot be used is a
+    // loud failure (never a guess); absence is the implicit-root partition.
+    let partition = discover_partition(repo)?;
+
     if let Some(item) = context_budget_item(repo, cfg)? {
         items.push(item);
     }
     items.push(mutation_surface_item(cfg));
     items.extend(plane_items(repo));
-    items.extend(structure_items(repo, cfg.size_outlier_k)?);
+    items.extend(structure_items(repo, cfg.size_outlier_k, &partition)?);
 
     rank(&mut items);
     Ok(AuditReport::new(items))
@@ -122,6 +130,7 @@ fn context_budget_item(repo: &Path, cfg: &AuditConfig) -> Result<Option<PunchIte
         tier: Tier::Tier2,
         measured_cost: MeasuredCost::new(overflow as u64, "tokens over ceiling"),
         plane: None,
+        subtree: None,
     }))
 }
 
@@ -152,6 +161,7 @@ fn mutation_surface_item(cfg: &AuditConfig) -> PunchItem {
             "writable files reachable",
         ),
         plane: None,
+        subtree: None,
     }
 }
 
@@ -166,6 +176,7 @@ fn plane_items(repo: &Path) -> Vec<PunchItem> {
             tier: plane.tier(),
             measured_cost: MeasuredCost::new(1, "missing plane"),
             plane: Some(plane),
+            subtree: None,
         })
         .collect()
 }
