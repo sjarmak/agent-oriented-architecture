@@ -19,6 +19,8 @@ mod invariant;
 mod mutation;
 mod record;
 mod retrieval;
+mod scoped;
+mod subtree;
 
 pub use common::ConditionedOn;
 pub use edit::{compute_edit_locality, EditLocality};
@@ -28,3 +30,5 @@ pub use invariant::{compute_invariant_discoverability, InvariantDiscoverability}
 pub use mutation::{compute_mutation_surface, MutationSurface};
 pub use record::{compute_metrics, MetricRecord};
 pub use retrieval::{compute_retrieval_locality, RetrievalLocality};
+pub use scoped::{compute_subtree_metrics, SubtreeMetrics};
+pub use subtree::{discover_partition, SubtreeError, SubtreePartition, WorkspaceSource};

@@ -22,6 +22,7 @@
 //! All logic here is deterministic mechanism: rates are arithmetic means of
 //! per-task booleans and labels are boolean predicates over rate/gap deltas.
 
+mod checkbox_baseline;
 mod compare;
 mod construct;
 mod correlation;
@@ -30,6 +31,11 @@ mod gap;
 mod provenance;
 mod run;
 
+pub use checkbox_baseline::{
+    score_repo, CheckboxBaseline, CheckboxBaselineError, CriterionResult, CriterionStatus,
+    LevelScore, Pillar, PillarScore, FACTORY_CRITERIA_SOURCE, FACTORY_CRITERIA_VERSION,
+    FACTORY_LEVEL_NAMES, PILLARS,
+};
 pub use compare::{compare, CompareOutcome, CompareWarning, Label};
 pub use construct::{
     build_report, classify_metric, current_determination, ConstructValidityReport,

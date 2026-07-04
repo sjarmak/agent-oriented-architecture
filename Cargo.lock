@@ -167,6 +167,7 @@ dependencies = [
  "aoa-metrics",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
 ]
 
@@ -185,9 +186,13 @@ name = "aoa-metrics"
 version = "0.1.0"
 dependencies = [
  "aoa-trace",
+ "globset",
  "serde",
  "serde_json",
+ "serde_yaml",
+ "tempfile",
  "thiserror",
+ "toml",
 ]
 
 [[package]]

@@ -33,6 +33,15 @@ pub enum FindingKind {
     /// (no policy file, agent-context/CONTRIBUTING doc, lint/format config,
     /// pre-commit config, or CODEOWNERS) reachable before editing.
     InvariantDiscoverability,
+    /// No dependency-pinning lockfile at the repo root (build determinism is
+    /// undeclared).
+    BuildDeterminism,
+    /// No reproducible dev-environment declaration (devcontainer, nix flake,
+    /// toolchain/version pin) at the repo root.
+    DevEnvironmentDeclaration,
+    /// No task-discovery surface (issue-template path or in-repo issue tracker)
+    /// at its well-known location.
+    TaskDiscoverySurface,
 }
 
 impl FindingKind {
@@ -48,6 +57,9 @@ impl FindingKind {
         FindingKind::UnusedImportProxy,
         FindingKind::VerificationReachability,
         FindingKind::InvariantDiscoverability,
+        FindingKind::BuildDeterminism,
+        FindingKind::DevEnvironmentDeclaration,
+        FindingKind::TaskDiscoverySurface,
     ];
 }
 
@@ -115,10 +127,13 @@ mod tests {
                 | FindingKind::ModuleSizeOutlier
                 | FindingKind::UnusedImportProxy
                 | FindingKind::VerificationReachability
-                | FindingKind::InvariantDiscoverability => {}
+                | FindingKind::InvariantDiscoverability
+                | FindingKind::BuildDeterminism
+                | FindingKind::DevEnvironmentDeclaration
+                | FindingKind::TaskDiscoverySurface => {}
             }
         }
-        assert_eq!(FindingKind::ALL.len(), 8);
+        assert_eq!(FindingKind::ALL.len(), 11);
     }
 
     #[test]
