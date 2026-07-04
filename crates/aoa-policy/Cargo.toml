@@ -8,6 +8,6 @@ license.workspace = true
 
 [dependencies]
 serde = { workspace = true }
-serde_yaml = "0.9.34"
+serde_norway = "0.9.42"
 thiserror = { workspace = true }
 globset = "0.4.16"

@@ -30,7 +30,7 @@ pub enum PolicyError {
     /// The YAML did not parse against the [`Policy`] schema (unknown key, wrong
     /// type, malformed document). Fails loud rather than defaulting.
     #[error("invalid aoa-policy.yaml: {0}")]
-    Parse(#[from] serde_yaml::Error),
+    Parse(#[from] serde_norway::Error),
 
     /// A declared glob is not a valid pattern.
     #[error("invalid glob '{glob}' in {field}: {source}")]
@@ -141,7 +141,7 @@ impl Default for Policy {
 impl Policy {
     /// Parse a policy from YAML text, failing loud on any schema violation.
     pub fn from_yaml(yaml: &str) -> Result<Self, PolicyError> {
-        let policy: Policy = serde_yaml::from_str(yaml)?;
+        let policy: Policy = serde_norway::from_str(yaml)?;
         // Compile eagerly so a bad glob is reported at load, not at first write.
         policy.compile()?;
         Ok(policy)
