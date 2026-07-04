@@ -304,11 +304,11 @@ fn pnpm_members(root: &Path) -> Result<Option<Vec<String>>, SubtreeError> {
     let Some(raw) = read_manifest(&path)? else {
         return Ok(None);
     };
-    let value: serde_yaml::Value =
-        serde_yaml::from_str(&raw).map_err(|e| manifest_err(&path, e))?;
+    let value: serde_norway::Value =
+        serde_norway::from_str(&raw).map_err(|e| manifest_err(&path, e))?;
     let patterns: Vec<String> = value
         .get("packages")
-        .and_then(serde_yaml::Value::as_sequence)
+        .and_then(serde_norway::Value::as_sequence)
         .map(|seq| {
             seq.iter()
                 .filter_map(|v| v.as_str().map(str::to_string))
