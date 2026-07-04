@@ -13,6 +13,25 @@
 //! report only neutral, measured counts — never an opinion-bearing "deficiency"
 //! — so the audit *verifies* a pre-registered spec rather than *defining* one
 //! (anti-Goodhart; see `docs/r0_runbook.md`).
+//!
+//! # Factory agent-readiness pillar disposition (aoa-d6t.24)
+//!
+//! Factory's agent-readiness model (docs.factory.ai/web/agent-readiness)
+//! defines nine pillars. Each was evaluated as a *hypothesis* for a
+//! trace-testable structure probe — never adopted as a checkbox. Disposition,
+//! one row per pillar:
+//!
+//! | Pillar | Disposition |
+//! |---|---|
+//! | Style / validation | **Covered**: [`invariant_sites`] (lint/format/policy discoverability, aoa-d6t.21) plus the enforcement-plane probes (pre-commit / CI presence). |
+//! | Build system | **Probe**: [`build_determinism_item`] — dependency-pinning lockfile existence ([`BUILD_DETERMINISM_MARKERS`]). The "documented build command" sub-signal was DROPPED: a build-command token scan of front-door docs cannot be distinguished from the test-command scan [`verification_sites`] already performs without a semantic judgment of which command is "the build". |
+//! | Testing | **Covered**: [`verification_sites`] (aoa-d6t.20). |
+//! | Documentation | **Covered**: [`navigability_sites`] (README anchors) plus [`invariant_sites`]' agent-context / CONTRIBUTING markers. |
+//! | Dev environment | **Probe**: [`dev_environment_item`] — reproducible-environment declaration existence ([`DEV_ENVIRONMENT_MARKERS`]). |
+//! | Debugging / observability | **Excluded**: structured-logging/observability configuration is code-level and ecosystem-specific (a `tracing` subscriber in Rust, a logger setup in Go/JS are *source*, not fixed well-known filenames). The only fixed-filename conventions (`logback.xml`, `log4j2.xml`) are single-ecosystem and would bias the measure; anything broader needs per-ecosystem manifest parsing or token heuristics — forbidden (ZFC), so the pillar is dropped rather than half-built. |
+//! | Security | **Split**: the write-safety leg is covered by aoa-d6t.16 (`generated_artifact_protection_absence`, `write_safety_zone_absence`; merged pending on `wave-d6t16-x0a1-review`) — deliberately not recreated here. The branch-protection / security-posture leg is **excluded**: branch protection lives in forge settings, not the checkout, so a read-only tree probe cannot observe it, and an agent trace never touches it mid-edit. |
+//! | Task discovery | **Probe**: [`task_discovery_item`] — issue-template / in-repo-tracker surface existence ([`TASK_DISCOVERY_SURFACES`]). |
+//! | Product / experimentation | **Excluded**: analytics/experimentation instrumentation is a product-layer semantic property with no fixed-filename convention and no plausible path from its presence to structural facts in coding-agent traces. |
 
 use std::path::{Path, PathBuf};
 
@@ -167,6 +186,71 @@ const INVARIANT_DIR: &str = ".aoa";
 /// the `.github/` and `docs/` placements, probed by filename like [`CI_FILES`].
 const CODEOWNERS_PATHS: &[&str] = &[".github/CODEOWNERS", "docs/CODEOWNERS"];
 
+/// Dependency-pinning lockfile names probed at the repo root. Any one existing
+/// declares deterministic build inputs (the Factory build-system pillar's
+/// trace-testable fact). A documented well-known set in the
+/// [`MANIFEST_MARKERS`] style; membership is by exact-name existence alone —
+/// lossy by contract (a repo pinning some other way reads as absent), which is
+/// the conservative direction for an advisory measure.
+const BUILD_DETERMINISM_MARKERS: &[&str] = &[
+    "Cargo.lock",
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "bun.lock",
+    "bun.lockb",
+    "poetry.lock",
+    "Pipfile.lock",
+    "uv.lock",
+    "go.sum",
+    "Gemfile.lock",
+    "composer.lock",
+    "mix.lock",
+    "flake.lock",
+    "gradle.lockfile",
+    "packages.lock.json",
+];
+
+/// Reproducible dev-environment declarations probed at fixed paths relative to
+/// the repo root: a devcontainer, a nix flake/shell, or a toolchain/runtime
+/// version pin. Any one existing means an agent (or CI) can reconstruct the
+/// intended environment from the tree alone. `Dockerfile` is deliberately
+/// EXCLUDED: a Dockerfile is a deployment artifact as often as a dev
+/// environment, and telling those apart is a semantic classification outside
+/// this probe's mechanical contract (ZFC).
+const DEV_ENVIRONMENT_MARKERS: &[&str] = &[
+    ".devcontainer/devcontainer.json",
+    ".devcontainer.json",
+    "flake.nix",
+    "shell.nix",
+    "rust-toolchain.toml",
+    "rust-toolchain",
+    ".tool-versions",
+    "mise.toml",
+    ".mise.toml",
+    ".nvmrc",
+    ".node-version",
+    ".python-version",
+    ".ruby-version",
+];
+
+/// Task-discovery surfaces probed at fixed paths relative to the repo root: the
+/// documented issue-template locations (GitHub's `.github/ISSUE_TEMPLATE` dir or
+/// single-file forms, GitLab's `.gitlab/issue_templates`) and the in-repo
+/// `.beads` issue tracker (the toolkit-ecosystem convention, same precedent as
+/// the `.aoa` dir in [`INVARIANT_DIR`]). Any one existing means structured work
+/// items are discoverable from the tree. Exact-name matches only — lossy by
+/// contract, like the sibling marker sets.
+const TASK_DISCOVERY_SURFACES: &[&str] = &[
+    ".github/ISSUE_TEMPLATE",
+    ".github/ISSUE_TEMPLATE.md",
+    "ISSUE_TEMPLATE.md",
+    "docs/ISSUE_TEMPLATE.md",
+    ".gitlab/issue_templates",
+    ".beads",
+];
+
 /// Run the code-structure audit family over `repo`, returning measured-fact
 /// punch items (each born [`Tier::Tier3`]). `size_outlier_k` is the caller's
 /// documented multiplier for the module-size measure.
@@ -190,7 +274,91 @@ pub(crate) fn structure_items(
     if let Some(item) = invariant_discoverability_item(repo)? {
         items.push(item);
     }
+    if let Some(item) = build_determinism_item(repo) {
+        items.push(item);
+    }
+    if let Some(item) = dev_environment_item(repo) {
+        items.push(item);
+    }
+    if let Some(item) = task_discovery_item(repo) {
+        items.push(item);
+    }
     Ok(items)
+}
+
+/// Whether the repo declares deterministic build inputs: any well-known
+/// dependency lockfile ([`BUILD_DETERMINISM_MARKERS`]) at the repo root. The
+/// measure is the count of this single marker family that is ABSENT (0 when any
+/// lockfile exists, 1 when none does) — the Factory build-system pillar reduced
+/// to its one mechanically checkable fact. Fixed-path existence only (`exists()`
+/// follows a symlinked lockfile, like [`has_manifest`]); no file content is ever
+/// read, so the probe is infallible. A repo with no package manager at all reads
+/// the same as one that has not pinned — a neutral measured fact either way,
+/// exactly like the sibling absence probes. Born [`Tier::Tier3`].
+fn build_determinism_item(repo: &Path) -> Option<PunchItem> {
+    absence_item(
+        repo,
+        BUILD_DETERMINISM_MARKERS,
+        "repository has no dependency-pinning lockfile (build determinism undeclared)",
+        FindingKind::BuildDeterminism,
+        "build-determinism markers absent",
+    )
+}
+
+/// Whether the repo declares a reproducible dev environment: any well-known
+/// devcontainer / nix / toolchain-pin path ([`DEV_ENVIRONMENT_MARKERS`]). The
+/// measure is the count of this single declaration family that is ABSENT — the
+/// Factory dev-environment pillar's mechanically checkable fact. Fixed-path
+/// existence only; infallible; born [`Tier::Tier3`].
+fn dev_environment_item(repo: &Path) -> Option<PunchItem> {
+    absence_item(
+        repo,
+        DEV_ENVIRONMENT_MARKERS,
+        "repository has no reproducible dev-environment declaration \
+         (devcontainer / flake / toolchain pin)",
+        FindingKind::DevEnvironmentDeclaration,
+        "dev-environment declarations absent",
+    )
+}
+
+/// Whether the repo exposes a task-discovery surface: any well-known
+/// issue-template path or in-repo tracker ([`TASK_DISCOVERY_SURFACES`]). The
+/// measure is the count of this single surface family that is ABSENT — the
+/// Factory task-discovery pillar's mechanically checkable fact. Fixed-path
+/// existence only (a path may be a file or a directory; `exists()` accepts
+/// both); infallible; born [`Tier::Tier3`].
+fn task_discovery_item(repo: &Path) -> Option<PunchItem> {
+    absence_item(
+        repo,
+        TASK_DISCOVERY_SURFACES,
+        "repository has no task-discovery surface (issue templates / in-repo tracker)",
+        FindingKind::TaskDiscoverySurface,
+        "task-discovery surfaces absent",
+    )
+}
+
+/// The shared shape of the fixed-path marker-family probes: abstain when any
+/// marker in the family exists at its path relative to `repo`, otherwise report
+/// the one absent family as a neutral count of 1. Pure existence checks over a
+/// documented set — no reads, no parsing, no error path.
+fn absence_item(
+    repo: &Path,
+    markers: &[&str],
+    title: &str,
+    kind: FindingKind,
+    unit: &str,
+) -> Option<PunchItem> {
+    if markers.iter().any(|rel| repo.join(rel).exists()) {
+        return None;
+    }
+
+    Some(PunchItem {
+        title: title.to_string(),
+        kind,
+        tier: Tier::Tier3,
+        measured_cost: MeasuredCost::new(1, unit),
+        plane: None,
+    })
 }
 
 /// The package roots under `repo` that lack a navigability anchor (README) —
@@ -1924,6 +2092,169 @@ mod tests {
         fs::write(dir.join("AGENTS.md"), "# conventions\n").unwrap();
 
         assert!(invariant_discoverability_item(&dir).unwrap().is_none());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- build determinism (Factory build-system pillar) ---
+    //
+    // These probes read no file contents (fixed-path existence only), so the
+    // non-UTF-8 quadrant the content-scanning siblings need is structurally
+    // inapplicable here.
+
+    #[test]
+    fn build_determinism_item_when_no_lockfile_exists() {
+        let dir = tmp("lock-none");
+        fs::write(dir.join("Cargo.toml"), "[package]\n").unwrap();
+
+        let item = build_determinism_item(&dir).expect("item");
+        assert_eq!(item.kind, FindingKind::BuildDeterminism);
+        assert_eq!(item.tier, Tier::Tier3);
+        assert_eq!(item.measured_cost.unit, "build-determinism markers absent");
+        assert_eq!(item.measured_cost.value, 1);
+        assert!(item.plane.is_none());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn no_build_determinism_item_when_a_lockfile_exists() {
+        // One representative marker per ecosystem family suffices: the probe is
+        // an any-of over a fixed set.
+        for marker in ["Cargo.lock", "package-lock.json", "go.sum", "flake.lock"] {
+            let dir = tmp(&format!("lock-{}", marker.replace('.', "-")));
+            fs::write(dir.join(marker), "").unwrap();
+            assert!(
+                build_determinism_item(&dir).is_none(),
+                "{marker} pins the build -> no finding"
+            );
+            fs::remove_dir_all(&dir).ok();
+        }
+    }
+
+    #[test]
+    fn build_determinism_probes_the_root_only() {
+        // A lockfile buried in a subdirectory is a member's pin, not the repo's
+        // front-door declaration; the probe is a fixed-path root existence check.
+        let dir = tmp("lock-nested");
+        let sub = dir.join("crates").join("foo");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(sub.join("Cargo.lock"), "").unwrap();
+
+        assert!(build_determinism_item(&dir).is_some());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- dev-environment declaration (Factory dev-environment pillar) ---
+
+    #[test]
+    fn dev_environment_item_when_no_declaration_exists() {
+        let dir = tmp("devenv-none");
+        fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
+
+        let item = dev_environment_item(&dir).expect("item");
+        assert_eq!(item.kind, FindingKind::DevEnvironmentDeclaration);
+        assert_eq!(item.tier, Tier::Tier3);
+        assert_eq!(
+            item.measured_cost.unit,
+            "dev-environment declarations absent"
+        );
+        assert_eq!(item.measured_cost.value, 1);
+        assert!(item.plane.is_none());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn no_dev_environment_item_when_a_declaration_exists() {
+        for marker in [
+            "flake.nix",
+            "rust-toolchain.toml",
+            ".tool-versions",
+            ".nvmrc",
+        ] {
+            let dir = tmp(&format!("devenv-{}", marker.replace('.', "-")));
+            fs::write(dir.join(marker), "").unwrap();
+            assert!(
+                dev_environment_item(&dir).is_none(),
+                "{marker} declares the dev environment -> no finding"
+            );
+            fs::remove_dir_all(&dir).ok();
+        }
+    }
+
+    #[test]
+    fn no_dev_environment_item_when_a_devcontainer_is_declared() {
+        // The devcontainer marker is a fixed nested path, not a root filename.
+        let dir = tmp("devenv-devcontainer");
+        let dc = dir.join(".devcontainer");
+        fs::create_dir_all(&dc).unwrap();
+        fs::write(dc.join("devcontainer.json"), "{}\n").unwrap();
+
+        assert!(dev_environment_item(&dir).is_none());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- task-discovery surface (Factory task-discovery pillar) ---
+
+    #[test]
+    fn task_discovery_item_when_no_surface_exists() {
+        let dir = tmp("task-none");
+        fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
+
+        let item = task_discovery_item(&dir).expect("item");
+        assert_eq!(item.kind, FindingKind::TaskDiscoverySurface);
+        assert_eq!(item.tier, Tier::Tier3);
+        assert_eq!(item.measured_cost.unit, "task-discovery surfaces absent");
+        assert_eq!(item.measured_cost.value, 1);
+        assert!(item.plane.is_none());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn no_task_discovery_item_when_an_issue_template_dir_exists() {
+        // The canonical GitHub form: a directory of templates under .github/.
+        let dir = tmp("task-gh-dir");
+        let templates = dir.join(".github").join("ISSUE_TEMPLATE");
+        fs::create_dir_all(&templates).unwrap();
+        fs::write(templates.join("bug.md"), "# bug\n").unwrap();
+
+        assert!(task_discovery_item(&dir).is_none());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn no_task_discovery_item_when_a_single_file_template_exists() {
+        let dir = tmp("task-gh-file");
+        let gh = dir.join(".github");
+        fs::create_dir_all(&gh).unwrap();
+        fs::write(gh.join("ISSUE_TEMPLATE.md"), "# template\n").unwrap();
+
+        assert!(task_discovery_item(&dir).is_none());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn no_task_discovery_item_when_a_beads_tracker_exists() {
+        // The in-repo issue-tracker convention (same ecosystem precedent as the
+        // .aoa dir elsewhere in the family): a .beads dir is a discoverable
+        // task-discovery surface.
+        let dir = tmp("task-beads");
+        fs::create_dir_all(dir.join(".beads")).unwrap();
+
+        assert!(task_discovery_item(&dir).is_none());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn structure_items_include_the_factory_pillar_probes() {
+        // Integration: a bare repo yields all three pillar findings via the
+        // family entry point.
+        let dir = tmp("factory-integration");
+        fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
+
+        let items = structure_items(&dir, 4.0).unwrap();
+        let kinds: Vec<FindingKind> = items.iter().map(|i| i.kind).collect();
+        assert!(kinds.contains(&FindingKind::BuildDeterminism));
+        assert!(kinds.contains(&FindingKind::DevEnvironmentDeclaration));
+        assert!(kinds.contains(&FindingKind::TaskDiscoverySurface));
         fs::remove_dir_all(&dir).ok();
     }
 }

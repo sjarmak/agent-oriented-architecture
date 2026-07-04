@@ -176,7 +176,7 @@ pub fn classify_metric(
 /// `mutation_surface` and `reward_hacking_gap` are harms (smaller is better);
 /// the rest are goods.
 ///
-/// The trailing three are the code-structure measures emitted by `aoa-audit`
+/// The trailing entries are the code-structure measures emitted by `aoa-audit`
 /// (see [`STRUCTURE_MEASURE_SPECS`]). They are registered here so they ride the
 /// same Advisory→Gating discipline as every other candidate — never gating
 /// until [`classify_metric`] sees a confirming external-outcome correlation.
@@ -198,6 +198,18 @@ pub const GATING_CANDIDATES: &[(&str, MetricOrientation)] = &[
     ),
     ("module_size_outliers", MetricOrientation::LowerIsBetter),
     ("unused_import_proxy", MetricOrientation::LowerIsBetter),
+    (
+        "build_determinism_absence",
+        MetricOrientation::LowerIsBetter,
+    ),
+    (
+        "dev_environment_declaration_absence",
+        MetricOrientation::LowerIsBetter,
+    ),
+    (
+        "task_discovery_surface_absence",
+        MetricOrientation::LowerIsBetter,
+    ),
 ];
 
 /// The pre-registered spec for the code-structure measures: each metric paired
@@ -241,6 +253,31 @@ migration), promotable only by external-outcome correlation",
         "unused_import_proxy",
         "count of likely-unused imports by a syntactic proxy (a use-bound name \
 absent from the file body), per aoa-audit unused_import_proxy_item",
+    ),
+    (
+        "build_determinism_absence",
+        "1 when no well-known dependency-pinning lockfile exists at the repo root \
+(0 otherwise), per aoa-audit build_determinism_item; a pure fixed-path existence \
+fact (Factory build-system pillar); the LowerIsBetter orientation is a registered \
+falsifiable hypothesis (no backing migration), promotable only by external-outcome \
+correlation",
+    ),
+    (
+        "dev_environment_declaration_absence",
+        "1 when no reproducible dev-environment declaration (devcontainer / nix \
+flake / toolchain or runtime version pin) exists at its well-known path (0 \
+otherwise), per aoa-audit dev_environment_item; a pure fixed-path existence fact \
+(Factory dev-environment pillar); the LowerIsBetter orientation is a registered \
+falsifiable hypothesis (no backing migration), promotable only by external-outcome \
+correlation",
+    ),
+    (
+        "task_discovery_surface_absence",
+        "1 when no task-discovery surface (issue-template path or in-repo issue \
+tracker) exists at its well-known location (0 otherwise), per aoa-audit \
+task_discovery_item; a pure fixed-path existence fact (Factory task-discovery \
+pillar); the LowerIsBetter orientation is a registered falsifiable hypothesis (no \
+backing migration), promotable only by external-outcome correlation",
     ),
 ];
 

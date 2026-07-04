@@ -59,6 +59,24 @@
       "orientation": "lower_is_better",
       "correlations": [],
       "mode": "advisory"
+    },
+    {
+      "metric": "build_determinism_absence",
+      "orientation": "lower_is_better",
+      "correlations": [],
+      "mode": "advisory"
+    },
+    {
+      "metric": "dev_environment_declaration_absence",
+      "orientation": "lower_is_better",
+      "correlations": [],
+      "mode": "advisory"
+    },
+    {
+      "metric": "task_discovery_surface_absence",
+      "orientation": "lower_is_better",
+      "correlations": [],
+      "mode": "advisory"
     }
   ]
 }
