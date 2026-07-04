@@ -40,6 +40,13 @@ pub enum Command {
     /// into per-finding recommendations (actionable-now vs advisory-only).
     Recommend(RecommendArgs),
 
+    /// One end-to-end operator readiness view: the audit punch-list, the
+    /// Advisory/Gating determination, available migrations, the recommend join,
+    /// and — when `falsification.json` exists under the repo — the R0 verdict
+    /// gating whether the migrate pillar is live. Absent inputs are reported as
+    /// absent, never fabricated.
+    Report(ReportArgs),
+
     /// Run the wrong-layer falsification gate and write `falsification.json`.
     Falsify(FalsifyArgs),
 
@@ -108,8 +115,27 @@ pub struct AuditArgs {
     pub repo: PathBuf,
 
     /// Exit non-zero when a Tier-1 gap is present.
-    #[arg(long, value_parser = ["tier1"])]
+    #[arg(long, value_parser = ["tier1"], conflicts_with = "self_audit")]
     pub fail_on: Option<String>,
+
+    /// R14 lint-thyself: instead of the punch-list, measure the toolkit's own
+    /// added context tokens — the files the applied migration wrote, before
+    /// (archived original, or nothing for a create) vs after — and flag a
+    /// context regression when the median rose without demonstrated held-out
+    /// gain. Exits 1 when a regression is flagged.
+    #[arg(long = "self")]
+    pub self_audit: bool,
+
+    /// Baseline run-result JSON (the `aoa eval compare` input) supplying the
+    /// held-out leg for `--self`. Without the pair, held-out evidence is
+    /// reported absent — and an undemonstrated gain cannot justify a context
+    /// rise.
+    #[arg(long, requires = "self_audit", requires = "migrated")]
+    pub baseline: Option<PathBuf>,
+
+    /// Migrated run-result JSON, paired with `--baseline`.
+    #[arg(long, requires = "self_audit", requires = "baseline")]
+    pub migrated: Option<PathBuf>,
 
     /// Emit the structured JSON rendering instead of human text.
     #[arg(long)]
@@ -295,6 +321,18 @@ pub struct ExperimentArgs {
 
 #[derive(Debug, Args)]
 pub struct GapArgs {
+    /// Emit the structured JSON rendering instead of human text.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ReportArgs {
+    /// Repository root to report on. Defaults to the cwd. The R0 verdict is
+    /// read from `<repo>/falsification.json` when that file exists.
+    #[arg(long, default_value = ".")]
+    pub repo: PathBuf,
+
     /// Emit the structured JSON rendering instead of human text.
     #[arg(long)]
     pub json: bool,

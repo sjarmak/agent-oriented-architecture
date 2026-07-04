@@ -1467,3 +1467,249 @@ fn observe_enforce_writes_idempotent_settings_and_plain_observe_does_not() {
         .success();
     assert!(!plain.path().join(".claude/settings.json").exists());
 }
+
+// --- aoa report (aoa-d6t.19, leg 1) ------------------------------------------
+// One end-to-end operator readiness view composing the audit punch-list, the
+// R9c Advisory/Gating determination, the migration registry, the recommend
+// join, and (when present) the R0 falsification verdict.
+
+#[test]
+fn report_composes_all_pillars_and_reports_absent_falsification() {
+    let repo = TempDir::new().expect("tempdir");
+    aoa()
+        .args(["report", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("punch-list"))
+        .stdout(predicate::str::contains("construct validity"))
+        .stdout(predicate::str::contains("navigability-anchor"))
+        .stdout(predicate::str::contains("AOA recommendations"))
+        // Absent input is reported as absent, never fabricated.
+        .stdout(predicate::str::contains("falsification.json: absent"));
+}
+
+#[test]
+fn report_json_composes_pillars_and_pillar_is_not_live_without_falsification() {
+    let repo = TempDir::new().expect("tempdir");
+    let output = aoa()
+        .args(["report", "--json", "--repo"])
+        .arg(repo.path())
+        .output()
+        .expect("run");
+    assert!(output.status.success());
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert!(parsed["audit"]["items"].is_array());
+    assert!(parsed["construct_validity"]["metrics"].is_array());
+    assert!(
+        !parsed["migrations"]
+            .as_array()
+            .expect("migrations")
+            .is_empty(),
+        "the migration registry is surfaced"
+    );
+    assert!(parsed["recommendations"]["items"].is_array());
+    assert_eq!(parsed["falsification"]["status"], "absent");
+    assert_eq!(parsed["migrate_pillar_live"], false);
+}
+
+#[test]
+fn report_proceed_verdict_marks_the_migrate_pillar_live() {
+    let repo = TempDir::new().expect("tempdir");
+    std::fs::write(
+        repo.path().join("falsification.json"),
+        r#"{"verdict":"proceed","notes":[]}"#,
+    )
+    .unwrap();
+
+    let output = aoa()
+        .args(["report", "--json", "--repo"])
+        .arg(repo.path())
+        .output()
+        .expect("run");
+    assert!(output.status.success());
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert_eq!(parsed["falsification"]["status"], "present");
+    assert_eq!(parsed["falsification"]["verdict"], "proceed");
+    assert_eq!(parsed["migrate_pillar_live"], true);
+}
+
+#[test]
+fn report_pivot_verdict_keeps_the_migrate_pillar_not_live() {
+    let repo = TempDir::new().expect("tempdir");
+    std::fs::write(
+        repo.path().join("falsification.json"),
+        r#"{"verdict":"pivot","notes":[]}"#,
+    )
+    .unwrap();
+
+    aoa()
+        .args(["report", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("pivot"))
+        .stdout(predicate::str::contains("not live"));
+}
+
+#[test]
+fn report_precondition_unmet_verdict_is_surfaced_and_not_live() {
+    // An inconclusive written by an unmet precondition (e.g. too_few_repos)
+    // carries its discriminator; the report surfaces it and the pillar stays
+    // not live.
+    let repo = TempDir::new().expect("tempdir");
+    std::fs::write(
+        repo.path().join("falsification.json"),
+        r#"{"verdict":"inconclusive","precondition_unmet":"too_few_repos","notes":[]}"#,
+    )
+    .unwrap();
+
+    let output = aoa()
+        .args(["report", "--json", "--repo"])
+        .arg(repo.path())
+        .output()
+        .expect("run");
+    assert!(output.status.success());
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert_eq!(
+        parsed["falsification"]["precondition_unmet"],
+        "too_few_repos"
+    );
+    assert_eq!(parsed["migrate_pillar_live"], false);
+}
+
+#[test]
+fn report_fails_loud_on_malformed_falsification_json() {
+    // A present-but-unparsable falsification.json is a hard error, never
+    // silently treated as absent (that would fabricate "gate never ran").
+    let repo = TempDir::new().expect("tempdir");
+    std::fs::write(repo.path().join("falsification.json"), "not json").unwrap();
+
+    aoa()
+        .args(["report", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("falsification.json"));
+}
+
+// --- aoa audit --self (aoa-d6t.19, leg 2: R14 lint-thyself) -------------------
+// The toolkit measures its own added context tokens (the files its applied
+// migration wrote, before vs after) and flags a regression when the median
+// rose without demonstrated held-out gain.
+
+#[test]
+fn audit_self_without_migration_reports_absent_and_exits_zero() {
+    let repo = TempDir::new().expect("tempdir");
+    aoa()
+        .args(["audit", "--self", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no applied migration"));
+}
+
+#[test]
+fn audit_self_flags_regression_when_context_rose_without_heldout_evidence() {
+    let repo = migrate_repo();
+    aoa()
+        .args(["migrate", "--apply", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .success();
+
+    let output = aoa()
+        .args(["audit", "--self", "--json", "--repo"])
+        .arg(repo.path())
+        .output()
+        .expect("run");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a flagged regression exits non-zero"
+    );
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert_eq!(parsed["status"], "measured");
+    assert_eq!(parsed["median_before_tokens"], 0.0);
+    assert!(parsed["median_after_tokens"].as_f64().expect("median") > 0.0);
+    assert_eq!(parsed["held_out"]["status"], "absent");
+    assert_eq!(parsed["context_regression"], true);
+}
+
+#[test]
+fn audit_self_human_names_the_regression() {
+    let repo = migrate_repo();
+    aoa()
+        .args(["migrate", "--apply", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .success();
+
+    aoa()
+        .args(["audit", "--self", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("context regression"))
+        .stdout(predicate::str::contains("held-out evidence: absent"));
+}
+
+#[test]
+fn audit_self_with_heldout_gain_clears_the_regression() {
+    // The fixture pair yields held_out_delta > 0 (label good in `eval compare`),
+    // so the context rise is justified and no regression is flagged.
+    let repo = migrate_repo();
+    aoa()
+        .args(["migrate", "--apply", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .success();
+
+    let output = aoa()
+        .args(["audit", "--self", "--json", "--repo"])
+        .arg(repo.path())
+        .arg("--baseline")
+        .arg(fixture("baseline.json"))
+        .arg("--migrated")
+        .arg(fixture("migrated.json"))
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(0));
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert_eq!(parsed["held_out"]["status"], "present");
+    assert!(
+        parsed["held_out"]["held_out_delta"]
+            .as_f64()
+            .expect("delta")
+            > 0.0
+    );
+    assert_eq!(parsed["context_regression"], false);
+}
+
+#[test]
+fn audit_self_baseline_without_migrated_is_rejected() {
+    let repo = TempDir::new().expect("tempdir");
+    aoa()
+        .args(["audit", "--self", "--repo"])
+        .arg(repo.path())
+        .arg("--baseline")
+        .arg(fixture("baseline.json"))
+        .assert()
+        .failure();
+}
+
+#[test]
+fn audit_baseline_without_self_is_rejected() {
+    // The held-out pair only means something to the self-audit; supplying it to
+    // a plain audit is a usage error, not silently ignored.
+    let repo = TempDir::new().expect("tempdir");
+    aoa()
+        .args(["audit", "--repo"])
+        .arg(repo.path())
+        .arg("--baseline")
+        .arg(fixture("baseline.json"))
+        .arg("--migrated")
+        .arg(fixture("migrated.json"))
+        .assert()
+        .failure();
+}

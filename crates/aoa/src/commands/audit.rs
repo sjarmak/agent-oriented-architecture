@@ -1,11 +1,17 @@
 use anyhow::{Context, Result};
 
 use crate::cli::AuditArgs;
+use crate::commands::self_audit;
 use crate::output::{print_human, print_json};
 
 /// Run a read-only audit and render its tiered punch-list in the requested
-/// register. The exit code is driven by `--fail-on tier1`.
+/// register. The exit code is driven by `--fail-on tier1`. With `--self` the
+/// audit turns on the toolkit itself instead (R14 lint-thyself).
 pub fn run(args: &AuditArgs) -> Result<i32> {
+    if args.self_audit {
+        return self_audit::run(args);
+    }
+
     let cfg = aoa_audit::AuditConfig::default();
     let report = aoa_audit::audit(&args.repo, &cfg)
         .with_context(|| format!("failed to audit {}", args.repo.display()))?;
