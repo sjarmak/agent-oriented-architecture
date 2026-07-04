@@ -313,6 +313,31 @@ fn accumulated_trace_corpus_lights_the_behavioral_metrics_up() {
     assert!(!report.render_human().contains("InsufficientData"));
 }
 
+// aoa-d6t.23 review finding: crossing the window must not re-enable a score
+// computed from nothing. With a sufficient corpus but an empty symbol graph
+// (the AuditConfig::default() shape) there is no measurement, so the
+// mutation-surface item stays out — "0 writable files reachable" would be a
+// fabricated claim, not a measured one.
+#[test]
+fn sufficient_signal_with_an_empty_graph_emits_no_fabricated_surface_score() {
+    let repo = fixture_repo();
+    seed_edit_sessions(repo.path(), 10);
+
+    let report = audit(repo.path(), &AuditConfig::default()).expect("audit succeeds");
+    assert!(report.behavioral_signal.is_sufficient());
+    assert!(
+        !report
+            .items
+            .iter()
+            .any(|i| i.kind == aoa_audit::FindingKind::MutationSurface),
+        "an empty graph measures nothing; no score may be emitted"
+    );
+    assert!(
+        !report.render_human().contains("0 writable files reachable"),
+        "the fabricated zero must never render"
+    );
+}
+
 // aoa-d6t.23 review finding: the window must not be satisfiable by sessions
 // that carry no held-out signal — ten edit-free live logs are zero
 // observations, and the behavioral item stays withheld.

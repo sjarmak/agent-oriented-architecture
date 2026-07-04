@@ -87,8 +87,10 @@ impl Default for AuditConfig {
 /// corpus under `.aoa/traces/` is counted first. Below the behavioral-signal
 /// window the behavioral punch item (mutation surface) is withheld — a repo
 /// with no held-out signal must report InsufficientData on
-/// [`AuditReport::insufficient_data`], never a fabricated score. Structural
-/// items need no traces and are unaffected.
+/// [`AuditReport::insufficient_data`], never a fabricated score. Crossing the
+/// window is not enough on its own: the item also needs a real symbol graph to
+/// measure against (see [`mutation_surface_item`]). Structural items need no
+/// traces and are unaffected.
 pub fn audit(repo: &Path, cfg: &AuditConfig) -> Result<AuditReport, AuditError> {
     let corpus = aoa_observe_shim::load_corpus(repo)?;
     let signal = BehavioralSignal::from_observations(corpus.observations());
@@ -99,7 +101,7 @@ pub fn audit(repo: &Path, cfg: &AuditConfig) -> Result<AuditReport, AuditError> 
         items.push(item);
     }
     if signal.is_sufficient() {
-        items.push(mutation_surface_item(cfg));
+        items.extend(mutation_surface_item(cfg));
     }
     items.extend(plane_items(repo));
     items.extend(structure_items(repo, cfg.size_outlier_k)?);
@@ -140,8 +142,14 @@ fn context_budget_item(repo: &Path, cfg: &AuditConfig) -> Result<Option<PunchIte
 
 /// Emit the mutation-surface punch item. Cost = count of writable files
 /// reachable within depth k (the writable blast radius is the actionable
-/// number).
-fn mutation_surface_item(cfg: &AuditConfig) -> PunchItem {
+/// number). `None` when the symbol graph carries no nodes: with nothing
+/// indexed there is no measurement, and "0 writable files reachable" would be
+/// a fabricated claim, not a measured one (aoa-d6t.23) — the same skip-probe
+/// discipline as [`context_budget_item`] without its context root.
+fn mutation_surface_item(cfg: &AuditConfig) -> Option<PunchItem> {
+    if cfg.graph.nodes.is_empty() {
+        return None;
+    }
     let input = MetricInput {
         trace: cfg.trace.clone(),
         gold_set: cfg.gold_set.clone(),
@@ -156,7 +164,7 @@ fn mutation_surface_item(cfg: &AuditConfig) -> PunchItem {
 
     let surface = compute_mutation_surface(input.as_view());
 
-    PunchItem {
+    Some(PunchItem {
         title: format!("writable mutation surface within depth {}", cfg.k),
         kind: FindingKind::MutationSurface,
         tier: Tier::Tier2,
@@ -165,7 +173,7 @@ fn mutation_surface_item(cfg: &AuditConfig) -> PunchItem {
             "writable files reachable",
         ),
         plane: None,
-    }
+    })
 }
 
 /// One punch item per missing enforcement plane, tier mapped from the plane.

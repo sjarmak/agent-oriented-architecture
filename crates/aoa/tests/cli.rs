@@ -1138,11 +1138,18 @@ fn audit_reports_insufficient_data_on_a_history_poor_repo() {
     );
 }
 
-// Once enough observe-captured sessions accumulate, the metrics light up.
+// Once enough observe-captured sessions accumulate AND the repo indexes into
+// a real symbol graph, the behavioral item lights up with a measured (not
+// fabricated) cost.
 #[test]
 fn audit_lights_up_behavioral_metrics_once_corpus_is_sufficient() {
     let repo = TempDir::new().expect("tempdir");
     seed_live_sessions(repo.path(), 10);
+    std::fs::write(
+        repo.path().join("app.py"),
+        "def handle(x):\n    return store(x)\n\ndef store(x):\n    return x\n",
+    )
+    .expect("write indexable source");
 
     let output = aoa()
         .args(["audit", "--json", "--repo"])
@@ -1153,9 +1160,35 @@ fn audit_lights_up_behavioral_metrics_once_corpus_is_sufficient() {
     assert_eq!(parsed["behavioral_signal"]["observations"], 10);
     assert!(parsed.get("insufficient_data").is_none());
     let items = parsed["items"].as_array().expect("items");
+    let surface = items
+        .iter()
+        .find(|i| i["kind"] == "mutation_surface")
+        .expect("sufficient corpus re-enables the behavioral item");
     assert!(
-        items.iter().any(|i| i["kind"] == "mutation_surface"),
-        "sufficient corpus re-enables the behavioral item"
+        surface["measured_cost"]["value"].as_u64().unwrap() > 0,
+        "the cost is measured from the repo's own graph: {surface}"
+    );
+}
+
+// aoa-d6t.23 review finding: a sufficient corpus over a repo that indexes to
+// an empty graph must not resurrect the fabricated '0 writable files
+// reachable' score — no graph means no measurement, so no item.
+#[test]
+fn audit_withholds_the_surface_score_when_nothing_indexes() {
+    let repo = TempDir::new().expect("tempdir");
+    seed_live_sessions(repo.path(), 10);
+
+    let output = aoa()
+        .args(["audit", "--json", "--repo"])
+        .arg(repo.path())
+        .output()
+        .expect("run");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert_eq!(parsed["behavioral_signal"]["observations"], 10);
+    let items = parsed["items"].as_array().expect("items");
+    assert!(
+        !items.iter().any(|i| i["kind"] == "mutation_surface"),
+        "an empty graph measures nothing; no fabricated score"
     );
 }
 

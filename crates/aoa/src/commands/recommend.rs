@@ -17,7 +17,7 @@ use crate::output::{print_human, print_json};
 /// the audit from the observe-captured corpus, aoa-d6t.23): a history-poor repo
 /// reports its behavioral metrics as InsufficientData, never Advisory.
 pub fn run(args: &RecommendArgs) -> Result<i32> {
-    let cfg = aoa_audit::AuditConfig::default();
+    let cfg = crate::commands::audit::repo_audit_config(&args.repo)?;
     let audit = aoa_audit::audit(&args.repo, &cfg)
         .with_context(|| format!("failed to audit {}", args.repo.display()))?;
     let determination = aoa_gap::determination_with_signal(&audit.behavioral_signal);
