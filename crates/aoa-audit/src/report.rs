@@ -2,14 +2,17 @@ use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
 
+use aoa_gap::{BehavioralSignal, InsufficientDataNote};
+
 use crate::punch::PunchItem;
 use crate::tier::Tier;
 
 /// Exit code returned when `fail_on_tier1` is set and a Tier-1 gap exists.
 const TIER1_FAILURE_CODE: i32 = 2;
 
-/// The full audit result: a ranked punch-list. Serializes to structured JSON
-/// and renders to a human-readable ranked list.
+/// The full audit result: a ranked punch-list plus the repo's held-out
+/// behavioral signal. Serializes to structured JSON and renders to a
+/// human-readable ranked list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditReport {
     pub items: Vec<PunchItem>,
@@ -20,13 +23,35 @@ pub struct AuditReport {
     /// a failure. Omitted from the wire form when `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtree_discovery_warning: Option<String>,
+    /// The repo's held-out behavioral signal (observe-captured sessions under
+    /// `.aoa/traces/` counted against the exact-permutation window). Reports
+    /// from producers that predate the field deserialize to zero observations.
+    #[serde(default)]
+    pub behavioral_signal: BehavioralSignal,
+    /// Present when the signal is below the window: the behavioral metrics
+    /// (the four locality metrics) are InsufficientData, with the reason.
+    /// Their punch items are withheld rather than fabricated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub insufficient_data: Option<InsufficientDataNote>,
 }
 
 impl AuditReport {
+    /// A report over `items` with no recorded behavioral signal (zero
+    /// observations). For synthetic reports in tests and tools; `audit()`
+    /// builds through [`AuditReport::with_signal`] with the measured count.
     pub fn new(items: Vec<PunchItem>) -> Self {
+        Self::with_signal(items, BehavioralSignal::from_observations(0))
+    }
+
+    /// A report over `items` carrying the repo's measured behavioral signal.
+    /// The insufficient-data note is derived from the signal here, so the two
+    /// fields can never disagree.
+    pub fn with_signal(items: Vec<PunchItem>, behavioral_signal: BehavioralSignal) -> Self {
         Self {
             items,
             subtree_discovery_warning: None,
+            insufficient_data: behavioral_signal.insufficient_data(),
+            behavioral_signal,
         }
     }
 
@@ -36,7 +61,10 @@ impl AuditReport {
     }
 
     /// Render the ranked punch-list as human-readable text. Each line carries
-    /// the item's tier, title, and its measured cost.
+    /// the item's tier, title, and its measured cost. A repo below the
+    /// behavioral-signal window gets the InsufficientData block with its
+    /// reason, so the withheld behavioral metrics are explicit in this
+    /// register too.
     pub fn render_human(&self) -> String {
         let mut out = String::new();
         let _ = writeln!(out, "AOA audit punch-list ({} item(s))", self.items.len());
@@ -53,6 +81,9 @@ impl AuditReport {
                 item.measured_cost.value,
                 item.measured_cost.unit,
             );
+        }
+        if let Some(note) = &self.insufficient_data {
+            let _ = writeln!(out, "{}", note.render_line(&self.behavioral_signal));
         }
         out
     }

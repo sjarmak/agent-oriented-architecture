@@ -37,7 +37,7 @@ use std::fmt::Write as _;
 use serde::{Deserialize, Serialize};
 
 use aoa_audit::{AuditReport, FindingKind, MeasuredCost, PunchItem, Tier};
-use aoa_gap::{ConstructValidityReport, MetricMode};
+use aoa_gap::{ConstructValidityReport, InsufficientDataNote, MetricMode};
 use aoa_migrate::CodeFix;
 
 /// Whether AOA recommends acting on a finding now, or merely surfaces it.
@@ -102,6 +102,12 @@ pub struct RecommendationReport {
     pub items: Vec<FindingRecommendation>,
     pub actionable_now: usize,
     pub advisory_only: usize,
+    /// Present when the determination tags metrics `InsufficientData`
+    /// (greenfield/cold-start, aoa-d6t.23): names the affected metrics and the
+    /// reason, so the state is explicit even when the audit withheld their
+    /// findings and no item row carries the mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub insufficient_data: Option<InsufficientDataNote>,
 }
 
 /// Join the audit punch-list with the construct-validity determination and the
@@ -126,6 +132,7 @@ pub fn recommend(
         items,
         actionable_now,
         advisory_only,
+        insufficient_data: determination.insufficient_data(),
     }
 }
 
@@ -170,8 +177,9 @@ fn recommend_one(
 /// if the metric were gating.
 ///
 /// `is_gating` is computed by the caller as `metric_mode == Some(Gating)`, so the
-/// "not gating" case folds Advisory and unclassified (a metric absent from a
-/// partial determination) together — the operative fact for both is "has not
+/// "not gating" case folds Advisory, InsufficientData (no held-out signal for
+/// the repo yet), and unclassified (a metric absent from a partial
+/// determination) together — the operative fact for all three is "has not
 /// earned gating". Taking a `bool` rather than `Option<MetricMode>` makes the
 /// function total over `(bool, bool)`: there is no input that can produce a
 /// reason inconsistent with the record's `metric_mode`.
@@ -292,6 +300,14 @@ impl RecommendationReport {
                 }
             }
             let _ = writeln!(out, "    {}", verdict_line(rec));
+        }
+        if let Some(note) = &self.insufficient_data {
+            let _ = writeln!(
+                out,
+                "behavioral metrics [InsufficientData]: {} — {}",
+                note.metrics.join(", "),
+                note.reason,
+            );
         }
         if self.actionable_now == 0 && !self.items.is_empty() {
             let _ = writeln!(
@@ -598,6 +614,54 @@ mod tests {
         // Even with the metric Gating, no available fix -> advisory, no-fix.
         assert_eq!(rec.actionability, Actionability::AdvisoryOnly);
         assert_eq!(rec.advisory_reason, Some(AdvisoryReason::NoFixAvailable));
+    }
+
+    #[test]
+    fn insufficient_data_determination_surfaces_state_and_reason() {
+        // aoa-d6t.23: on a history-poor repo the determination tags the four
+        // behavioral metrics InsufficientData. recommend must surface that
+        // state — a MutationSurface finding shows the mode (not Advisory), and
+        // the report carries the note with the reason in both registers.
+        let audit = AuditReport::new(vec![item(
+            FindingKind::MutationSurface,
+            "writable mutation surface within depth 2",
+            Tier::Tier2,
+            3,
+            "writable files reachable",
+        )]);
+        let determination =
+            aoa_gap::determination_with_signal(&aoa_gap::BehavioralSignal::from_observations(0));
+
+        let report = recommend(&audit, &determination, &all_fixes());
+        let rec = &report.items[0];
+        assert_eq!(rec.metric.as_deref(), Some("mutation_surface"));
+        assert_eq!(
+            rec.metric_mode,
+            Some(MetricMode::InsufficientData),
+            "InsufficientData, NOT Advisory"
+        );
+        assert_eq!(rec.actionability, Actionability::AdvisoryOnly);
+
+        let note = report.insufficient_data.as_ref().expect("note present");
+        assert_eq!(note.reason, aoa_gap::INSUFFICIENT_DATA_REASON);
+        assert_eq!(note.metrics, aoa_gap::BEHAVIORAL_METRICS);
+
+        let rendered = report.render_human();
+        assert!(rendered.contains("InsufficientData"), "{rendered}");
+        assert!(
+            rendered.contains(aoa_gap::INSUFFICIENT_DATA_REASON),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn sufficient_signal_determination_carries_no_insufficient_note() {
+        let audit = AuditReport::new(vec![nav_item()]);
+        let determination =
+            aoa_gap::determination_with_signal(&aoa_gap::BehavioralSignal::from_observations(10));
+        let report = recommend(&audit, &determination, &all_fixes());
+        assert!(report.insufficient_data.is_none());
+        assert!(!report.render_human().contains("InsufficientData"));
     }
 
     #[test]

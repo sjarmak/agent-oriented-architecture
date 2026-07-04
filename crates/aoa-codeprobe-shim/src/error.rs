@@ -29,6 +29,19 @@ pub enum ShimError {
     #[error("transcript exceeds the {max}-span cap (DoS guard)")]
     TooManySpans { max: usize },
 
+    /// A span-per-line log carried a line that is not a well-formed span.
+    /// Raised by backends whose input format AOA itself owns (the observe
+    /// live log): there a malformed line is upstream corruption and fails
+    /// loud, unlike codeprobe transcript lines, which are lenient warnings
+    /// because codeprobe interleaves non-JSON output.
+    #[error("malformed span at line {line}: {source}")]
+    MalformedSpan {
+        /// 1-based line number of the offending line.
+        line: usize,
+        #[source]
+        source: serde_json::Error,
+    },
+
     /// A backend produced a trace that failed [`aoa_trace::validate_trace_value`].
     /// The conformance contract requires every backend's trace to validate, so
     /// this fails loud rather than admitting a malformed trace.

@@ -101,7 +101,9 @@ name = "aoa-audit"
 version = "0.1.0"
 dependencies = [
  "aoa-budget",
+ "aoa-gap",
  "aoa-metrics",
+ "aoa-observe-shim",
  "aoa-trace",
  "serde",
  "serde_json",
@@ -203,6 +205,17 @@ dependencies = [
  "aoa-audit",
  "rustfix",
  "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "aoa-observe-shim"
+version = "0.1.0"
+dependencies = [
+ "aoa-codeprobe-shim",
+ "aoa-trace",
  "serde_json",
  "tempfile",
  "thiserror",

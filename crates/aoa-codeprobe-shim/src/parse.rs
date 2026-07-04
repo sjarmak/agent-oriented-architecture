@@ -59,7 +59,11 @@ pub fn parse_transcript_file(path: &Path) -> Result<ShimResult, ShimError> {
 /// file that grows (or a symlink whose target swaps) between stat and read cannot
 /// blow past the cap. One extra byte is read so an exactly-`max` file is accepted
 /// while a larger one is rejected.
-pub(crate) fn read_capped(path: &Path, max: u64) -> Result<String, ShimError> {
+///
+/// `pub` for the sibling ingestion adapters (aoa-observe-shim): every backend
+/// in the shim family reads attacker-adjacent local files under the same
+/// TOCTOU-safe cap and reports through the same [`ShimError`] surface.
+pub fn read_capped(path: &Path, max: u64) -> Result<String, ShimError> {
     let file = std::fs::File::open(path).map_err(|source| ShimError::Read {
         path: path.to_path_buf(),
         source,

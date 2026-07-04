@@ -21,4 +21,10 @@ pub enum AuditError {
     /// Resolving or counting the context-file budget failed.
     #[error(transparent)]
     Budget(#[from] aoa_budget::BudgetError),
+
+    /// Loading the observe-captured trace corpus (the behavioral-signal
+    /// count) failed. A corrupt corpus file fails the audit loudly rather
+    /// than under-counting the repo's held-out signal.
+    #[error(transparent)]
+    Corpus(#[from] aoa_observe_shim::ObserveShimError),
 }

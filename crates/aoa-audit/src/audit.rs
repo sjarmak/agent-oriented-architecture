@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use aoa_budget::{count_budget, resolve_closure, Config};
+use aoa_gap::BehavioralSignal;
 use aoa_metrics::{
     compute_mutation_surface, discover_partition, IndexQuality, MetricInput, SubtreePartition,
     SymbolGraph, TransformMap,
@@ -85,7 +86,19 @@ impl Default for AuditConfig {
 /// mutation-surface proxy (aoa-metrics), structural enforcement-plane checks,
 /// and the code-structure family (navigability anchors, module-size outliers —
 /// born Tier-3/advisory). Writes nothing.
+///
+/// Greenfield/cold-start precondition (aoa-d6t.23): the observe-captured trace
+/// corpus under `.aoa/traces/` is counted first. Below the behavioral-signal
+/// window the behavioral punch item (mutation surface) is withheld — a repo
+/// with no held-out signal must report InsufficientData on
+/// [`AuditReport::insufficient_data`], never a fabricated score. Crossing the
+/// window is not enough on its own: the item also needs a real symbol graph to
+/// measure against (see [`mutation_surface_item`]). Structural items need no
+/// traces and are unaffected.
 pub fn audit(repo: &Path, cfg: &AuditConfig) -> Result<AuditReport, AuditError> {
+    let corpus = aoa_observe_shim::load_corpus(repo)?;
+    let signal = BehavioralSignal::from_observations(corpus.observations());
+
     let mut items = Vec::new();
 
     // The workspace partition scopes path-carrying structure findings to
@@ -106,14 +119,16 @@ pub fn audit(repo: &Path, cfg: &AuditConfig) -> Result<AuditReport, AuditError> 
     if let Some(item) = context_budget_item(repo, cfg)? {
         items.push(item);
     }
-    items.push(mutation_surface_item(cfg));
+    if signal.is_sufficient() {
+        items.extend(mutation_surface_item(cfg));
+    }
     items.extend(plane_items(repo));
     items.extend(structure_items(repo, cfg.size_outlier_k, &partition)?);
 
     rank(&mut items);
     Ok(AuditReport {
-        items,
         subtree_discovery_warning,
+        ..AuditReport::with_signal(items, signal)
     })
 }
 
@@ -150,8 +165,14 @@ fn context_budget_item(repo: &Path, cfg: &AuditConfig) -> Result<Option<PunchIte
 
 /// Emit the mutation-surface punch item. Cost = count of writable files
 /// reachable within depth k (the writable blast radius is the actionable
-/// number).
-fn mutation_surface_item(cfg: &AuditConfig) -> PunchItem {
+/// number). `None` when the symbol graph carries no nodes: with nothing
+/// indexed there is no measurement, and "0 writable files reachable" would be
+/// a fabricated claim, not a measured one (aoa-d6t.23) — the same skip-probe
+/// discipline as [`context_budget_item`] without its context root.
+fn mutation_surface_item(cfg: &AuditConfig) -> Option<PunchItem> {
+    if cfg.graph.nodes.is_empty() {
+        return None;
+    }
     let input = MetricInput {
         trace: cfg.trace.clone(),
         gold_set: cfg.gold_set.clone(),
@@ -166,7 +187,7 @@ fn mutation_surface_item(cfg: &AuditConfig) -> PunchItem {
 
     let surface = compute_mutation_surface(input.as_view());
 
-    PunchItem {
+    Some(PunchItem {
         title: format!("writable mutation surface within depth {}", cfg.k),
         kind: FindingKind::MutationSurface,
         tier: Tier::Tier2,
@@ -176,7 +197,7 @@ fn mutation_surface_item(cfg: &AuditConfig) -> PunchItem {
         ),
         plane: None,
         subtree: None,
-    }
+    })
 }
 
 /// One punch item per missing enforcement plane, tier mapped from the plane.

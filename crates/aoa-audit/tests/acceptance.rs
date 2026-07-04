@@ -367,6 +367,143 @@ fn audit_degrades_to_repo_wide_when_workspace_manifest_is_a_symlink() {
     );
 }
 
+/// Accumulate `n` observe-captured live sessions that each carry a landed
+/// edit — the held-out ground truth that makes a session count as one
+/// behavioral observation.
+fn seed_edit_sessions(repo: &Path, n: usize) {
+    let traces = repo.join(".aoa").join("traces");
+    std::fs::create_dir_all(&traces).expect("create traces dir");
+    let spans = concat!(
+        r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#,
+        "\n",
+        r#"{"type":"write.attempt","source":"native","seq":1,"attributes":{"path":"src/lib.rs"}}"#,
+        "\n",
+    );
+    for i in 0..n {
+        std::fs::write(traces.join(format!("live-s{i}.jsonl")), spans).expect("write live log");
+    }
+}
+
+// aoa-d6t.23 criterion: a history-poor repo (no held-out behavioral signal)
+// reports InsufficientData for the behavioral metrics with the reason — never
+// a fabricated mutation-surface score and never a silent checkbox degradation.
+#[test]
+fn greenfield_repo_reports_insufficient_data_not_a_fabricated_score() {
+    let repo = fixture_repo(); // no .aoa/traces -> zero observations
+    let report = audit(repo.path(), &audit_config()).expect("audit succeeds");
+
+    assert_eq!(report.behavioral_signal.observations, 0);
+    assert!(!report.behavioral_signal.is_sufficient());
+
+    let note = report
+        .insufficient_data
+        .as_ref()
+        .expect("insufficient-data note present");
+    assert_eq!(note.reason, aoa_gap::INSUFFICIENT_DATA_REASON);
+    assert_eq!(note.metrics, aoa_gap::BEHAVIORAL_METRICS);
+
+    // No fabricated behavioral score: the mutation-surface item is absent.
+    assert!(
+        !report
+            .items
+            .iter()
+            .any(|i| i.kind == aoa_audit::FindingKind::MutationSurface),
+        "a repo with no behavioral signal must not carry a fabricated surface"
+    );
+
+    let human = report.render_human();
+    assert!(human.contains("InsufficientData"), "{human}");
+    assert!(human.contains(aoa_gap::INSUFFICIENT_DATA_REASON), "{human}");
+}
+
+// aoa-d6t.23 criterion: once enough observe-captured sessions accumulate under
+// .aoa/traces, the behavioral metrics light up (the mutation-surface item is
+// emitted again and the insufficient-data note disappears).
+#[test]
+fn accumulated_trace_corpus_lights_the_behavioral_metrics_up() {
+    let repo = fixture_repo();
+    seed_edit_sessions(repo.path(), 10);
+
+    let report = audit(repo.path(), &audit_config()).expect("audit succeeds");
+    assert_eq!(report.behavioral_signal.observations, 10);
+    assert!(report.behavioral_signal.is_sufficient());
+    assert!(report.insufficient_data.is_none());
+    assert!(
+        report
+            .items
+            .iter()
+            .any(|i| i.kind == aoa_audit::FindingKind::MutationSurface),
+        "with sufficient signal the behavioral item is measured again"
+    );
+    assert!(!report.render_human().contains("InsufficientData"));
+}
+
+// aoa-d6t.23 review finding: crossing the window must not re-enable a score
+// computed from nothing. With a sufficient corpus but an empty symbol graph
+// (the AuditConfig::default() shape) there is no measurement, so the
+// mutation-surface item stays out — "0 writable files reachable" would be a
+// fabricated claim, not a measured one.
+#[test]
+fn sufficient_signal_with_an_empty_graph_emits_no_fabricated_surface_score() {
+    let repo = fixture_repo();
+    seed_edit_sessions(repo.path(), 10);
+
+    let report = audit(repo.path(), &AuditConfig::default()).expect("audit succeeds");
+    assert!(report.behavioral_signal.is_sufficient());
+    assert!(
+        !report
+            .items
+            .iter()
+            .any(|i| i.kind == aoa_audit::FindingKind::MutationSurface),
+        "an empty graph measures nothing; no score may be emitted"
+    );
+    assert!(
+        !report.render_human().contains("0 writable files reachable"),
+        "the fabricated zero must never render"
+    );
+}
+
+// aoa-d6t.23 review finding: the window must not be satisfiable by sessions
+// that carry no held-out signal — ten edit-free live logs are zero
+// observations, and the behavioral item stays withheld.
+#[test]
+fn edit_free_sessions_do_not_satisfy_the_behavioral_window() {
+    let repo = fixture_repo();
+    let traces = repo.path().join(".aoa").join("traces");
+    std::fs::create_dir_all(&traces).expect("create traces dir");
+    let span = r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#;
+    for i in 0..10 {
+        std::fs::write(traces.join(format!("live-s{i}.jsonl")), format!("{span}\n"))
+            .expect("write live log");
+    }
+
+    let report = audit(repo.path(), &audit_config()).expect("audit succeeds");
+    assert_eq!(
+        report.behavioral_signal.observations, 0,
+        "edit-free sessions supply no held-out signal"
+    );
+    assert!(report.insufficient_data.is_some());
+    assert!(!report
+        .items
+        .iter()
+        .any(|i| i.kind == aoa_audit::FindingKind::MutationSurface));
+}
+
+// A corrupt corpus file must fail the audit loudly, never under-count signal.
+#[test]
+fn corrupt_trace_corpus_fails_the_audit_loud() {
+    let repo = fixture_repo();
+    let traces = repo.path().join(".aoa").join("traces");
+    std::fs::create_dir_all(&traces).expect("create traces dir");
+    std::fs::write(traces.join("live-bad.jsonl"), "not json\n").expect("write corrupt log");
+
+    let err = audit(repo.path(), &audit_config()).expect_err("corruption is loud");
+    assert!(
+        err.to_string().contains("live-bad.jsonl"),
+        "error names the file: {err}"
+    );
+}
+
 // Defensive: the default-config audit (no context root match, empty graph) still
 // produces a well-formed, ranked report with tiered items.
 #[test]

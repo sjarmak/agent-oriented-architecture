@@ -31,6 +31,7 @@ mod gap;
 mod outcome;
 mod provenance;
 mod run;
+mod signal;
 
 pub use checkbox_baseline::{
     score_repo, CheckboxBaseline, CheckboxBaselineError, CriterionResult, CriterionStatus,
@@ -54,3 +55,7 @@ pub use outcome::{
 };
 pub use provenance::HeldOutProvenance;
 pub use run::{CanaryItem, RunResult, TaskOutcome};
+pub use signal::{
+    determination_with_signal, BehavioralSignal, InsufficientDataNote, BEHAVIORAL_METRICS,
+    INSUFFICIENT_DATA_REASON,
+};
