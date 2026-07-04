@@ -40,11 +40,11 @@
 //!
 //! Scoring is repo-scope only (paths relative to the supplied root). Factory's
 //! application-scope per-app evaluation for monorepos ("3/4" scores) is out of
-//! scope here. The corpus join against hidden-set outcomes is also NOT built in
-//! this module: the external-outcome corpus layer lives on an unmerged branch,
-//! and the join is a follow-up bead blocked on that merge. [`CheckboxBaseline`]
-//! is shaped (repo id, level, per-pillar fractions, pinned criteria version) so
-//! that join can carry it as-is.
+//! scope here. The corpus join lives in `crate::outcome` (aoa-d6t.27): a
+//! [`crate::Repo`] carries [`CheckboxBaseline`] as an optional feature column —
+//! as-is: repo id, level, per-pillar fractions, pinned criteria version — and
+//! [`crate::build_report_from_corpus`] correlates the level against the corpus
+//! outcome side by side with the AOA metrics, never as a gating candidate.
 
 use std::path::Path;
 
