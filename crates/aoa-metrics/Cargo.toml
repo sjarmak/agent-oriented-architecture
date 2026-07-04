@@ -7,6 +7,12 @@ license.workspace = true
 
 [dependencies]
 aoa-trace = { path = "../aoa-trace" }
+globset = "0.4.16"
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = "0.9.34"
 thiserror = { workspace = true }
+toml = { version = "1.1.2", default-features = false, features = ["parse", "serde"] }
+
+[dev-dependencies]
+tempfile = "3.10.1"
