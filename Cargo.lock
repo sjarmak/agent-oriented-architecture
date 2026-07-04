@@ -167,6 +167,7 @@ dependencies = [
  "aoa-metrics",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
 ]
 

@@ -11,3 +11,8 @@ aoa-metrics = { path = "../aoa-metrics" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+# tempfile: checkbox_baseline fixture tests build synthetic repo trees in
+# tempdirs to exercise Factory-level boundaries (same pin as aoa-audit).
+tempfile = "3.10.1"
