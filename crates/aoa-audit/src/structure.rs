@@ -2468,6 +2468,21 @@ mod tests {
     }
 
     #[test]
+    fn write_safety_counts_one_absent_when_policy_file_present() {
+        let dir = tmp("write-policy");
+        // The mirror of the CODEOWNERS quadrant: a .aoa/write-policy.toml
+        // satisfies the safe-write-policy surface, so only the ownership-map
+        // surface remains absent.
+        let aoa = dir.join(".aoa");
+        fs::create_dir_all(&aoa).unwrap();
+        fs::write(aoa.join("write-policy.toml"), "[zones]\n").unwrap();
+
+        let item = write_safety_zone_item(&dir).expect("item");
+        assert_eq!(item.measured_cost.value, 1);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn structure_items_include_the_factory_pillar_probes() {
         // Integration: a bare repo yields all three pillar findings via the
         // family entry point.
