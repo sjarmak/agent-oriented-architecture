@@ -301,9 +301,38 @@ pub struct ExperimentArgs {
 
 #[derive(Debug, Args)]
 pub struct GapArgs {
-    /// Emit the structured JSON rendering instead of human text.
-    #[arg(long)]
+    #[command(subcommand)]
+    pub command: Option<GapCommand>,
+
+    /// Emit the structured JSON rendering instead of human text. Global, so it
+    /// selects the JSON register on either side of a subcommand.
+    #[arg(long, global = true)]
     pub json: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum GapCommand {
+    /// Score a repo against the provisional Factory readiness criteria and emit
+    /// the checkbox-baseline feature column (R0 study baseline, repo-scope only;
+    /// per-app monorepo scoring is out of scope).
+    CheckboxBaseline(CheckboxBaselineArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct CheckboxBaselineArgs {
+    /// Repository root to score. Every criterion is a fixed relative-path
+    /// existence check against this root.
+    #[arg(value_name = "ROOT")]
+    pub root: PathBuf,
+
+    /// Repo identifier stamped into the emitted baseline (the study join key).
+    #[arg(long)]
+    pub repo_id: String,
+
+    /// Also list excluded criteria with their exclusion reasons in the human
+    /// register. The JSON register carries them regardless.
+    #[arg(long)]
+    pub show_excluded: bool,
 }
 
 #[derive(Debug, Args)]

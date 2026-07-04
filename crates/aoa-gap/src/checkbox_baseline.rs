@@ -89,6 +89,25 @@ pub enum Pillar {
     ProductAndExperimentation,
 }
 
+impl Pillar {
+    /// Stable snake_case name, identical to the serde rendering, so the human
+    /// and JSON registers name pillars the same way.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Pillar::StyleAndValidation => "style_and_validation",
+            Pillar::BuildSystem => "build_system",
+            Pillar::Testing => "testing",
+            Pillar::Documentation => "documentation",
+            Pillar::DevelopmentEnvironment => "development_environment",
+            Pillar::DebuggingAndObservability => "debugging_and_observability",
+            Pillar::Security => "security",
+            Pillar::TaskDiscovery => "task_discovery",
+            Pillar::ProductAndExperimentation => "product_and_experimentation",
+        }
+    }
+}
+
 /// All nine pillars in Factory's published order.
 pub const PILLARS: [Pillar; 9] = [
     Pillar::StyleAndValidation,
@@ -789,6 +808,14 @@ mod tests {
         let back: CheckboxBaseline = serde_json::from_str(&json).unwrap();
         assert_eq!(b, back);
         assert!(json.contains("factory-provisional-2026-07-04"));
+    }
+
+    #[test]
+    fn pillar_as_str_matches_the_serde_rendering() {
+        for pillar in PILLARS {
+            let serde_name = serde_json::to_value(pillar).unwrap();
+            assert_eq!(serde_name, pillar.as_str(), "{pillar:?}");
+        }
     }
 
     #[test]
