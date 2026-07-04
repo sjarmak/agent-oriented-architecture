@@ -133,12 +133,21 @@ impl CorrelationReport {
     }
 }
 
-/// Whether a metric may gate a decision or is advisory only.
+/// Whether a metric may gate a decision, is advisory only, or has no data at
+/// all for the repo under evaluation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MetricMode {
     Advisory,
     Gating,
+    /// The repo has no held-out behavioral signal yet (greenfield/cold-start),
+    /// so the metric cannot be computed at all. DISTINCT from `Advisory`: an
+    /// advisory metric was measured but has not earned external validation; an
+    /// insufficient-data metric has nothing to measure. Never produced by
+    /// [`classify_metric`] — only the behavioral-signal precondition
+    /// ([`crate::determination_with_signal`]) assigns it, with
+    /// [`crate::INSUFFICIENT_DATA_REASON`].
+    InsufficientData,
 }
 
 impl MetricMode {
@@ -149,6 +158,7 @@ impl MetricMode {
         match self {
             MetricMode::Advisory => "Advisory",
             MetricMode::Gating => "Gating",
+            MetricMode::InsufficientData => "InsufficientData",
         }
     }
 }
@@ -319,6 +329,11 @@ pub struct MetricClassification {
     pub orientation: MetricOrientation,
     pub correlations: Vec<OutcomeCorrelation>,
     pub mode: MetricMode,
+    /// Why the metric is in its mode, when the mode needs one — today only
+    /// [`MetricMode::InsufficientData`] carries a reason. `None` for the
+    /// evidence-driven modes, and absent from their wire form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// The construct-validity artifact: the data source consulted, the thresholds
@@ -339,24 +354,33 @@ impl ConstructValidityReport {
     /// rather than the discipline being documented but never shown.
     #[must_use]
     pub fn render_human(&self) -> String {
-        let gating = self
-            .metrics
-            .iter()
-            .filter(|m| m.mode == MetricMode::Gating)
-            .count();
+        let count = |mode| self.metrics.iter().filter(|m| m.mode == mode).count();
+        let gating = count(MetricMode::Gating);
+        let insufficient = count(MetricMode::InsufficientData);
+        let advisory = self.metrics.len() - gating - insufficient;
         let mut out = String::new();
         let _ = writeln!(
             out,
-            "R9c construct validity: {} candidate(s), {gating} gating, {} advisory",
+            "R9c construct validity: {} candidate(s), {gating} gating, {advisory} advisory, \
+             {insufficient} insufficient-data",
             self.metrics.len(),
-            self.metrics.len() - gating,
         );
         for m in &self.metrics {
             let dir = match m.orientation {
                 MetricOrientation::HigherIsBetter => "higher-is-better",
                 MetricOrientation::LowerIsBetter => "lower-is-better",
             };
-            let _ = writeln!(out, "  [{}] {} ({dir})", m.mode.as_str(), m.metric);
+            let _ = write!(out, "  [{}] {} ({dir})", m.mode.as_str(), m.metric);
+            // The reason rides on the same line so an operator never sees a
+            // bare InsufficientData tag without the why.
+            match &m.reason {
+                Some(reason) => {
+                    let _ = writeln!(out, " — {reason}");
+                }
+                None => {
+                    let _ = writeln!(out);
+                }
+            }
         }
         let _ = writeln!(out, "data source: {}", self.data_source);
         out
@@ -378,6 +402,7 @@ pub fn build_report(
             orientation: r.orientation,
             correlations: r.correlations.clone(),
             mode: classify_metric(Some(r), thresholds),
+            reason: None,
         })
         .collect();
     ConstructValidityReport {
