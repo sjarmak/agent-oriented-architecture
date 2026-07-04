@@ -424,6 +424,107 @@ mod tests {
         fs::remove_dir_all(&dir).ok();
     }
 
+    /// Contract test for codeprobe's comprehension consensus artifacts
+    /// (R0 provenance track, aoa-s62): a dual comprehension task dir carrying
+    /// a two-backend `divergence_report.json` and the mine-time commit in
+    /// `tests/ground_truth.json` must classify `NativeComposed`. Fixture
+    /// content is copied verbatim (minus whitespace) from a real re-mined
+    /// marshmallow task (`comprehension-dependency_analysis-006-20a7339c`).
+    #[test]
+    fn comprehension_consensus_task_classifies_native_composed() {
+        use aoa_gap::HeldOutProvenance;
+
+        let dir = std::env::temp_dir().join(format!("aoa-bench-compr-{}", std::process::id()));
+        fs::create_dir_all(dir.join("tests")).unwrap();
+        fs::write(
+            dir.join("metadata.json"),
+            r#"{
+              "id": "comprehension-dependency_analysis-006-20a7339c",
+              "repo": "marshmallow",
+              "metadata": {"ground_truth_commit": "", "enrichment_source": "static_analysis"},
+              "verification": {
+                "type": "artifact_eval", "verification_mode": "dual",
+                "ground_truth_path": "tests/ground_truth.json",
+                "answer_schema": "file_list", "scoring_policy": "min",
+                "ground_truth_schema_version": "comprehension-v1",
+                "oracle_answer": []
+              }
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("instruction.md"),
+            "# dependency_analysis: tests.base.validate",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("tests").join("ground_truth.json"),
+            r#"{
+              "answer": ["tests/test_decorators.py", "tests/test_deserialization.py", "tests/test_schema.py"],
+              "answer_type": "file_list",
+              "confidence": 0.95,
+              "provenance": "deterministic",
+              "commit": "cd3cda8b1a9ae740d439538cee7aa8faea58d6b9"
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("divergence_report.json"),
+            r#"{
+              "schema_version": "consensus.v1",
+              "task_id": "comprehension-dependency_analysis-006-20a7339c",
+              "template": "dependency_analysis",
+              "symbol": "tests.base.validate",
+              "defining_file": "tests/base.py",
+              "answer_type": "file_list",
+              "threshold": 1.0,
+              "mode": "exact_answer",
+              "decision": "shipped",
+              "backend_results": [
+                {"backend": "regex_import_graph", "available": true, "n_files": 3,
+                 "files": ["tests/test_decorators.py", "tests/test_deserialization.py", "tests/test_schema.py"],
+                 "error": null,
+                 "answer": ["tests/test_decorators.py", "tests/test_deserialization.py", "tests/test_schema.py"]},
+                {"backend": "python_ast_graph", "available": true, "n_files": 3,
+                 "files": ["tests/test_decorators.py", "tests/test_deserialization.py", "tests/test_schema.py"],
+                 "error": null,
+                 "answer": ["tests/test_decorators.py", "tests/test_deserialization.py", "tests/test_schema.py"],
+                 "detail": null}
+              ],
+              "pair_metrics": [
+                {"backend_a": "regex_import_graph", "backend_b": "python_ast_graph", "exact_match": true}
+              ],
+              "consensus_files": ["tests/test_decorators.py", "tests/test_deserialization.py", "tests/test_schema.py"],
+              "consensus_answer": ["tests/test_decorators.py", "tests/test_deserialization.py", "tests/test_schema.py"]
+            }"#,
+        )
+        .unwrap();
+
+        let task = load_task(&dir).unwrap();
+        // The mine-time commit is read from ground_truth.json (probe-layout
+        // field), NOT from the empty executor-pinning metadata field.
+        assert_eq!(
+            task.ground_truth_commit.as_deref(),
+            Some("cd3cda8b1a9ae740d439538cee7aa8faea58d6b9")
+        );
+        // comprehension-v1 has no expected[] file oracle, so the commit must
+        // NOT grant External; the two-backend consensus makes it
+        // NativeComposed.
+        assert!(task.oracle_files.is_empty());
+        let backends: Vec<&str> = task
+            .accepted_solutions
+            .iter()
+            .map(|s| s.backend.as_str())
+            .collect();
+        assert_eq!(backends, vec!["regex_import_graph", "python_ast_graph"]);
+        assert_eq!(
+            task.held_out_provenance(),
+            HeldOutProvenance::NativeComposed
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn quarantined_or_absent_report_yields_no_accepted_solutions() {
         let dir = std::env::temp_dir().join(format!("aoa-bench-quar-{}", std::process::id()));
