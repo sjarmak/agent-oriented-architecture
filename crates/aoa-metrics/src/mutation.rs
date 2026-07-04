@@ -22,10 +22,15 @@ pub struct MutationSurface {
     pub weight: f64,
 }
 
-/// Writable nodes reachable from any node within `k` hops over directed edges.
-/// A degraded index yields an empty set: a degraded index never *raises* the
-/// mutation surface (R-silent).
-fn reachable_writable(graph: &SymbolGraph, k: u32) -> BTreeSet<String> {
+/// Writable nodes reachable from the seed nodes within `k` hops over directed
+/// edges. A degraded index yields an empty set: a degraded index never
+/// *raises* the mutation surface (R-silent). Seeds themselves count when
+/// writable (depth 0).
+pub(crate) fn reachable_writable_from<'g>(
+    graph: &'g SymbolGraph,
+    seeds: impl IntoIterator<Item = &'g str>,
+    k: u32,
+) -> BTreeSet<String> {
     if graph.quality == IndexQuality::Degraded {
         return BTreeSet::new();
     }
@@ -38,7 +43,7 @@ fn reachable_writable(graph: &SymbolGraph, k: u32) -> BTreeSet<String> {
 
     let mut reachable = BTreeSet::new();
     let mut visited = BTreeSet::new();
-    let mut queue: VecDeque<(&str, u32)> = graph.nodes.iter().map(|n| (n.as_str(), 0)).collect();
+    let mut queue: VecDeque<(&str, u32)> = seeds.into_iter().map(|n| (n, 0)).collect();
 
     while let Some((node, depth)) = queue.pop_front() {
         if !visited.insert(node.to_string()) {
@@ -60,9 +65,11 @@ fn reachable_writable(graph: &SymbolGraph, k: u32) -> BTreeSet<String> {
     reachable
 }
 
-/// Compute mutation-surface over the input's symbol graph at depth `<= k`.
+/// Compute mutation-surface over the input's symbol graph at depth `<= k`,
+/// seeded from every node.
 pub fn compute_mutation_surface(input: MetricInputRef<'_>) -> MutationSurface {
-    let reachable = reachable_writable(input.graph, input.k);
+    let seeds = input.graph.nodes.iter().map(String::as_str);
+    let reachable = reachable_writable_from(input.graph, seeds, input.k);
 
     MutationSurface {
         writable_reachable: reachable.len(),
@@ -72,5 +79,41 @@ pub fn compute_mutation_surface(input: MetricInputRef<'_>) -> MutationSurface {
         conditioned_on: ConditionedOn::HeldOut,
         confidence: input.graph.quality.confidence(),
         weight: input.graph.quality.weight(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn chain_graph(quality: IndexQuality) -> SymbolGraph {
+        SymbolGraph {
+            nodes: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            edges: vec![
+                ("a".to_string(), "b".to_string()),
+                ("b".to_string(), "c".to_string()),
+            ],
+            writable: ["b", "c"].iter().map(|s| s.to_string()).collect(),
+            node_paths: BTreeMap::new(),
+            quality,
+        }
+    }
+
+    #[test]
+    fn seeded_reachability_is_bounded_by_k_from_the_seeds_only() {
+        let graph = chain_graph(IndexQuality::Scip);
+        // From `a` with k=1: b is reachable, c is one hop too far.
+        let reached = reachable_writable_from(&graph, ["a"], 1);
+        assert_eq!(reached, ["b".to_string()].into());
+        // From `b` with k=1: b itself (depth 0, writable) and c.
+        let reached = reachable_writable_from(&graph, ["b"], 1);
+        assert_eq!(reached, ["b".to_string(), "c".to_string()].into());
+    }
+
+    #[test]
+    fn degraded_index_never_raises_the_seeded_surface() {
+        let graph = chain_graph(IndexQuality::Degraded);
+        assert!(reachable_writable_from(&graph, ["a"], 5).is_empty());
     }
 }

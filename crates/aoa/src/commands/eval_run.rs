@@ -435,13 +435,25 @@ fn render_human(report: &EvalRunReport) -> String {
                 Some(n) => n.to_string(),
                 None => "-".to_string(),
             };
+            // `mutation_unavailable` is always set when the numbers are None,
+            // mirroring the `edit_locality_unavailable` fallback above.
+            let mutation = match (row.mutation_surface, row.mutation_leakage) {
+                (Some(surface), Some(leakage)) => {
+                    format!("mutation_surface={surface} mutation_leakage={leakage}")
+                }
+                _ => format!(
+                    "mutation=[{}]",
+                    row.mutation_unavailable.as_deref().unwrap_or("n/a")
+                ),
+            };
             let _ = writeln!(
                 out,
-                "    subtree {:<24} spans={} edits={} first_relevant={}",
+                "    subtree {:<24} spans={} edits={} first_relevant={} {}",
                 row.subtree.escape_debug(),
                 row.attributed_span_count,
                 row.edited_file_count,
-                first
+                first,
+                mutation
             );
         }
     }

@@ -2,7 +2,7 @@
 //! workspace-manifest discovery, longest-prefix path attribution, and
 //! per-subtree metric aggregation over synthetic traces.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -319,6 +319,7 @@ fn graph() -> SymbolGraph {
         nodes: vec!["n".to_string()],
         edges: vec![],
         writable: BTreeSet::new(),
+        node_paths: BTreeMap::new(),
         quality: IndexQuality::BestEffort,
     }
 }
@@ -418,6 +419,168 @@ fn subtree_metrics_split_a_two_subtree_trace() {
     assert_eq!(edit.f_edit_size, 1);
     assert_eq!(edit.intersection_size, 1);
     assert_eq!(edit.union_size, 1);
+}
+
+#[test]
+fn subtree_rows_count_mutation_surface_and_cross_subtree_leakage() {
+    let dir = TempDir::new().unwrap();
+    let partition = two_member_partition(&dir);
+
+    // core::a (not writable) calls core::b (writable, in-subtree) and
+    // legacy::x (writable, cross-subtree); legacy::x calls legacy::y
+    // (writable, so reachable from core at depth 2). core::b also calls a
+    // writable node with no recorded path — attributable to no subtree, so it
+    // must appear in neither count.
+    let graph = SymbolGraph {
+        nodes: vec![
+            "core::a".to_string(),
+            "core::b".to_string(),
+            "legacy::x".to_string(),
+            "legacy::y".to_string(),
+            "unmapped".to_string(),
+        ],
+        edges: vec![
+            ("core::a".to_string(), "core::b".to_string()),
+            ("core::a".to_string(), "legacy::x".to_string()),
+            ("core::b".to_string(), "unmapped".to_string()),
+            ("legacy::x".to_string(), "legacy::y".to_string()),
+        ],
+        writable: ["core::b", "legacy::x", "legacy::y", "unmapped"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+        node_paths: [
+            ("core::a", "crates/core/src/a.rs"),
+            ("core::b", "crates/core/src/b.rs"),
+            ("legacy::x", "crates/legacy/src/x.rs"),
+            ("legacy::y", "crates/legacy/src/y.rs"),
+        ]
+        .iter()
+        .map(|(n, p)| (n.to_string(), p.to_string()))
+        .collect(),
+        quality: IndexQuality::BestEffort,
+    };
+
+    // One span per subtree so both rows are active.
+    let trace = Trace {
+        spans: vec![
+            span(
+                SpanType::FileRead,
+                1,
+                &[("path", json!("crates/core/src/a.rs"))],
+            ),
+            span(
+                SpanType::FileRead,
+                2,
+                &[("path", json!("crates/legacy/src/x.rs"))],
+            ),
+        ],
+    };
+    let gold_set = BTreeSet::new();
+    let edited_files = BTreeSet::new();
+    let solutions = vec![BTreeSet::new(), BTreeSet::new()];
+    let transform = TransformMap::default();
+    let invariant_set = BTreeSet::new();
+
+    let input = MetricInputRef {
+        trace: &trace,
+        gold_set: &gold_set,
+        invariant_set: &invariant_set,
+        transform: &transform,
+        edited_files: &edited_files,
+        accepted_solutions: &solutions,
+        graph: &graph,
+        k: 2,
+        held_out_success: true,
+    };
+
+    let rows = compute_subtree_metrics(input, &partition);
+    let names: Vec<&str> = rows.iter().map(|r| r.subtree.as_str()).collect();
+    assert_eq!(names, ["crates/core", "crates/legacy"]);
+
+    let core = &rows[0];
+    assert_eq!(
+        core.mutation_surface,
+        Some(1),
+        "core reaches one writable node inside its own subtree (core::b)"
+    );
+    assert_eq!(
+        core.mutation_leakage,
+        Some(2),
+        "core reaches legacy::x (depth 1) and legacy::y (depth 2) across the boundary; \
+         the path-less writable node counts in neither"
+    );
+
+    let legacy = &rows[1];
+    assert_eq!(
+        legacy.mutation_surface,
+        Some(2),
+        "legacy reaches its own writable x and y"
+    );
+    assert_eq!(
+        legacy.mutation_leakage,
+        Some(0),
+        "no edge leaves the legacy subtree"
+    );
+    assert_eq!(legacy.mutation_unavailable, None);
+}
+
+#[test]
+fn subtree_rows_mark_mutation_unavailable_when_no_node_attributes_to_the_subtree() {
+    let dir = TempDir::new().unwrap();
+    let partition = two_member_partition(&dir);
+
+    // A legacy vendored SCIP index without document `relative_path` is a
+    // supported input: it yields a high-confidence graph with an empty
+    // `node_paths` map. No node then attributes to any subtree, so a 0/0
+    // surface/leakage split would read as "isolated at high confidence" when
+    // the truth is "attribution data missing". The row must say so instead.
+    let graph = SymbolGraph {
+        nodes: vec!["core::a".to_string(), "legacy::x".to_string()],
+        edges: vec![("core::a".to_string(), "legacy::x".to_string())],
+        writable: ["legacy::x"].iter().map(|s| s.to_string()).collect(),
+        node_paths: BTreeMap::new(),
+        quality: IndexQuality::Scip,
+    };
+
+    let trace = Trace {
+        spans: vec![span(
+            SpanType::FileRead,
+            1,
+            &[("path", json!("crates/core/src/a.rs"))],
+        )],
+    };
+    let gold_set = BTreeSet::new();
+    let edited_files = BTreeSet::new();
+    let solutions = vec![BTreeSet::new(), BTreeSet::new()];
+    let transform = TransformMap::default();
+    let invariant_set = BTreeSet::new();
+
+    let input = MetricInputRef {
+        trace: &trace,
+        gold_set: &gold_set,
+        invariant_set: &invariant_set,
+        transform: &transform,
+        edited_files: &edited_files,
+        accepted_solutions: &solutions,
+        graph: &graph,
+        k: 2,
+        held_out_success: true,
+    };
+
+    let rows = compute_subtree_metrics(input, &partition);
+    assert_eq!(rows.len(), 1);
+    let core = &rows[0];
+    assert_eq!(core.subtree, "crates/core");
+    assert_eq!(
+        core.mutation_surface, None,
+        "no attributed seed nodes: the surface is unknown, not zero"
+    );
+    assert_eq!(core.mutation_leakage, None);
+    assert_eq!(
+        core.mutation_unavailable.as_deref(),
+        Some("no graph nodes attributed to this subtree"),
+    );
 }
 
 #[test]
