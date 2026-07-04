@@ -29,6 +29,7 @@ fn scip_graph() -> SymbolGraph {
             ("leaf".into(), "far".into()),
         ],
         writable: set(&["mid", "leaf", "far"]),
+        node_paths: BTreeMap::new(),
         quality: IndexQuality::Scip,
     }
 }
@@ -201,6 +202,7 @@ fn mutation_surface_respects_depth_bound() {
         nodes: vec!["root".into()],
         edges: vec![("root".into(), "mid".into()), ("mid".into(), "leaf".into())],
         writable: set(&["mid", "leaf"]),
+        node_paths: BTreeMap::new(),
         quality: IndexQuality::Scip,
     };
     let input = MetricInput {

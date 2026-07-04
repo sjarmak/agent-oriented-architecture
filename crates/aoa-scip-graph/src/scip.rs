@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::Deserialize;
@@ -26,6 +26,10 @@ struct ScipIndex {
 
 #[derive(Debug, Deserialize)]
 struct ScipDocument {
+    /// The document's repo-relative source path (SCIP `relative_path`). Absent
+    /// in older vendored indexes; definitions then carry no node path.
+    #[serde(default)]
+    relative_path: Option<String>,
     #[serde(default)]
     occurrences: Vec<ScipOccurrence>,
 }
@@ -59,7 +63,9 @@ struct ScipOccurrence {
 ///
 /// Nodes are the symbols with a `definition` occurrence; edges are
 /// `(enclosing, symbol)` for each `reference` occurrence that names its
-/// enclosing definition. The resulting graph is tagged [`IndexQuality::Scip`].
+/// enclosing definition. A definition also maps its symbol to the document's
+/// `relative_path` in `node_paths`. The resulting graph is tagged
+/// [`IndexQuality::Scip`].
 pub fn index_with_scip(index_path: &Path) -> Result<IndexedRepo, ScipGraphError> {
     let raw = read_capped(index_path, MAX_SCIP_BYTES)?;
     let index: ScipIndex = serde_json::from_str(&raw).map_err(|source| ScipGraphError::Parse {
@@ -69,11 +75,15 @@ pub fn index_with_scip(index_path: &Path) -> Result<IndexedRepo, ScipGraphError>
 
     let mut nodes: BTreeSet<String> = BTreeSet::new();
     let mut edges: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut node_paths: BTreeMap<String, String> = BTreeMap::new();
 
     for doc in &index.documents {
         for occ in &doc.occurrences {
             if occ.roles.contains(&ScipRole::Definition) {
                 nodes.insert(occ.symbol.clone());
+                if let Some(path) = &doc.relative_path {
+                    node_paths.insert(occ.symbol.clone(), path.clone());
+                }
             }
             if occ.roles.contains(&ScipRole::Reference) {
                 if let Some(from) = &occ.enclosing {
@@ -87,6 +97,7 @@ pub fn index_with_scip(index_path: &Path) -> Result<IndexedRepo, ScipGraphError>
         nodes: nodes.into_iter().collect(),
         edges: edges.into_iter().collect(),
         writable: index.writable.into_iter().collect(),
+        node_paths,
         quality: IndexQuality::Scip,
     };
 

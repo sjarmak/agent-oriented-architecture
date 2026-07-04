@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use aoa_audit::{audit, exit_code, observe, write_trace, AuditConfig, AuditReport, Tier};
@@ -85,6 +85,7 @@ fn graph_with_surface() -> SymbolGraph {
         nodes: vec!["root".into(), "a".into(), "b".into()],
         edges: vec![("root".into(), "a".into()), ("a".into(), "b".into())],
         writable,
+        node_paths: BTreeMap::new(),
         quality: IndexQuality::BestEffort,
     }
 }

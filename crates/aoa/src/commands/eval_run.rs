@@ -415,11 +415,13 @@ fn render_human(report: &EvalRunReport) -> String {
             };
             let _ = writeln!(
                 out,
-                "    subtree {:<24} spans={} edits={} first_relevant={}",
+                "    subtree {:<24} spans={} edits={} first_relevant={} mutation_surface={} mutation_leakage={}",
                 row.subtree.escape_debug(),
                 row.attributed_span_count,
                 row.edited_file_count,
-                first
+                first,
+                row.mutation_surface,
+                row.mutation_leakage
             );
         }
     }

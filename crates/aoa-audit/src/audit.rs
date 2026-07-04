@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use aoa_budget::{count_budget, resolve_closure, Config};
@@ -66,6 +66,7 @@ impl Default for AuditConfig {
                 nodes: Vec::new(),
                 edges: Vec::new(),
                 writable: BTreeSet::new(),
+                node_paths: BTreeMap::new(),
                 quality: IndexQuality::BestEffort,
             },
             k: DEFAULT_MUTATION_K,

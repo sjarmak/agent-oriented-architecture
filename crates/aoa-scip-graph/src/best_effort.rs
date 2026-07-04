@@ -22,6 +22,7 @@ use crate::index::IndexedRepo;
 pub fn index_best_effort(repo_dir: &Path) -> Result<IndexedRepo, ScipGraphError> {
     let mut nodes: BTreeSet<String> = BTreeSet::new();
     let mut edges: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut node_paths: BTreeMap<String, String> = BTreeMap::new();
 
     let mut files: Vec<std::path::PathBuf> = Vec::new();
     collect_py_files(repo_dir, &mut files)?;
@@ -30,6 +31,7 @@ pub fn index_best_effort(repo_dir: &Path) -> Result<IndexedRepo, ScipGraphError>
     for file in &files {
         let rel = file.strip_prefix(repo_dir).unwrap_or(file);
         let module = module_name(rel);
+        let rel_path = rel_path_string(rel);
         // An oversized single file is skipped, not fatal: a best-effort scan is
         // already lossy by contract, so dropping one pathological file keeps the
         // rest of the repo indexable while still bounding memory. A genuine read
@@ -39,7 +41,14 @@ pub fn index_best_effort(repo_dir: &Path) -> Result<IndexedRepo, ScipGraphError>
             Err(ScipGraphError::TooLarge { .. }) => continue,
             Err(other) => return Err(other),
         };
-        scan_module(&module, &source, &mut nodes, &mut edges);
+        scan_module(
+            &module,
+            &rel_path,
+            &source,
+            &mut nodes,
+            &mut edges,
+            &mut node_paths,
+        );
     }
 
     let writable: BTreeSet<String> = nodes.clone();
@@ -47,6 +56,7 @@ pub fn index_best_effort(repo_dir: &Path) -> Result<IndexedRepo, ScipGraphError>
         nodes: nodes.into_iter().collect(),
         edges: edges.into_iter().collect(),
         writable,
+        node_paths,
         quality: IndexQuality::BestEffort,
     };
 
@@ -104,7 +114,16 @@ fn module_name(rel: &Path) -> String {
         .join(".")
 }
 
-/// Scan one module's source, adding its defined nodes and reference edges.
+/// Render a relative path with `/` separators, independent of the platform.
+fn rel_path_string(rel: &Path) -> String {
+    rel.components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Scan one module's source, adding its defined nodes (each mapped to the
+/// scanned file's `rel_path` in `node_paths`) and reference edges.
 ///
 /// Two passes: the first records imports and all top-level `def` symbols into a
 /// name→fully-qualified-symbol table, so a call to a function defined later in
@@ -113,9 +132,11 @@ fn module_name(rel: &Path) -> String {
 /// name.
 fn scan_module(
     module: &str,
+    rel_path: &str,
     source: &str,
     nodes: &mut BTreeSet<String>,
     edges: &mut BTreeSet<(String, String)>,
+    node_paths: &mut BTreeMap<String, String>,
 ) {
     let mut resolved: BTreeMap<String, String> = BTreeMap::new();
 
@@ -128,6 +149,7 @@ fn scan_module(
             if let Some(name) = parse_def(trimmed) {
                 let symbol = format!("{module}.{name}");
                 nodes.insert(symbol.clone());
+                node_paths.insert(symbol.clone(), rel_path.to_string());
                 resolved.insert(name.to_string(), symbol);
             }
         }
@@ -218,8 +240,35 @@ mod tests {
     fn scan(module: &str, src: &str) -> (BTreeSet<String>, BTreeSet<(String, String)>) {
         let mut nodes = BTreeSet::new();
         let mut edges = BTreeSet::new();
-        scan_module(module, src, &mut nodes, &mut edges);
+        let mut node_paths = BTreeMap::new();
+        scan_module(
+            module,
+            "mod.py",
+            src,
+            &mut nodes,
+            &mut edges,
+            &mut node_paths,
+        );
         (nodes, edges)
+    }
+
+    #[test]
+    fn defined_nodes_map_to_the_scanned_file_path() {
+        let mut nodes = BTreeSet::new();
+        let mut edges = BTreeSet::new();
+        let mut node_paths = BTreeMap::new();
+        scan_module(
+            "pkg.auth",
+            "pkg/auth.py",
+            "def login(user):\n    return user\n",
+            &mut nodes,
+            &mut edges,
+            &mut node_paths,
+        );
+        assert_eq!(
+            node_paths.get("pkg.auth.login").map(String::as_str),
+            Some("pkg/auth.py")
+        );
     }
 
     #[test]

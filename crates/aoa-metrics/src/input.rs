@@ -60,6 +60,10 @@ pub struct SymbolGraph {
     pub nodes: Vec<String>,
     pub edges: Vec<(String, String)>,
     pub writable: BTreeSet<String>,
+    /// Repo-relative file path of the file defining each node, when the index
+    /// source knows it (SCIP document `relative_path`; the scanned file for a
+    /// best-effort index). Nodes absent here attribute to no subtree.
+    pub node_paths: BTreeMap<String, String>,
     pub quality: IndexQuality,
 }
 

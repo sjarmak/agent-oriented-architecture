@@ -66,6 +66,24 @@ fn scip_index_produces_high_confidence_graph_with_gold_and_invariants() {
     for w in &indexed.graph.writable {
         assert!(indexed.graph.nodes.contains(w), "writable {w} not a node");
     }
+
+    // Every node carries the relative_path of the SCIP document defining it.
+    assert_eq!(
+        indexed
+            .graph
+            .node_paths
+            .get("pkg.auth.login")
+            .map(String::as_str),
+        Some("pkg/auth.py")
+    );
+    assert_eq!(
+        indexed
+            .graph
+            .node_paths
+            .get("pkg.tokens.verify_secret")
+            .map(String::as_str),
+        Some("pkg/tokens.py")
+    );
 }
 
 // --- Tier 2: best-effort AST scan -> low confidence --------------------------
@@ -100,6 +118,24 @@ fn best_effort_scan_produces_low_confidence_graph() {
         "pkg.tokens.issue_token".into(),
         "pkg.tokens.verify_secret".into()
     )));
+
+    // Every node carries the repo-relative path of the file that defined it.
+    assert_eq!(
+        indexed
+            .graph
+            .node_paths
+            .get("pkg.auth.login")
+            .map(String::as_str),
+        Some("pkg/auth.py")
+    );
+    assert_eq!(
+        indexed
+            .graph
+            .node_paths
+            .get("pkg.tokens.issue_token")
+            .map(String::as_str),
+        Some("pkg/tokens.py")
+    );
 }
 
 // --- Tier 3: empty / failed -> degraded --------------------------------------

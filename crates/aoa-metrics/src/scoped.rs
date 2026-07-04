@@ -4,9 +4,10 @@
 //! Spans are attributed to subtrees by their `path` attribute (the target file
 //! path); spans that name no path, or a path outside every member, are
 //! unattributable and appear in no subtree row. Gold symbols are attributed by
-//! their anchored (migrated) name. Rows are emitted only for subtrees with
-//! attributed activity (at least one span or edited file), in lexicographic
-//! order; repo-wide numbers are computed elsewhere and are never altered here.
+//! their anchored (migrated) name; graph nodes by their recorded `node_paths`
+//! entry. Rows are emitted only for subtrees with attributed activity (at
+//! least one span or edited file), in lexicographic order; repo-wide numbers
+//! are computed elsewhere and are never altered here.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -17,6 +18,7 @@ use aoa_trace::{Span, Trace};
 use crate::edit::{compute_edit_locality, EditLocality};
 use crate::error::MetricError;
 use crate::input::MetricInputRef;
+use crate::mutation::reachable_writable_from;
 use crate::retrieval::{compute_retrieval_locality, RetrievalLocality};
 use crate::subtree::SubtreePartition;
 
@@ -41,6 +43,14 @@ pub struct SubtreeMetrics {
     pub edit_locality: Option<EditLocality>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edit_locality_unavailable: Option<String>,
+    /// Writable nodes inside this subtree reachable within `k` hops from this
+    /// subtree's own nodes (per-subtree mutation surface, aoa-d6t.30).
+    pub mutation_surface: usize,
+    /// Writable nodes attributed to a *different* subtree reachable within `k`
+    /// hops from this subtree's nodes (cross-subtree mutation leakage). Nodes
+    /// with no recorded path attribute to no subtree and count in neither
+    /// number, mirroring span attribution.
+    pub mutation_leakage: usize,
 }
 
 /// Compute per-subtree metric rows by filtering the input per member and
@@ -99,6 +109,19 @@ pub fn compute_subtree_metrics(
         }
     }
 
+    // Graph nodes attributed to subtrees by their recorded file path; nodes
+    // with no path (or a path outside every member) attribute to nothing.
+    let node_subtrees: BTreeMap<&str, &str> = input
+        .graph
+        .node_paths
+        .iter()
+        .filter_map(|(node, path)| {
+            partition
+                .attribute(path)
+                .map(|subtree| (node.as_str(), subtree))
+        })
+        .collect();
+
     // Active subtrees only; BTreeSet gives the lexicographic row order.
     let active: BTreeSet<&str> = spans_by.keys().chain(edited_by.keys()).copied().collect();
 
@@ -132,6 +155,24 @@ pub fn compute_subtree_metrics(
                 ),
             };
 
+            // Per-subtree mutation numbers (aoa-d6t.30): k-bounded BFS seeded
+            // from this subtree's own nodes; reached writable nodes are split
+            // into in-subtree surface vs cross-subtree leakage.
+            let seeds = node_subtrees
+                .iter()
+                .filter(|(_, s)| **s == subtree)
+                .map(|(node, _)| *node);
+            let reached = reachable_writable_from(input.graph, seeds, input.k);
+            let (mutation_surface, mutation_leakage) =
+                reached.iter().fold((0, 0), |(inside, outside), node| {
+                    match node_subtrees.get(node.as_str()) {
+                        Some(s) if *s == subtree => (inside + 1, outside),
+                        Some(_) => (inside, outside + 1),
+                        // No recorded path: attributable to no subtree.
+                        None => (inside, outside),
+                    }
+                });
+
             SubtreeMetrics {
                 subtree: subtree.to_string(),
                 attributed_span_count: trace.spans.len(),
@@ -139,6 +180,8 @@ pub fn compute_subtree_metrics(
                 retrieval_locality: compute_retrieval_locality(view),
                 edit_locality,
                 edit_locality_unavailable,
+                mutation_surface,
+                mutation_leakage,
             }
         })
         .collect()
