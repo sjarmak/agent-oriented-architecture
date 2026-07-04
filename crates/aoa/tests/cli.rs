@@ -285,6 +285,9 @@ fn eval_run_emits_per_subtree_rows_for_multi_member_workspace() {
     assert_eq!(rows[0]["mutation_leakage"], 1);
     assert_eq!(rows[1]["mutation_surface"], 1);
     assert_eq!(rows[1]["mutation_leakage"], 0);
+    // Both rows seeded nodes, so no unavailability marker is emitted.
+    assert!(rows[0].get("mutation_unavailable").is_none());
+    assert!(rows[1].get("mutation_unavailable").is_none());
     // Repo-wide fields are untouched by the additive schema.
     assert!(rec["retrieval_locality"].is_object());
     assert!(rec["mutation_surface"].is_object());

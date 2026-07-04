@@ -44,13 +44,19 @@ pub struct SubtreeMetrics {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edit_locality_unavailable: Option<String>,
     /// Writable nodes inside this subtree reachable within `k` hops from this
-    /// subtree's own nodes (per-subtree mutation surface, aoa-d6t.30).
-    pub mutation_surface: usize,
+    /// subtree's own nodes (per-subtree mutation surface, aoa-d6t.30). `None`
+    /// when no graph node attributes to this subtree — see
+    /// `mutation_unavailable`. Never fabricated: a subtree with zero seed
+    /// nodes has an *unknown* blast radius, not a zero one.
+    pub mutation_surface: Option<usize>,
     /// Writable nodes attributed to a *different* subtree reachable within `k`
     /// hops from this subtree's nodes (cross-subtree mutation leakage). Nodes
     /// with no recorded path attribute to no subtree and count in neither
-    /// number, mirroring span attribution.
-    pub mutation_leakage: usize,
+    /// number, mirroring span attribution. `None` exactly when
+    /// `mutation_surface` is.
+    pub mutation_leakage: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mutation_unavailable: Option<String>,
 }
 
 /// Compute per-subtree metric rows by filtering the input per member and
@@ -157,14 +163,26 @@ pub fn compute_subtree_metrics(
 
             // Per-subtree mutation numbers (aoa-d6t.30): k-bounded BFS seeded
             // from this subtree's own nodes; reached writable nodes are split
-            // into in-subtree surface vs cross-subtree leakage.
-            let seeds = node_subtrees
+            // into in-subtree surface vs cross-subtree leakage. Zero seeds —
+            // an empty or path-less index (legacy vendored SCIP JSON carries
+            // no document relative_path), or a subtree with no indexed
+            // symbols — means the split is unknowable, and a 0/0 row would
+            // read as "isolated" at the graph's confidence. Marked
+            // unavailable instead, mirroring `edit_locality_unavailable`.
+            let seeds: Vec<&str> = node_subtrees
                 .iter()
                 .filter(|(_, s)| **s == subtree)
-                .map(|(node, _)| *node);
-            let reached = reachable_writable_from(input.graph, seeds, input.k);
-            let (mutation_surface, mutation_leakage) =
-                reached.iter().fold((0, 0), |(inside, outside), node| {
+                .map(|(node, _)| *node)
+                .collect();
+            let (mutation_surface, mutation_leakage, mutation_unavailable) = if seeds.is_empty() {
+                (
+                    None,
+                    None,
+                    Some("no graph nodes attributed to this subtree".to_string()),
+                )
+            } else {
+                let reached = reachable_writable_from(input.graph, seeds, input.k);
+                let (inside, outside) = reached.iter().fold((0, 0), |(inside, outside), node| {
                     match node_subtrees.get(node.as_str()) {
                         Some(s) if *s == subtree => (inside + 1, outside),
                         Some(_) => (inside, outside + 1),
@@ -172,6 +190,8 @@ pub fn compute_subtree_metrics(
                         None => (inside, outside),
                     }
                 });
+                (Some(inside), Some(outside), None)
+            };
 
             SubtreeMetrics {
                 subtree: subtree.to_string(),
@@ -182,6 +202,7 @@ pub fn compute_subtree_metrics(
                 edit_locality_unavailable,
                 mutation_surface,
                 mutation_leakage,
+                mutation_unavailable,
             }
         })
         .collect()
