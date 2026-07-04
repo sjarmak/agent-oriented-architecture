@@ -18,6 +18,13 @@
 //! output via [`parse_reverted_shas`] — a pure string transform unit-tested
 //! against captured log text, never a live clone. A future live session supplies
 //! a real clone path and a command runner; nothing here runs git itself.
+//!
+//! The Factory checkbox-baseline column (aoa-d6t.27) rides the same corpus:
+//! each [`Repo`] optionally carries the [`CheckboxBaseline`] scored for it, and
+//! [`build_report_from_corpus`] correlates the achieved Factory level against
+//! the same per-repo outcome, side by side with the gating candidates — never
+//! as one of them. A checkbox score cannot gate anything, and a null
+//! correlation for the column is a reportable study result, not a failure.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -25,9 +32,10 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::checkbox_baseline::CheckboxBaseline;
 use crate::construct::{
-    build_report, CorrelationReport, ExternalOutcome, GatingThresholds, MetricOrientation,
-    OutcomeCorrelation, GATING_CANDIDATES,
+    build_report, ConstructValidityReport, CorrelationReport, ExternalOutcome, GatingThresholds,
+    MetricOrientation, OutcomeCorrelation, GATING_CANDIDATES,
 };
 use crate::correlation::{spearman, CorrelationError};
 use crate::error::GapError;
@@ -49,8 +57,9 @@ pub struct MinedCommit {
 
 /// One repo's worth of mined outcomes paired with the structure-measure counts
 /// `aoa-audit` reports for it. A corpus row; one row = one correlation
-/// observation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// observation. (`PartialEq` only: the baseline column carries `f64` pass
+/// fractions.)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Repo {
     pub repo_id: String,
     /// The repo's structure-measure counts, keyed by the [`GATING_CANDIDATES`]
@@ -58,6 +67,13 @@ pub struct Repo {
     pub structure_counts: std::collections::BTreeMap<String, u64>,
     /// The commits mined from this repo's history.
     pub mined_commits: Vec<MinedCommit>,
+    /// The Factory checkbox-baseline feature column, produced for this repo by
+    /// [`crate::score_repo`] at corpus-assembly time and carried as-is (level,
+    /// per-pillar fractions, pinned criteria version). `None` when the repo was
+    /// never scored — it then contributes no baseline observation, the same
+    /// skip discipline as a metric absent from `structure_counts`.
+    #[serde(default)]
+    pub checkbox_baseline: Option<CheckboxBaseline>,
 }
 
 impl Repo {
@@ -86,7 +102,7 @@ impl Repo {
 
 /// A synthetic external-outcome corpus: the offline stand-in for a set of cloned,
 /// mined repos. Deserialized from a committed JSON fixture.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Corpus {
     pub repos: Vec<Repo>,
 }
@@ -108,6 +124,22 @@ impl Corpus {
             })
             .collect()
     }
+
+    /// Reduce the corpus to `(factory_level, revert_rate)` observation pairs —
+    /// the checkbox-baseline column against the same outcome the AOA metrics
+    /// correlate with, so the two correlations are side-by-side comparable.
+    /// Same skip discipline as [`Corpus::observation_pairs`]: a repo without a
+    /// scored baseline or without a defined revert rate contributes nothing.
+    pub fn checkbox_level_pairs(&self) -> Vec<(f64, f64)> {
+        self.repos
+            .iter()
+            .filter_map(|repo| {
+                let x = f64::from(repo.checkbox_baseline.as_ref()?.level);
+                let y = repo.revert_rate()?;
+                Some((x, y))
+            })
+            .collect()
+    }
 }
 
 /// A gating-candidate metric's correlation could not be computed against the
@@ -122,7 +154,7 @@ impl Corpus {
 /// [`CorrelationError::NonFiniteObservation`]. The "not computable on this
 /// corpus" outcomes ([`CorrelationError::TooFewObservations`],
 /// [`CorrelationError::ZeroVariance`]) are absorbed upstream in
-/// [`correlate_metric`] and never surface as this error.
+/// [`revert_correlations`] and never surface as this error.
 #[derive(Debug, Clone, PartialEq, Error)]
 #[error("metric {metric}: {source}")]
 pub struct CorpusMetricError {
@@ -133,8 +165,68 @@ pub struct CorpusMetricError {
     pub source: CorrelationError,
 }
 
-/// Correlate every gating-candidate metric against the corpus's revert rate and
-/// build the reproducible construct-validity artifact.
+/// Why [`build_report_from_corpus`] refused to build the side-by-side report.
+/// The all-or-nothing contract of [`CorpusMetricError`] extends to the
+/// checkbox-baseline column: a corpus whose column is broken yields no report,
+/// with the refusal naming what is broken.
+#[derive(Debug, Clone, PartialEq, Error)]
+pub enum CorpusJoinError {
+    /// A gating-candidate metric hit a hard correlation error; see
+    /// [`CorpusMetricError`] for which errors are hard vs absorbed.
+    #[error(transparent)]
+    Metric(#[from] CorpusMetricError),
+    /// The checkbox-baseline column hit a hard correlation error (the same
+    /// refuse set as the metrics: an oversized sample or a non-finite
+    /// observation).
+    #[error("checkbox baseline column: {0}")]
+    Baseline(CorrelationError),
+    /// Scored repos disagree on the criteria-table version. Levels from
+    /// different tables are not one comparable feature column; correlating
+    /// across them would fabricate a joint observation set. Carries every
+    /// distinct version found (sorted) so the offending rows are findable.
+    #[error("checkbox baseline criteria versions differ across the corpus: {0:?}")]
+    MixedCriteriaVersions(Vec<String>),
+    /// A repo carries a baseline scored for a different repo — a corpus-
+    /// assembly bug that would silently misattribute the feature column.
+    #[error("repo `{repo_id}` carries a checkbox baseline scored for `{baseline_repo_id}`")]
+    BaselineRepoMismatch {
+        repo_id: String,
+        baseline_repo_id: String,
+    },
+}
+
+/// The checkbox-baseline column correlated against the corpus outcome: the
+/// pinned criteria version every scored repo shares, plus the level-vs-outcome
+/// correlation. `correlations` is empty when the column is carried but no
+/// correlation is computable on this corpus (fewer than three scored repos, or
+/// a level that never varies) — honestly "no tie", never a fabricated one.
+///
+/// Deliberately NOT a [`CorrelationReport`]: the baseline is a study feature
+/// column, not a gating candidate. It carries no orientation and is never
+/// classified into a [`crate::MetricMode`], so a checkbox score cannot gate a
+/// decision (see `crate::checkbox_baseline`) — a null result here IS the R0
+/// headline.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CheckboxBaselineCorrelation {
+    pub criteria_version: String,
+    pub correlations: Vec<OutcomeCorrelation>,
+}
+
+/// The side-by-side study artifact built from one corpus: the construct-
+/// validity report over the AOA gating candidates, joined with the Factory
+/// checkbox-baseline column correlated against the same external outcome.
+/// `checkbox_baseline` is `None` when no repo in the corpus carries the column
+/// (there is then no criteria version to report, and no column to correlate).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CorpusReport {
+    pub construct: ConstructValidityReport,
+    pub checkbox_baseline: Option<CheckboxBaselineCorrelation>,
+}
+
+/// Correlate every gating-candidate metric AND the checkbox-baseline column
+/// against the corpus's revert rate, building the reproducible side-by-side
+/// study artifact: the construct-validity report plus the Factory baseline's
+/// correlation against the same outcome.
 ///
 /// For each candidate, the per-repo `(structure_count, revert_rate)` pairs are
 /// run through [`spearman`]. A well-defined correlation becomes a single
@@ -142,22 +234,26 @@ pub struct CorpusMetricError {
 /// that cannot be computed (too few repos, or a metric/outcome that never varies
 /// across the corpus) yields NO correlation, so the metric honestly stays
 /// Advisory rather than being handed a fabricated tie. The classification itself
-/// is [`build_report`]'s job under the supplied thresholds.
+/// is [`build_report`]'s job under the supplied thresholds. The checkbox column
+/// gets the identical treatment over its `(factory_level, revert_rate)` pairs —
+/// minus the classification, which it must never receive.
 ///
 /// **Contract — all-or-nothing, but diagnosable.** If any metric hits a *hard*
 /// data error (its sample exceeds [`crate::MAX_EXACT_N`], or an observation is
 /// non-finite), the whole report is refused: the caller gets no partial report,
 /// which keeps "these metrics were validated together against this corpus"
-/// honest. Unlike the previous bare-`?` propagation, the refusal now names the
-/// offending metric via [`CorpusMetricError`] so the culprit corpus row is
-/// diagnosable rather than an anonymous "sample size N exceeds cap". Because
-/// `MAX_EXACT_N` is a precondition the corpus is built to satisfy, this rarely
-/// fires — the point is a legible failure, not a hot path.
+/// honest. The refusal names the offending metric via [`CorpusMetricError`] so
+/// the culprit corpus row is diagnosable rather than an anonymous "sample size
+/// N exceeds cap". The baseline column joins the same contract through the
+/// other [`CorpusJoinError`] variants: a hard correlation error on the column,
+/// a criteria-version mix, or a misattributed baseline each refuse the report
+/// by name. Because these are preconditions the corpus is built to satisfy,
+/// they rarely fire — the point is a legible failure, not a hot path.
 pub fn build_report_from_corpus(
     data_source: impl Into<String>,
     corpus: &Corpus,
     thresholds: &GatingThresholds,
-) -> Result<crate::construct::ConstructValidityReport, CorpusMetricError> {
+) -> Result<CorpusReport, CorpusJoinError> {
     let mut reports = Vec::with_capacity(GATING_CANDIDATES.len());
     for (metric, orientation) in GATING_CANDIDATES {
         let report =
@@ -167,37 +263,90 @@ pub fn build_report_from_corpus(
             })?;
         reports.push(report);
     }
-    Ok(build_report(data_source, &reports, thresholds))
+    let checkbox_baseline = correlate_checkbox_baseline(corpus)?;
+    Ok(CorpusReport {
+        construct: build_report(data_source, &reports, thresholds),
+        checkbox_baseline,
+    })
 }
 
 /// Build one metric's [`CorrelationReport`] from the corpus's revert rate.
 ///
 /// `Err` only on errors that signal a real problem with the data the caller must
-/// see. A correlation that is simply *not computable* on this corpus —
-/// [`CorrelationError::TooFewObservations`] or [`CorrelationError::ZeroVariance`]
-/// — is not an error here: it means "no external tie", so the report carries no
-/// correlations and the metric stays Advisory.
+/// see; the benign "not computable" outcomes are absorbed by
+/// [`revert_correlations`].
 fn correlate_metric(
     metric: &str,
     orientation: MetricOrientation,
     corpus: &Corpus,
 ) -> Result<CorrelationReport, CorrelationError> {
-    let pairs = corpus.observation_pairs(metric);
-    let correlations = match spearman(&pairs) {
-        Ok(rc) => vec![OutcomeCorrelation {
+    Ok(CorrelationReport {
+        metric: metric.to_string(),
+        orientation,
+        correlations: revert_correlations(&corpus.observation_pairs(metric))?,
+    })
+}
+
+/// Correlate the checkbox-baseline column (the achieved Factory level) against
+/// the corpus's revert rate, after validating that the scored repos form ONE
+/// comparable column: every baseline scored for its own repo, all under the
+/// same criteria version. `Ok(None)` when no repo carries the column at all.
+fn correlate_checkbox_baseline(
+    corpus: &Corpus,
+) -> Result<Option<CheckboxBaselineCorrelation>, CorpusJoinError> {
+    let scored: Vec<(&Repo, &CheckboxBaseline)> = corpus
+        .repos
+        .iter()
+        .filter_map(|repo| repo.checkbox_baseline.as_ref().map(|b| (repo, b)))
+        .collect();
+    let Some((_, first)) = scored.first() else {
+        return Ok(None);
+    };
+    for (repo, baseline) in &scored {
+        if baseline.repo_id != repo.repo_id {
+            return Err(CorpusJoinError::BaselineRepoMismatch {
+                repo_id: repo.repo_id.clone(),
+                baseline_repo_id: baseline.repo_id.clone(),
+            });
+        }
+    }
+    let mut versions: Vec<String> = scored
+        .iter()
+        .map(|(_, b)| b.criteria_version.clone())
+        .collect();
+    versions.sort_unstable();
+    versions.dedup();
+    if versions.len() > 1 {
+        return Err(CorpusJoinError::MixedCriteriaVersions(versions));
+    }
+    let correlations =
+        revert_correlations(&corpus.checkbox_level_pairs()).map_err(CorpusJoinError::Baseline)?;
+    Ok(Some(CheckboxBaselineCorrelation {
+        criteria_version: first.criteria_version.clone(),
+        correlations,
+    }))
+}
+
+/// Run one observation-pair set through [`spearman`] against
+/// [`ExternalOutcome::RevertRate`], absorbing the benign "not computable on
+/// this corpus" outcomes ([`CorrelationError::TooFewObservations`],
+/// [`CorrelationError::ZeroVariance`]) as an empty correlation list — "no
+/// external tie" — and propagating the hard data errors. Shared by the metric
+/// and checkbox-baseline paths so the absorb/refuse discipline cannot drift
+/// between them.
+fn revert_correlations(pairs: &[(f64, f64)]) -> Result<Vec<OutcomeCorrelation>, CorrelationError> {
+    match spearman(pairs) {
+        Ok(rc) => Ok(vec![OutcomeCorrelation {
             outcome: ExternalOutcome::RevertRate,
             coefficient: rc.coefficient,
             n: rc.n,
             p_value: rc.p_value,
-        }],
-        Err(CorrelationError::TooFewObservations(_) | CorrelationError::ZeroVariance) => Vec::new(),
-        Err(other) => return Err(other),
-    };
-    Ok(CorrelationReport {
-        metric: metric.to_string(),
-        orientation,
-        correlations,
-    })
+        }]),
+        Err(CorrelationError::TooFewObservations(_) | CorrelationError::ZeroVariance) => {
+            Ok(Vec::new())
+        }
+        Err(other) => Err(other),
+    }
 }
 
 /// Parse the reverted-commit SHAs out of `git log` output of the form emitted by
@@ -275,6 +424,7 @@ pub fn mine_reverts(dir: &Path, run: &GitRunner<'_>) -> Result<Vec<String>, GapE
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::checkbox_baseline::{FACTORY_CRITERIA_SOURCE, FACTORY_CRITERIA_VERSION};
     use crate::construct::MetricMode;
 
     const CONFIRMING: &str =
@@ -283,6 +433,36 @@ mod tests {
 
     fn corpus(json: &str) -> Corpus {
         serde_json::from_str(json).expect("corpus fixture parses")
+    }
+
+    /// A hand-built baseline column value for join-logic tests. The join reads
+    /// only `repo_id`, `criteria_version`, and `level`; the score detail vecs
+    /// are irrelevant to it, so they stay empty here.
+    fn baseline(repo_id: &str, level: u8) -> CheckboxBaseline {
+        CheckboxBaseline {
+            repo_id: repo_id.into(),
+            criteria_version: FACTORY_CRITERIA_VERSION.to_string(),
+            criteria_source: FACTORY_CRITERIA_SOURCE.to_string(),
+            level,
+            levels: Vec::new(),
+            pillars: Vec::new(),
+            criteria: Vec::new(),
+        }
+    }
+
+    /// A one-commit repo with no structure counts (every metric absorbs as
+    /// "too few observations") carrying a scored baseline column.
+    fn scored_repo(id: &str, level: u8, reverted: bool) -> Repo {
+        Repo {
+            repo_id: id.into(),
+            structure_counts: Default::default(),
+            mined_commits: vec![MinedCommit {
+                sha: format!("sha-{id}"),
+                reverted,
+                churn: 1,
+            }],
+            checkbox_baseline: Some(baseline(id, level)),
+        }
     }
 
     // --- F2: the reducer, against hand-computed pairs ---
@@ -314,6 +494,7 @@ mod tests {
                     churn: 4,
                 },
             ],
+            checkbox_baseline: None,
         };
         assert_eq!(repo.revert_rate(), Some(0.5)); // 2 of 4
         assert_eq!(repo.mean_churn(), Some(2.5)); // (1+2+3+4)/4
@@ -325,6 +506,7 @@ mod tests {
             repo_id: "r".into(),
             structure_counts: Default::default(),
             mined_commits: Vec::new(),
+            checkbox_baseline: None,
         };
         assert_eq!(repo.revert_rate(), None);
         assert_eq!(repo.mean_churn(), None);
@@ -367,6 +549,7 @@ mod tests {
                 reverted: true,
                 churn: 1,
             }],
+            checkbox_baseline: None,
         };
         let without_metric = Repo {
             repo_id: "missing".into(),
@@ -376,6 +559,7 @@ mod tests {
                 reverted: false, // defined revert rate (0.0), so the metric is the only reason to skip
                 churn: 1,
             }],
+            checkbox_baseline: None,
         };
         let c = Corpus {
             repos: vec![with_metric("r1", 1), without_metric, with_metric("r2", 2)],
@@ -402,6 +586,7 @@ mod tests {
         .expect("well-defined corpus");
 
         let nav = report
+            .construct
             .metrics
             .iter()
             .find(|m| m.metric == "navigability_anchor_absence")
@@ -430,7 +615,7 @@ mod tests {
             &GatingThresholds::default(),
         )
         .expect("well-defined corpus");
-        for m in &report.metrics {
+        for m in &report.construct.metrics {
             assert_eq!(
                 m.mode,
                 MetricMode::Advisory,
@@ -438,6 +623,12 @@ mod tests {
                 m.metric
             );
         }
+        // The noise fixture predates the checkbox column and carries none: the
+        // report must say so (`None`), not fabricate an empty column.
+        assert!(
+            report.checkbox_baseline.is_none(),
+            "a column-less corpus reports no baseline"
+        );
     }
 
     #[test]
@@ -446,9 +637,210 @@ mod tests {
         let report = build_report_from_corpus("fixture", &c, &GatingThresholds::default())
             .expect("well-defined");
         let json = serde_json::to_string(&report).expect("serializes");
-        let back: crate::construct::ConstructValidityReport =
-            serde_json::from_str(&json).expect("round-trips");
+        let back: CorpusReport = serde_json::from_str(&json).expect("round-trips");
         assert_eq!(back, report);
+    }
+
+    // --- aoa-d6t.27: the checkbox-baseline column joined into the corpus ---
+
+    #[test]
+    fn confirming_fixture_repos_carry_the_checkbox_baseline_column() {
+        let c = corpus(CONFIRMING);
+        let expected_levels = [5u8, 4, 3, 2, 1, 1];
+        assert_eq!(c.repos.len(), expected_levels.len());
+        for (repo, expected) in c.repos.iter().zip(expected_levels) {
+            let b = repo
+                .checkbox_baseline
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} lacks the baseline column", repo.repo_id));
+            assert_eq!(b.repo_id, repo.repo_id, "column scored for its own repo");
+            assert_eq!(b.level, expected, "{} level", repo.repo_id);
+            assert_eq!(b.criteria_version, FACTORY_CRITERIA_VERSION);
+            assert_eq!(
+                b.pillars.len(),
+                crate::checkbox_baseline::PILLARS.len(),
+                "per-pillar fractions ride the column"
+            );
+        }
+    }
+
+    #[test]
+    fn checkbox_level_pairs_pair_level_with_revert_rate() {
+        // Levels descend as the revert rate rises — the engineered
+        // Factory-confirming direction of the synthetic fixture.
+        let c = corpus(CONFIRMING);
+        assert_eq!(
+            c.checkbox_level_pairs(),
+            vec![
+                (5.0, 0.0),
+                (4.0, 0.2),
+                (3.0, 0.4),
+                (2.0, 0.5),
+                (1.0, 0.75),
+                (1.0, 1.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn checkbox_level_pairs_skip_unscored_and_unmined_repos() {
+        let unscored = Repo {
+            checkbox_baseline: None,
+            ..scored_repo("unscored", 3, true)
+        };
+        let unmined = Repo {
+            mined_commits: Vec::new(),
+            ..scored_repo("unmined", 4, true)
+        };
+        let c = Corpus {
+            repos: vec![scored_repo("full", 2, true), unscored, unmined],
+        };
+        // Only the fully-observed repo contributes a pair.
+        assert_eq!(c.checkbox_level_pairs(), vec![(2.0, 1.0)]);
+    }
+
+    #[test]
+    fn confirming_corpus_carries_baseline_side_by_side_never_gating() {
+        let c = corpus(CONFIRMING);
+        let report = build_report_from_corpus("fixture", &c, &GatingThresholds::default())
+            .expect("well-defined corpus");
+
+        // The AOA-metric side is exactly the gating-candidate list — the
+        // baseline column never enters it, so a checkbox score cannot gate.
+        assert_eq!(report.construct.metrics.len(), GATING_CANDIDATES.len());
+        for m in &report.construct.metrics {
+            assert!(
+                GATING_CANDIDATES.iter().any(|(name, _)| *name == m.metric),
+                "{} is not a registered candidate",
+                m.metric
+            );
+        }
+
+        // The baseline rides beside it: one raw correlation against the same
+        // outcome, no MetricMode anywhere in its shape.
+        let baseline = report
+            .checkbox_baseline
+            .as_ref()
+            .expect("scored corpus carries the column");
+        assert_eq!(baseline.criteria_version, FACTORY_CRITERIA_VERSION);
+        assert_eq!(baseline.correlations.len(), 1);
+        let corr = &baseline.correlations[0];
+        assert_eq!(corr.outcome, ExternalOutcome::RevertRate);
+        assert_eq!(corr.n, 6);
+        // Hand-computed tie-corrected rho over the pairs above: level ranks
+        // (6, 5, 4, 3, 1.5, 1.5) vs rate ranks (1..=6) give cov = -17,
+        // norms sqrt(17) and sqrt(17.5).
+        let expected = -17.0 / (17.0f64 * 17.5).sqrt();
+        assert!(
+            (corr.coefficient - expected).abs() < 1e-9,
+            "rho={}",
+            corr.coefficient
+        );
+        assert!(corr.p_value <= 0.05, "p={}", corr.p_value);
+    }
+
+    #[test]
+    fn mixed_criteria_versions_are_refused() {
+        let mut c = corpus(CONFIRMING);
+        c.repos[1]
+            .checkbox_baseline
+            .as_mut()
+            .expect("fixture repo is scored")
+            .criteria_version = "factory-official-v1".to_string();
+        let err = build_report_from_corpus("fixture", &c, &GatingThresholds::default())
+            .expect_err("levels from two criteria tables are not one column");
+        assert_eq!(
+            err,
+            CorpusJoinError::MixedCriteriaVersions(vec![
+                "factory-official-v1".to_string(),
+                FACTORY_CRITERIA_VERSION.to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn baseline_scored_for_another_repo_is_refused() {
+        let mut c = corpus(CONFIRMING);
+        c.repos[0]
+            .checkbox_baseline
+            .as_mut()
+            .expect("fixture repo is scored")
+            .repo_id = "sample/zulu".to_string();
+        let err = build_report_from_corpus("fixture", &c, &GatingThresholds::default())
+            .expect_err("a misattributed column is a corpus-assembly bug");
+        assert_eq!(
+            err,
+            CorpusJoinError::BaselineRepoMismatch {
+                repo_id: "sample/alpha".to_string(),
+                baseline_repo_id: "sample/zulu".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn under_three_scored_repos_absorbs_as_no_tie_not_error() {
+        // Two scored repos: spearman refuses (< 3 observations), which is a
+        // benign "not computable on this corpus" — the column is still carried,
+        // with no fabricated correlation.
+        let unscored = Repo {
+            checkbox_baseline: None,
+            ..scored_repo("r2", 1, true)
+        };
+        let c = Corpus {
+            repos: vec![
+                scored_repo("r0", 1, false),
+                scored_repo("r1", 3, true),
+                unscored,
+            ],
+        };
+        let report = build_report_from_corpus("fixture", &c, &GatingThresholds::default())
+            .expect("too-few-scored is absorbed, not an error");
+        let baseline = report.checkbox_baseline.expect("column present");
+        assert!(baseline.correlations.is_empty(), "no tie, none fabricated");
+        assert_eq!(baseline.criteria_version, FACTORY_CRITERIA_VERSION);
+    }
+
+    #[test]
+    fn constant_level_absorbs_as_no_tie_not_error() {
+        let repos: Vec<Repo> = (0..4)
+            .map(|i| scored_repo(&format!("r{i}"), 3, i % 2 == 0))
+            .collect();
+        let c = Corpus { repos };
+        let report = build_report_from_corpus("fixture", &c, &GatingThresholds::default())
+            .expect("zero variance is absorbed, not an error");
+        let baseline = report.checkbox_baseline.expect("column present");
+        assert!(baseline.correlations.is_empty(), "no tie, none fabricated");
+    }
+
+    #[test]
+    fn oversized_baseline_column_is_refused_with_the_typed_error() {
+        // 11 scored repos and NO structure counts: every metric absorbs as
+        // too-few-observations, so the baseline column is the only place the
+        // hard SampleTooLarge can fire — and it must, named as the baseline.
+        let repos: Vec<Repo> = (0..11)
+            .map(|i| scored_repo(&format!("r{i}"), (i % 5 + 1) as u8, i % 2 == 0))
+            .collect();
+        let c = Corpus { repos };
+        let err = build_report_from_corpus("fixture", &c, &GatingThresholds::default())
+            .expect_err("a baseline column past MAX_EXACT_N must refuse the report");
+        assert_eq!(
+            err,
+            CorpusJoinError::Baseline(CorrelationError::SampleTooLarge { n: 11, cap: 10 })
+        );
+        assert!(
+            err.to_string().contains("checkbox baseline"),
+            "the error must name the baseline column: {err}"
+        );
+    }
+
+    #[test]
+    fn corpus_with_column_round_trips_through_serde() {
+        let c = Corpus {
+            repos: vec![scored_repo("r0", 4, false)],
+        };
+        let json = serde_json::to_string(&c).expect("serializes");
+        let back: Corpus = serde_json::from_str(&json).expect("round-trips");
+        assert_eq!(back, c);
     }
 
     /// The committed artifact is the reproducible deliverable: re-running the
@@ -462,12 +854,13 @@ mod tests {
         let c = corpus(CONFIRMING);
         let report = build_report_from_corpus(
             "fixture: external_outcome_corpus_confirming.json (offline synthetic corpus; \
-revert rate per repo over mined commits, paired with aoa-audit structure counts)",
+revert rate per repo over mined commits, paired with aoa-audit structure counts and the \
+Factory checkbox-baseline column)",
             &c,
             &GatingThresholds::default(),
         )
         .expect("well-defined");
-        let from_disk: crate::construct::ConstructValidityReport =
+        let from_disk: CorpusReport =
             serde_json::from_str(REPORT_ARTIFACT).expect("artifact parses");
         assert_eq!(
             from_disk, report,
@@ -498,6 +891,7 @@ revert rate per repo over mined commits, paired with aoa-audit structure counts)
                     reverted: i % 2 == 0,
                     churn: i as u64,
                 }],
+                checkbox_baseline: None,
             })
             .collect();
         let c = Corpus { repos };
@@ -505,17 +899,20 @@ revert rate per repo over mined commits, paired with aoa-audit structure counts)
         let err = build_report_from_corpus("fixture: oversized", &c, &GatingThresholds::default())
             .expect_err("a metric past MAX_EXACT_N must refuse the report");
 
+        let CorpusJoinError::Metric(metric_err) = &err else {
+            panic!("expected the metric variant, got {err:?}");
+        };
         assert_eq!(
-            err.metric, "module_size_outliers",
+            metric_err.metric, "module_size_outliers",
             "the error must name the offending metric"
         );
         assert!(
             matches!(
-                err.source,
+                metric_err.source,
                 CorrelationError::SampleTooLarge { n: 11, cap: 10 }
             ),
             "source must carry the typed SampleTooLarge with n and cap, got {:?}",
-            err.source
+            metric_err.source
         );
         let msg = err.to_string();
         assert!(
@@ -542,6 +939,7 @@ revert rate per repo over mined commits, paired with aoa-audit structure counts)
                     reverted: i % 2 == 0, // revert rate varies; only x is constant
                     churn: 1,
                 }],
+                checkbox_baseline: None,
             })
             .collect();
         let c = Corpus { repos };
@@ -549,6 +947,7 @@ revert rate per repo over mined commits, paired with aoa-audit structure counts)
         let report = build_report_from_corpus("fixture: flat", &c, &GatingThresholds::default())
             .expect("a zero-variance metric is absorbed, not an error");
         let m = report
+            .construct
             .metrics
             .iter()
             .find(|m| m.metric == "unused_import_proxy")

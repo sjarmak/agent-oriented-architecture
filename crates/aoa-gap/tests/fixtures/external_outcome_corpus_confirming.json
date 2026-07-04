@@ -1,90 +1,2072 @@
 {
   "repos": [
     {
+      "checkbox_baseline": {
+        "criteria": [
+          {
+            "id": "build_manifest",
+            "level": 1,
+            "pillar": "build_system",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "readme",
+            "level": 1,
+            "pillar": "documentation",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "lint_config",
+            "level": 1,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "test_directory",
+            "level": 1,
+            "pillar": "testing",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "agent_instructions",
+            "level": 2,
+            "pillar": "documentation",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "contributing_guide",
+            "level": 2,
+            "pillar": "documentation",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "formatter_config",
+            "level": 2,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "ci_workflow",
+            "level": 2,
+            "pillar": "build_system",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "documentation_freshness",
+            "level": 2,
+            "pillar": "documentation",
+            "status": {
+              "reason": "documentation freshness is a semantic judgment over content and history, not a fixed-path fact",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "type_checker_config",
+            "level": 3,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "precommit_hooks",
+            "level": 3,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "codeowners",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "issue_templates",
+            "level": 3,
+            "pillar": "task_discovery",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "pr_template",
+            "level": 3,
+            "pillar": "task_discovery",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "reproducible_environment",
+            "level": 3,
+            "pillar": "development_environment",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "security_policy",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "branch_protection",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "reason": "branch protection is a hosting-platform setting, not visible in the repo tree",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "secret_scanning",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "reason": "secret scanning is an org/platform setting, not visible in the repo tree",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "coverage_config",
+            "level": 4,
+            "pillar": "testing",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "benchmarks",
+            "level": 4,
+            "pillar": "testing",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "dependency_automation",
+            "level": 4,
+            "pillar": "build_system",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "structured_observability",
+            "level": 4,
+            "pillar": "debugging_and_observability",
+            "status": {
+              "reason": "structured logging/tracing/metrics quality is a runtime and code-semantics judgment, not a fixed-path fact",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "analytics_infrastructure",
+            "level": 5,
+            "pillar": "product_and_experimentation",
+            "status": {
+              "reason": "analytics/experimentation infrastructure is organizational, not visible in the repo tree",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "self_improving_orchestration",
+            "level": 5,
+            "pillar": "product_and_experimentation",
+            "status": {
+              "reason": "self-improving orchestration is an organizational capability, not a fixed-path fact",
+              "status": "excluded"
+            }
+          }
+        ],
+        "criteria_source": "https://docs.factory.ai/web/agent-readiness/overview.md, https://docs.factory.ai/cli/features/readiness-report.md, https://docs.factory.ai/reference/readiness-reports-api.md (retrieved 2026-07-04). Factory publishes the 5 levels, the 80%-of-previous-level progression rule, the 9 pillars, and example criteria only; no exhaustive per-level criteria list is published, so this table is provisional.",
+        "criteria_version": "factory-provisional-2026-07-04",
+        "level": 5,
+        "levels": [
+          {
+            "evaluated": 4,
+            "excluded": 0,
+            "level": 1,
+            "name": "Functional",
+            "pass_fraction": 1.0,
+            "passed": 4
+          },
+          {
+            "evaluated": 4,
+            "excluded": 1,
+            "level": 2,
+            "name": "Documented",
+            "pass_fraction": 1.0,
+            "passed": 4
+          },
+          {
+            "evaluated": 7,
+            "excluded": 2,
+            "level": 3,
+            "name": "Standardized",
+            "pass_fraction": 0.8571428571428571,
+            "passed": 6
+          },
+          {
+            "evaluated": 3,
+            "excluded": 1,
+            "level": 4,
+            "name": "Optimized",
+            "pass_fraction": 1.0,
+            "passed": 3
+          },
+          {
+            "evaluated": 0,
+            "excluded": 2,
+            "level": 5,
+            "name": "Autonomous",
+            "pass_fraction": null,
+            "passed": 0
+          }
+        ],
+        "pillars": [
+          {
+            "evaluated": 4,
+            "excluded": 0,
+            "pass_fraction": 0.75,
+            "passed": 3,
+            "pillar": "style_and_validation"
+          },
+          {
+            "evaluated": 3,
+            "excluded": 0,
+            "pass_fraction": 1.0,
+            "passed": 3,
+            "pillar": "build_system"
+          },
+          {
+            "evaluated": 3,
+            "excluded": 0,
+            "pass_fraction": 1.0,
+            "passed": 3,
+            "pillar": "testing"
+          },
+          {
+            "evaluated": 3,
+            "excluded": 1,
+            "pass_fraction": 1.0,
+            "passed": 3,
+            "pillar": "documentation"
+          },
+          {
+            "evaluated": 1,
+            "excluded": 0,
+            "pass_fraction": 1.0,
+            "passed": 1,
+            "pillar": "development_environment"
+          },
+          {
+            "evaluated": 0,
+            "excluded": 1,
+            "pass_fraction": null,
+            "passed": 0,
+            "pillar": "debugging_and_observability"
+          },
+          {
+            "evaluated": 2,
+            "excluded": 2,
+            "pass_fraction": 1.0,
+            "passed": 2,
+            "pillar": "security"
+          },
+          {
+            "evaluated": 2,
+            "excluded": 0,
+            "pass_fraction": 1.0,
+            "passed": 2,
+            "pillar": "task_discovery"
+          },
+          {
+            "evaluated": 0,
+            "excluded": 2,
+            "pass_fraction": null,
+            "passed": 0,
+            "pillar": "product_and_experimentation"
+          }
+        ],
+        "repo_id": "sample/alpha"
+      },
+      "mined_commits": [
+        {
+          "churn": 10,
+          "reverted": false,
+          "sha": "a0000000000000000000000000000000000000a0"
+        },
+        {
+          "churn": 12,
+          "reverted": false,
+          "sha": "a0000000000000000000000000000000000000a1"
+        },
+        {
+          "churn": 8,
+          "reverted": false,
+          "sha": "a0000000000000000000000000000000000000a2"
+        },
+        {
+          "churn": 11,
+          "reverted": false,
+          "sha": "a0000000000000000000000000000000000000a3"
+        }
+      ],
       "repo_id": "sample/alpha",
       "structure_counts": {
-        "navigability_anchor_absence": 0,
         "module_size_outliers": 4,
+        "navigability_anchor_absence": 0,
         "unused_import_proxy": 2
-      },
-      "mined_commits": [
-        { "sha": "a0000000000000000000000000000000000000a0", "reverted": false, "churn": 10 },
-        { "sha": "a0000000000000000000000000000000000000a1", "reverted": false, "churn": 12 },
-        { "sha": "a0000000000000000000000000000000000000a2", "reverted": false, "churn": 8 },
-        { "sha": "a0000000000000000000000000000000000000a3", "reverted": false, "churn": 11 }
-      ]
+      }
     },
     {
+      "checkbox_baseline": {
+        "criteria": [
+          {
+            "id": "build_manifest",
+            "level": 1,
+            "pillar": "build_system",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "readme",
+            "level": 1,
+            "pillar": "documentation",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "lint_config",
+            "level": 1,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "test_directory",
+            "level": 1,
+            "pillar": "testing",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "agent_instructions",
+            "level": 2,
+            "pillar": "documentation",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "contributing_guide",
+            "level": 2,
+            "pillar": "documentation",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "formatter_config",
+            "level": 2,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "ci_workflow",
+            "level": 2,
+            "pillar": "build_system",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "documentation_freshness",
+            "level": 2,
+            "pillar": "documentation",
+            "status": {
+              "reason": "documentation freshness is a semantic judgment over content and history, not a fixed-path fact",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "type_checker_config",
+            "level": 3,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "precommit_hooks",
+            "level": 3,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "codeowners",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "issue_templates",
+            "level": 3,
+            "pillar": "task_discovery",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "pr_template",
+            "level": 3,
+            "pillar": "task_discovery",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "reproducible_environment",
+            "level": 3,
+            "pillar": "development_environment",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "security_policy",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "branch_protection",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "reason": "branch protection is a hosting-platform setting, not visible in the repo tree",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "secret_scanning",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "reason": "secret scanning is an org/platform setting, not visible in the repo tree",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "coverage_config",
+            "level": 4,
+            "pillar": "testing",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "benchmarks",
+            "level": 4,
+            "pillar": "testing",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "dependency_automation",
+            "level": 4,
+            "pillar": "build_system",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "structured_observability",
+            "level": 4,
+            "pillar": "debugging_and_observability",
+            "status": {
+              "reason": "structured logging/tracing/metrics quality is a runtime and code-semantics judgment, not a fixed-path fact",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "analytics_infrastructure",
+            "level": 5,
+            "pillar": "product_and_experimentation",
+            "status": {
+              "reason": "analytics/experimentation infrastructure is organizational, not visible in the repo tree",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "self_improving_orchestration",
+            "level": 5,
+            "pillar": "product_and_experimentation",
+            "status": {
+              "reason": "self-improving orchestration is an organizational capability, not a fixed-path fact",
+              "status": "excluded"
+            }
+          }
+        ],
+        "criteria_source": "https://docs.factory.ai/web/agent-readiness/overview.md, https://docs.factory.ai/cli/features/readiness-report.md, https://docs.factory.ai/reference/readiness-reports-api.md (retrieved 2026-07-04). Factory publishes the 5 levels, the 80%-of-previous-level progression rule, the 9 pillars, and example criteria only; no exhaustive per-level criteria list is published, so this table is provisional.",
+        "criteria_version": "factory-provisional-2026-07-04",
+        "level": 4,
+        "levels": [
+          {
+            "evaluated": 4,
+            "excluded": 0,
+            "level": 1,
+            "name": "Functional",
+            "pass_fraction": 1.0,
+            "passed": 4
+          },
+          {
+            "evaluated": 4,
+            "excluded": 1,
+            "level": 2,
+            "name": "Documented",
+            "pass_fraction": 1.0,
+            "passed": 4
+          },
+          {
+            "evaluated": 7,
+            "excluded": 2,
+            "level": 3,
+            "name": "Standardized",
+            "pass_fraction": 0.8571428571428571,
+            "passed": 6
+          },
+          {
+            "evaluated": 3,
+            "excluded": 1,
+            "level": 4,
+            "name": "Optimized",
+            "pass_fraction": 0.0,
+            "passed": 0
+          },
+          {
+            "evaluated": 0,
+            "excluded": 2,
+            "level": 5,
+            "name": "Autonomous",
+            "pass_fraction": null,
+            "passed": 0
+          }
+        ],
+        "pillars": [
+          {
+            "evaluated": 4,
+            "excluded": 0,
+            "pass_fraction": 0.75,
+            "passed": 3,
+            "pillar": "style_and_validation"
+          },
+          {
+            "evaluated": 3,
+            "excluded": 0,
+            "pass_fraction": 0.6666666666666666,
+            "passed": 2,
+            "pillar": "build_system"
+          },
+          {
+            "evaluated": 3,
+            "excluded": 0,
+            "pass_fraction": 0.3333333333333333,
+            "passed": 1,
+            "pillar": "testing"
+          },
+          {
+            "evaluated": 3,
+            "excluded": 1,
+            "pass_fraction": 1.0,
+            "passed": 3,
+            "pillar": "documentation"
+          },
+          {
+            "evaluated": 1,
+            "excluded": 0,
+            "pass_fraction": 1.0,
+            "passed": 1,
+            "pillar": "development_environment"
+          },
+          {
+            "evaluated": 0,
+            "excluded": 1,
+            "pass_fraction": null,
+            "passed": 0,
+            "pillar": "debugging_and_observability"
+          },
+          {
+            "evaluated": 2,
+            "excluded": 2,
+            "pass_fraction": 1.0,
+            "passed": 2,
+            "pillar": "security"
+          },
+          {
+            "evaluated": 2,
+            "excluded": 0,
+            "pass_fraction": 1.0,
+            "passed": 2,
+            "pillar": "task_discovery"
+          },
+          {
+            "evaluated": 0,
+            "excluded": 2,
+            "pass_fraction": null,
+            "passed": 0,
+            "pillar": "product_and_experimentation"
+          }
+        ],
+        "repo_id": "sample/bravo"
+      },
+      "mined_commits": [
+        {
+          "churn": 30,
+          "reverted": true,
+          "sha": "b0000000000000000000000000000000000000b0"
+        },
+        {
+          "churn": 14,
+          "reverted": false,
+          "sha": "b0000000000000000000000000000000000000b1"
+        },
+        {
+          "churn": 9,
+          "reverted": false,
+          "sha": "b0000000000000000000000000000000000000b2"
+        },
+        {
+          "churn": 13,
+          "reverted": false,
+          "sha": "b0000000000000000000000000000000000000b3"
+        },
+        {
+          "churn": 7,
+          "reverted": false,
+          "sha": "b0000000000000000000000000000000000000b4"
+        }
+      ],
       "repo_id": "sample/bravo",
       "structure_counts": {
-        "navigability_anchor_absence": 1,
         "module_size_outliers": 1,
+        "navigability_anchor_absence": 1,
         "unused_import_proxy": 9
-      },
-      "mined_commits": [
-        { "sha": "b0000000000000000000000000000000000000b0", "reverted": true, "churn": 30 },
-        { "sha": "b0000000000000000000000000000000000000b1", "reverted": false, "churn": 14 },
-        { "sha": "b0000000000000000000000000000000000000b2", "reverted": false, "churn": 9 },
-        { "sha": "b0000000000000000000000000000000000000b3", "reverted": false, "churn": 13 },
-        { "sha": "b0000000000000000000000000000000000000b4", "reverted": false, "churn": 7 }
-      ]
+      }
     },
     {
+      "checkbox_baseline": {
+        "criteria": [
+          {
+            "id": "build_manifest",
+            "level": 1,
+            "pillar": "build_system",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "readme",
+            "level": 1,
+            "pillar": "documentation",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "lint_config",
+            "level": 1,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "test_directory",
+            "level": 1,
+            "pillar": "testing",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "agent_instructions",
+            "level": 2,
+            "pillar": "documentation",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "contributing_guide",
+            "level": 2,
+            "pillar": "documentation",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "formatter_config",
+            "level": 2,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "ci_workflow",
+            "level": 2,
+            "pillar": "build_system",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "documentation_freshness",
+            "level": 2,
+            "pillar": "documentation",
+            "status": {
+              "reason": "documentation freshness is a semantic judgment over content and history, not a fixed-path fact",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "type_checker_config",
+            "level": 3,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "precommit_hooks",
+            "level": 3,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "codeowners",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "issue_templates",
+            "level": 3,
+            "pillar": "task_discovery",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "pr_template",
+            "level": 3,
+            "pillar": "task_discovery",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "reproducible_environment",
+            "level": 3,
+            "pillar": "development_environment",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "security_policy",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "branch_protection",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "reason": "branch protection is a hosting-platform setting, not visible in the repo tree",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "secret_scanning",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "reason": "secret scanning is an org/platform setting, not visible in the repo tree",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "coverage_config",
+            "level": 4,
+            "pillar": "testing",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "benchmarks",
+            "level": 4,
+            "pillar": "testing",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "dependency_automation",
+            "level": 4,
+            "pillar": "build_system",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "structured_observability",
+            "level": 4,
+            "pillar": "debugging_and_observability",
+            "status": {
+              "reason": "structured logging/tracing/metrics quality is a runtime and code-semantics judgment, not a fixed-path fact",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "analytics_infrastructure",
+            "level": 5,
+            "pillar": "product_and_experimentation",
+            "status": {
+              "reason": "analytics/experimentation infrastructure is organizational, not visible in the repo tree",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "self_improving_orchestration",
+            "level": 5,
+            "pillar": "product_and_experimentation",
+            "status": {
+              "reason": "self-improving orchestration is an organizational capability, not a fixed-path fact",
+              "status": "excluded"
+            }
+          }
+        ],
+        "criteria_source": "https://docs.factory.ai/web/agent-readiness/overview.md, https://docs.factory.ai/cli/features/readiness-report.md, https://docs.factory.ai/reference/readiness-reports-api.md (retrieved 2026-07-04). Factory publishes the 5 levels, the 80%-of-previous-level progression rule, the 9 pillars, and example criteria only; no exhaustive per-level criteria list is published, so this table is provisional.",
+        "criteria_version": "factory-provisional-2026-07-04",
+        "level": 3,
+        "levels": [
+          {
+            "evaluated": 4,
+            "excluded": 0,
+            "level": 1,
+            "name": "Functional",
+            "pass_fraction": 1.0,
+            "passed": 4
+          },
+          {
+            "evaluated": 4,
+            "excluded": 1,
+            "level": 2,
+            "name": "Documented",
+            "pass_fraction": 1.0,
+            "passed": 4
+          },
+          {
+            "evaluated": 7,
+            "excluded": 2,
+            "level": 3,
+            "name": "Standardized",
+            "pass_fraction": 0.0,
+            "passed": 0
+          },
+          {
+            "evaluated": 3,
+            "excluded": 1,
+            "level": 4,
+            "name": "Optimized",
+            "pass_fraction": 0.0,
+            "passed": 0
+          },
+          {
+            "evaluated": 0,
+            "excluded": 2,
+            "level": 5,
+            "name": "Autonomous",
+            "pass_fraction": null,
+            "passed": 0
+          }
+        ],
+        "pillars": [
+          {
+            "evaluated": 4,
+            "excluded": 0,
+            "pass_fraction": 0.5,
+            "passed": 2,
+            "pillar": "style_and_validation"
+          },
+          {
+            "evaluated": 3,
+            "excluded": 0,
+            "pass_fraction": 0.6666666666666666,
+            "passed": 2,
+            "pillar": "build_system"
+          },
+          {
+            "evaluated": 3,
+            "excluded": 0,
+            "pass_fraction": 0.3333333333333333,
+            "passed": 1,
+            "pillar": "testing"
+          },
+          {
+            "evaluated": 3,
+            "excluded": 1,
+            "pass_fraction": 1.0,
+            "passed": 3,
+            "pillar": "documentation"
+          },
+          {
+            "evaluated": 1,
+            "excluded": 0,
+            "pass_fraction": 0.0,
+            "passed": 0,
+            "pillar": "development_environment"
+          },
+          {
+            "evaluated": 0,
+            "excluded": 1,
+            "pass_fraction": null,
+            "passed": 0,
+            "pillar": "debugging_and_observability"
+          },
+          {
+            "evaluated": 2,
+            "excluded": 2,
+            "pass_fraction": 0.0,
+            "passed": 0,
+            "pillar": "security"
+          },
+          {
+            "evaluated": 2,
+            "excluded": 0,
+            "pass_fraction": 0.0,
+            "passed": 0,
+            "pillar": "task_discovery"
+          },
+          {
+            "evaluated": 0,
+            "excluded": 2,
+            "pass_fraction": null,
+            "passed": 0,
+            "pillar": "product_and_experimentation"
+          }
+        ],
+        "repo_id": "sample/charlie"
+      },
+      "mined_commits": [
+        {
+          "churn": 22,
+          "reverted": true,
+          "sha": "c0000000000000000000000000000000000000c0"
+        },
+        {
+          "churn": 25,
+          "reverted": true,
+          "sha": "c0000000000000000000000000000000000000c1"
+        },
+        {
+          "churn": 10,
+          "reverted": false,
+          "sha": "c0000000000000000000000000000000000000c2"
+        },
+        {
+          "churn": 16,
+          "reverted": false,
+          "sha": "c0000000000000000000000000000000000000c3"
+        },
+        {
+          "churn": 12,
+          "reverted": false,
+          "sha": "c0000000000000000000000000000000000000c4"
+        }
+      ],
       "repo_id": "sample/charlie",
       "structure_counts": {
-        "navigability_anchor_absence": 2,
         "module_size_outliers": 6,
+        "navigability_anchor_absence": 2,
         "unused_import_proxy": 0
-      },
-      "mined_commits": [
-        { "sha": "c0000000000000000000000000000000000000c0", "reverted": true, "churn": 22 },
-        { "sha": "c0000000000000000000000000000000000000c1", "reverted": true, "churn": 25 },
-        { "sha": "c0000000000000000000000000000000000000c2", "reverted": false, "churn": 10 },
-        { "sha": "c0000000000000000000000000000000000000c3", "reverted": false, "churn": 16 },
-        { "sha": "c0000000000000000000000000000000000000c4", "reverted": false, "churn": 12 }
-      ]
+      }
     },
     {
+      "checkbox_baseline": {
+        "criteria": [
+          {
+            "id": "build_manifest",
+            "level": 1,
+            "pillar": "build_system",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "readme",
+            "level": 1,
+            "pillar": "documentation",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "lint_config",
+            "level": 1,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "test_directory",
+            "level": 1,
+            "pillar": "testing",
+            "status": {
+              "status": "pass"
+            }
+          },
+          {
+            "id": "agent_instructions",
+            "level": 2,
+            "pillar": "documentation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "contributing_guide",
+            "level": 2,
+            "pillar": "documentation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "formatter_config",
+            "level": 2,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "ci_workflow",
+            "level": 2,
+            "pillar": "build_system",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "documentation_freshness",
+            "level": 2,
+            "pillar": "documentation",
+            "status": {
+              "reason": "documentation freshness is a semantic judgment over content and history, not a fixed-path fact",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "type_checker_config",
+            "level": 3,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "precommit_hooks",
+            "level": 3,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "codeowners",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "issue_templates",
+            "level": 3,
+            "pillar": "task_discovery",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "pr_template",
+            "level": 3,
+            "pillar": "task_discovery",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "reproducible_environment",
+            "level": 3,
+            "pillar": "development_environment",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "security_policy",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "branch_protection",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "reason": "branch protection is a hosting-platform setting, not visible in the repo tree",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "secret_scanning",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "reason": "secret scanning is an org/platform setting, not visible in the repo tree",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "coverage_config",
+            "level": 4,
+            "pillar": "testing",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "benchmarks",
+            "level": 4,
+            "pillar": "testing",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "dependency_automation",
+            "level": 4,
+            "pillar": "build_system",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "structured_observability",
+            "level": 4,
+            "pillar": "debugging_and_observability",
+            "status": {
+              "reason": "structured logging/tracing/metrics quality is a runtime and code-semantics judgment, not a fixed-path fact",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "analytics_infrastructure",
+            "level": 5,
+            "pillar": "product_and_experimentation",
+            "status": {
+              "reason": "analytics/experimentation infrastructure is organizational, not visible in the repo tree",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "self_improving_orchestration",
+            "level": 5,
+            "pillar": "product_and_experimentation",
+            "status": {
+              "reason": "self-improving orchestration is an organizational capability, not a fixed-path fact",
+              "status": "excluded"
+            }
+          }
+        ],
+        "criteria_source": "https://docs.factory.ai/web/agent-readiness/overview.md, https://docs.factory.ai/cli/features/readiness-report.md, https://docs.factory.ai/reference/readiness-reports-api.md (retrieved 2026-07-04). Factory publishes the 5 levels, the 80%-of-previous-level progression rule, the 9 pillars, and example criteria only; no exhaustive per-level criteria list is published, so this table is provisional.",
+        "criteria_version": "factory-provisional-2026-07-04",
+        "level": 2,
+        "levels": [
+          {
+            "evaluated": 4,
+            "excluded": 0,
+            "level": 1,
+            "name": "Functional",
+            "pass_fraction": 1.0,
+            "passed": 4
+          },
+          {
+            "evaluated": 4,
+            "excluded": 1,
+            "level": 2,
+            "name": "Documented",
+            "pass_fraction": 0.0,
+            "passed": 0
+          },
+          {
+            "evaluated": 7,
+            "excluded": 2,
+            "level": 3,
+            "name": "Standardized",
+            "pass_fraction": 0.0,
+            "passed": 0
+          },
+          {
+            "evaluated": 3,
+            "excluded": 1,
+            "level": 4,
+            "name": "Optimized",
+            "pass_fraction": 0.0,
+            "passed": 0
+          },
+          {
+            "evaluated": 0,
+            "excluded": 2,
+            "level": 5,
+            "name": "Autonomous",
+            "pass_fraction": null,
+            "passed": 0
+          }
+        ],
+        "pillars": [
+          {
+            "evaluated": 4,
+            "excluded": 0,
+            "pass_fraction": 0.25,
+            "passed": 1,
+            "pillar": "style_and_validation"
+          },
+          {
+            "evaluated": 3,
+            "excluded": 0,
+            "pass_fraction": 0.3333333333333333,
+            "passed": 1,
+            "pillar": "build_system"
+          },
+          {
+            "evaluated": 3,
+            "excluded": 0,
+            "pass_fraction": 0.3333333333333333,
+            "passed": 1,
+            "pillar": "testing"
+          },
+          {
+            "evaluated": 3,
+            "excluded": 1,
+            "pass_fraction": 0.3333333333333333,
+            "passed": 1,
+            "pillar": "documentation"
+          },
+          {
+            "evaluated": 1,
+            "excluded": 0,
+            "pass_fraction": 0.0,
+            "passed": 0,
+            "pillar": "development_environment"
+          },
+          {
+            "evaluated": 0,
+            "excluded": 1,
+            "pass_fraction": null,
+            "passed": 0,
+            "pillar": "debugging_and_observability"
+          },
+          {
+            "evaluated": 2,
+            "excluded": 2,
+            "pass_fraction": 0.0,
+            "passed": 0,
+            "pillar": "security"
+          },
+          {
+            "evaluated": 2,
+            "excluded": 0,
+            "pass_fraction": 0.0,
+            "passed": 0,
+            "pillar": "task_discovery"
+          },
+          {
+            "evaluated": 0,
+            "excluded": 2,
+            "pass_fraction": null,
+            "passed": 0,
+            "pillar": "product_and_experimentation"
+          }
+        ],
+        "repo_id": "sample/delta"
+      },
+      "mined_commits": [
+        {
+          "churn": 40,
+          "reverted": true,
+          "sha": "d0000000000000000000000000000000000000d0"
+        },
+        {
+          "churn": 33,
+          "reverted": true,
+          "sha": "d0000000000000000000000000000000000000d1"
+        },
+        {
+          "churn": 18,
+          "reverted": false,
+          "sha": "d0000000000000000000000000000000000000d2"
+        },
+        {
+          "churn": 15,
+          "reverted": false,
+          "sha": "d0000000000000000000000000000000000000d3"
+        }
+      ],
       "repo_id": "sample/delta",
       "structure_counts": {
-        "navigability_anchor_absence": 3,
         "module_size_outliers": 2,
+        "navigability_anchor_absence": 3,
         "unused_import_proxy": 5
-      },
-      "mined_commits": [
-        { "sha": "d0000000000000000000000000000000000000d0", "reverted": true, "churn": 40 },
-        { "sha": "d0000000000000000000000000000000000000d1", "reverted": true, "churn": 33 },
-        { "sha": "d0000000000000000000000000000000000000d2", "reverted": false, "churn": 18 },
-        { "sha": "d0000000000000000000000000000000000000d3", "reverted": false, "churn": 15 }
-      ]
+      }
     },
     {
+      "checkbox_baseline": {
+        "criteria": [
+          {
+            "id": "build_manifest",
+            "level": 1,
+            "pillar": "build_system",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "readme",
+            "level": 1,
+            "pillar": "documentation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "lint_config",
+            "level": 1,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "test_directory",
+            "level": 1,
+            "pillar": "testing",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "agent_instructions",
+            "level": 2,
+            "pillar": "documentation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "contributing_guide",
+            "level": 2,
+            "pillar": "documentation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "formatter_config",
+            "level": 2,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "ci_workflow",
+            "level": 2,
+            "pillar": "build_system",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "documentation_freshness",
+            "level": 2,
+            "pillar": "documentation",
+            "status": {
+              "reason": "documentation freshness is a semantic judgment over content and history, not a fixed-path fact",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "type_checker_config",
+            "level": 3,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "precommit_hooks",
+            "level": 3,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "codeowners",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "issue_templates",
+            "level": 3,
+            "pillar": "task_discovery",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "pr_template",
+            "level": 3,
+            "pillar": "task_discovery",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "reproducible_environment",
+            "level": 3,
+            "pillar": "development_environment",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "security_policy",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "branch_protection",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "reason": "branch protection is a hosting-platform setting, not visible in the repo tree",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "secret_scanning",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "reason": "secret scanning is an org/platform setting, not visible in the repo tree",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "coverage_config",
+            "level": 4,
+            "pillar": "testing",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "benchmarks",
+            "level": 4,
+            "pillar": "testing",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "dependency_automation",
+            "level": 4,
+            "pillar": "build_system",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "structured_observability",
+            "level": 4,
+            "pillar": "debugging_and_observability",
+            "status": {
+              "reason": "structured logging/tracing/metrics quality is a runtime and code-semantics judgment, not a fixed-path fact",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "analytics_infrastructure",
+            "level": 5,
+            "pillar": "product_and_experimentation",
+            "status": {
+              "reason": "analytics/experimentation infrastructure is organizational, not visible in the repo tree",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "self_improving_orchestration",
+            "level": 5,
+            "pillar": "product_and_experimentation",
+            "status": {
+              "reason": "self-improving orchestration is an organizational capability, not a fixed-path fact",
+              "status": "excluded"
+            }
+          }
+        ],
+        "criteria_source": "https://docs.factory.ai/web/agent-readiness/overview.md, https://docs.factory.ai/cli/features/readiness-report.md, https://docs.factory.ai/reference/readiness-reports-api.md (retrieved 2026-07-04). Factory publishes the 5 levels, the 80%-of-previous-level progression rule, the 9 pillars, and example criteria only; no exhaustive per-level criteria list is published, so this table is provisional.",
+        "criteria_version": "factory-provisional-2026-07-04",
+        "level": 1,
+        "levels": [
+          {
+            "evaluated": 4,
+            "excluded": 0,
+            "level": 1,
+            "name": "Functional",
+            "pass_fraction": 0.0,
+            "passed": 0
+          },
+          {
+            "evaluated": 4,
+            "excluded": 1,
+            "level": 2,
+            "name": "Documented",
+            "pass_fraction": 0.0,
+            "passed": 0
+          },
+          {
+            "evaluated": 7,
+            "excluded": 2,
+            "level": 3,
+            "name": "Standardized",
+            "pass_fraction": 0.0,
+            "passed": 0
+          },
+          {
+            "evaluated": 3,
+            "excluded": 1,
+            "level": 4,
+            "name": "Optimized",
+            "pass_fraction": 0.0,
+            "passed": 0
+          },
+          {
+            "evaluated": 0,
+            "excluded": 2,
+            "level": 5,
+            "name": "Autonomous",
+            "pass_fraction": null,
+            "passed": 0
+          }
+        ],
+        "pillars": [
+          {
+            "evaluated": 4,
+            "excluded": 0,
+            "pass_fraction": 0.0,
+            "passed": 0,
+            "pillar": "style_and_validation"
+          },
+          {
+            "evaluated": 3,
+            "excluded": 0,
+            "pass_fraction": 0.0,
+            "passed": 0,
+            "pillar": "build_system"
+          },
+          {
+            "evaluated": 3,
+            "excluded": 0,
+            "pass_fraction": 0.0,
+            "passed": 0,
+            "pillar": "testing"
+          },
+          {
+            "evaluated": 3,
+            "excluded": 1,
+            "pass_fraction": 0.0,
+            "passed": 0,
+            "pillar": "documentation"
+          },
+          {
+            "evaluated": 1,
+            "excluded": 0,
+            "pass_fraction": 0.0,
+            "passed": 0,
+            "pillar": "development_environment"
+          },
+          {
+            "evaluated": 0,
+            "excluded": 1,
+            "pass_fraction": null,
+            "passed": 0,
+            "pillar": "debugging_and_observability"
+          },
+          {
+            "evaluated": 2,
+            "excluded": 2,
+            "pass_fraction": 0.0,
+            "passed": 0,
+            "pillar": "security"
+          },
+          {
+            "evaluated": 2,
+            "excluded": 0,
+            "pass_fraction": 0.0,
+            "passed": 0,
+            "pillar": "task_discovery"
+          },
+          {
+            "evaluated": 0,
+            "excluded": 2,
+            "pass_fraction": null,
+            "passed": 0,
+            "pillar": "product_and_experimentation"
+          }
+        ],
+        "repo_id": "sample/echo"
+      },
+      "mined_commits": [
+        {
+          "churn": 50,
+          "reverted": true,
+          "sha": "e0000000000000000000000000000000000000e0"
+        },
+        {
+          "churn": 48,
+          "reverted": true,
+          "sha": "e0000000000000000000000000000000000000e1"
+        },
+        {
+          "churn": 44,
+          "reverted": true,
+          "sha": "e0000000000000000000000000000000000000e2"
+        },
+        {
+          "churn": 20,
+          "reverted": false,
+          "sha": "e0000000000000000000000000000000000000e3"
+        }
+      ],
       "repo_id": "sample/echo",
       "structure_counts": {
-        "navigability_anchor_absence": 4,
         "module_size_outliers": 5,
+        "navigability_anchor_absence": 4,
         "unused_import_proxy": 3
-      },
-      "mined_commits": [
-        { "sha": "e0000000000000000000000000000000000000e0", "reverted": true, "churn": 50 },
-        { "sha": "e0000000000000000000000000000000000000e1", "reverted": true, "churn": 48 },
-        { "sha": "e0000000000000000000000000000000000000e2", "reverted": true, "churn": 44 },
-        { "sha": "e0000000000000000000000000000000000000e3", "reverted": false, "churn": 20 }
-      ]
+      }
     },
     {
-      "repo_id": "sample/foxtrot",
-      "structure_counts": {
-        "navigability_anchor_absence": 5,
-        "module_size_outliers": 3,
-        "unused_import_proxy": 6
+      "checkbox_baseline": {
+        "criteria": [
+          {
+            "id": "build_manifest",
+            "level": 1,
+            "pillar": "build_system",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "readme",
+            "level": 1,
+            "pillar": "documentation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "lint_config",
+            "level": 1,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "test_directory",
+            "level": 1,
+            "pillar": "testing",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "agent_instructions",
+            "level": 2,
+            "pillar": "documentation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "contributing_guide",
+            "level": 2,
+            "pillar": "documentation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "formatter_config",
+            "level": 2,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "ci_workflow",
+            "level": 2,
+            "pillar": "build_system",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "documentation_freshness",
+            "level": 2,
+            "pillar": "documentation",
+            "status": {
+              "reason": "documentation freshness is a semantic judgment over content and history, not a fixed-path fact",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "type_checker_config",
+            "level": 3,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "precommit_hooks",
+            "level": 3,
+            "pillar": "style_and_validation",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "codeowners",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "issue_templates",
+            "level": 3,
+            "pillar": "task_discovery",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "pr_template",
+            "level": 3,
+            "pillar": "task_discovery",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "reproducible_environment",
+            "level": 3,
+            "pillar": "development_environment",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "security_policy",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "branch_protection",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "reason": "branch protection is a hosting-platform setting, not visible in the repo tree",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "secret_scanning",
+            "level": 3,
+            "pillar": "security",
+            "status": {
+              "reason": "secret scanning is an org/platform setting, not visible in the repo tree",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "coverage_config",
+            "level": 4,
+            "pillar": "testing",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "benchmarks",
+            "level": 4,
+            "pillar": "testing",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "dependency_automation",
+            "level": 4,
+            "pillar": "build_system",
+            "status": {
+              "status": "fail"
+            }
+          },
+          {
+            "id": "structured_observability",
+            "level": 4,
+            "pillar": "debugging_and_observability",
+            "status": {
+              "reason": "structured logging/tracing/metrics quality is a runtime and code-semantics judgment, not a fixed-path fact",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "analytics_infrastructure",
+            "level": 5,
+            "pillar": "product_and_experimentation",
+            "status": {
+              "reason": "analytics/experimentation infrastructure is organizational, not visible in the repo tree",
+              "status": "excluded"
+            }
+          },
+          {
+            "id": "self_improving_orchestration",
+            "level": 5,
+            "pillar": "product_and_experimentation",
+            "status": {
+              "reason": "self-improving orchestration is an organizational capability, not a fixed-path fact",
+              "status": "excluded"
+            }
+          }
+        ],
+        "criteria_source": "https://docs.factory.ai/web/agent-readiness/overview.md, https://docs.factory.ai/cli/features/readiness-report.md, https://docs.factory.ai/reference/readiness-reports-api.md (retrieved 2026-07-04). Factory publishes the 5 levels, the 80%-of-previous-level progression rule, the 9 pillars, and example criteria only; no exhaustive per-level criteria list is published, so this table is provisional.",
+        "criteria_version": "factory-provisional-2026-07-04",
+        "level": 1,
+        "levels": [
+          {
+            "evaluated": 4,
+            "excluded": 0,
+            "level": 1,
+            "name": "Functional",
+            "pass_fraction": 0.0,
+            "passed": 0
+          },
+          {
+            "evaluated": 4,
+            "excluded": 1,
+            "level": 2,
+            "name": "Documented",
+            "pass_fraction": 0.0,
+            "passed": 0
+          },
+          {
+            "evaluated": 7,
+            "excluded": 2,
+            "level": 3,
+            "name": "Standardized",
+            "pass_fraction": 0.0,
+            "passed": 0
+          },
+          {
+            "evaluated": 3,
+            "excluded": 1,
+            "level": 4,
+            "name": "Optimized",
+            "pass_fraction": 0.0,
+            "passed": 0
+          },
+          {
+            "evaluated": 0,
+            "excluded": 2,
+            "level": 5,
+            "name": "Autonomous",
+            "pass_fraction": null,
+            "passed": 0
+          }
+        ],
+        "pillars": [
+          {
+            "evaluated": 4,
+            "excluded": 0,
+            "pass_fraction": 0.0,
+            "passed": 0,
+            "pillar": "style_and_validation"
+          },
+          {
+            "evaluated": 3,
+            "excluded": 0,
+            "pass_fraction": 0.0,
+            "passed": 0,
+            "pillar": "build_system"
+          },
+          {
+            "evaluated": 3,
+            "excluded": 0,
+            "pass_fraction": 0.0,
+            "passed": 0,
+            "pillar": "testing"
+          },
+          {
+            "evaluated": 3,
+            "excluded": 1,
+            "pass_fraction": 0.0,
+            "passed": 0,
+            "pillar": "documentation"
+          },
+          {
+            "evaluated": 1,
+            "excluded": 0,
+            "pass_fraction": 0.0,
+            "passed": 0,
+            "pillar": "development_environment"
+          },
+          {
+            "evaluated": 0,
+            "excluded": 1,
+            "pass_fraction": null,
+            "passed": 0,
+            "pillar": "debugging_and_observability"
+          },
+          {
+            "evaluated": 2,
+            "excluded": 2,
+            "pass_fraction": 0.0,
+            "passed": 0,
+            "pillar": "security"
+          },
+          {
+            "evaluated": 2,
+            "excluded": 0,
+            "pass_fraction": 0.0,
+            "passed": 0,
+            "pillar": "task_discovery"
+          },
+          {
+            "evaluated": 0,
+            "excluded": 2,
+            "pass_fraction": null,
+            "passed": 0,
+            "pillar": "product_and_experimentation"
+          }
+        ],
+        "repo_id": "sample/foxtrot"
       },
       "mined_commits": [
-        { "sha": "f0000000000000000000000000000000000000f0", "reverted": true, "churn": 60 },
-        { "sha": "f0000000000000000000000000000000000000f1", "reverted": true, "churn": 58 },
-        { "sha": "f0000000000000000000000000000000000000f2", "reverted": true, "churn": 55 },
-        { "sha": "f0000000000000000000000000000000000000f3", "reverted": true, "churn": 52 }
-      ]
+        {
+          "churn": 60,
+          "reverted": true,
+          "sha": "f0000000000000000000000000000000000000f0"
+        },
+        {
+          "churn": 58,
+          "reverted": true,
+          "sha": "f0000000000000000000000000000000000000f1"
+        },
+        {
+          "churn": 55,
+          "reverted": true,
+          "sha": "f0000000000000000000000000000000000000f2"
+        },
+        {
+          "churn": 52,
+          "reverted": true,
+          "sha": "f0000000000000000000000000000000000000f3"
+        }
+      ],
+      "repo_id": "sample/foxtrot",
+      "structure_counts": {
+        "module_size_outliers": 3,
+        "navigability_anchor_absence": 5,
+        "unused_import_proxy": 6
+      }
     }
   ]
 }
