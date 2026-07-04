@@ -33,17 +33,23 @@ fn never_observed_repo_yields_an_empty_corpus_not_an_error() {
 }
 
 #[test]
-fn sessions_accumulate_one_observation_each() {
+fn only_sessions_carrying_held_out_edits_count_as_observations() {
     let repo = TempDir::new().expect("tempdir");
-    // Two live sessions from the enforce hooks...
+    // Two live sessions from the enforce hooks: one landed an edit, one only
+    // ran tests...
     write_live_log(repo.path(), "s1", &[SPAN_TEST_RUN, SPAN_WRITE]);
     write_live_log(repo.path(), "s2", &[SPAN_TEST_RUN]);
-    // ...plus one whole trace landed via the write_trace path.
+    // ...plus one whole trace landed via the write_trace path, edit-free.
     let trace_json = format!(r#"{{"spans":[{SPAN_TEST_RUN}]}}"#);
     std::fs::write(traces_dir(repo.path()).join("run-1.json"), trace_json).expect("write trace");
 
     let corpus = load_corpus(repo.path()).expect("parseable corpus");
-    assert_eq!(corpus.observations(), 3, "each session is one observation");
+    assert_eq!(corpus.sessions.len(), 3, "every session is ingested");
+    assert_eq!(
+        corpus.observations(),
+        1,
+        "only the session with a landed edit supplies held-out signal"
+    );
 
     let ids: Vec<&str> = corpus
         .sessions
@@ -57,6 +63,26 @@ fn sessions_accumulate_one_observation_each() {
     assert_eq!(s1.trace.spans.len(), 2);
     let edits = held_out_edits(&s1.trace);
     assert_eq!(edits.into_iter().collect::<Vec<_>>(), vec!["src/lib.rs"]);
+}
+
+// The precondition measures available behavioral signal, not session-file
+// count: a zero-byte live log parses to an empty trace and must contribute
+// no observation (aoa-d6t.23 review finding).
+#[test]
+fn contentless_live_logs_supply_zero_observations() {
+    let repo = TempDir::new().expect("tempdir");
+    for i in 0..10 {
+        std::fs::write(traces_dir(repo.path()).join(format!("live-s{i}.jsonl")), "")
+            .expect("write empty log");
+    }
+
+    let corpus = load_corpus(repo.path()).expect("parseable corpus");
+    assert_eq!(corpus.sessions.len(), 10);
+    assert_eq!(
+        corpus.observations(),
+        0,
+        "zero-span sessions are not held-out behavioral signal"
+    );
 }
 
 #[test]
@@ -75,7 +101,7 @@ fn held_out_edits_exclude_blocked_writes() {
 #[test]
 fn non_corpus_entries_are_recorded_not_silently_ignored() {
     let repo = TempDir::new().expect("tempdir");
-    write_live_log(repo.path(), "s", &[SPAN_TEST_RUN]);
+    write_live_log(repo.path(), "s", &[SPAN_TEST_RUN, SPAN_WRITE]);
     let dir = traces_dir(repo.path());
     std::fs::write(dir.join("notes.txt"), "not a trace").expect("write stray file");
     std::fs::create_dir(dir.join("subdir")).expect("create stray dir");

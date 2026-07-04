@@ -15,10 +15,12 @@
 //! - `live-<session>.jsonl` — appended span-per-line by the enforce hooks;
 //! - `<name>.json` — whole traces landed via `aoa_audit::write_trace`.
 //!
-//! One session = one held-out behavioral observation. The corpus size feeds
-//! the greenfield/cold-start precondition (`aoa_gap::BehavioralSignal`): below
-//! the exact-permutation window the behavioral metrics report
-//! insufficient-data; once enough sessions accumulate they light up.
+//! A session counts as one held-out behavioral observation only when it
+//! carries a landed edit ([`held_out_edits`]); edit-free sessions accumulate
+//! but supply no signal. The observation count feeds the greenfield/cold-start
+//! precondition (`aoa_gap::BehavioralSignal`): below the exact-permutation
+//! window the behavioral metrics report insufficient-data; once enough
+//! edit-carrying sessions accumulate they light up.
 //!
 //! [`ObserveLiveLog`] implements the versioned cross-agent
 //! [`aoa_codeprobe_shim::TraceBackend`] contract with `native` provenance —

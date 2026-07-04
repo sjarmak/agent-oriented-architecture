@@ -8,8 +8,10 @@
 //!   `aoa_audit::write_trace` (the instrumented-harness path).
 //!
 //! [`load_corpus`] turns both into one stream of validated
-//! [`ObservedSession`]s. One session = one held-out behavioral observation for
-//! the repo (the corpus aggregation unit; a repo is still ONE observation in
+//! [`ObservedSession`]s. A session counts as one held-out behavioral
+//! observation only when it carries held-out ground truth — at least one
+//! landed edit ([`held_out_edits`]); a session that merely parses supplies no
+//! signal (the corpus aggregation unit; a repo is still ONE observation in
 //! cross-repo R0 voting).
 
 use std::collections::BTreeSet;
@@ -54,9 +56,19 @@ pub struct TraceCorpus {
 }
 
 impl TraceCorpus {
-    /// Held-out behavioral observations this corpus supplies: one per session.
+    /// Held-out behavioral observations this corpus supplies: the sessions
+    /// whose trace carries at least one landed edit ([`held_out_edits`]).
+    ///
+    /// The count feeds the greenfield/cold-start precondition
+    /// (`aoa_gap::BehavioralSignal`), which measures *available signal*, not
+    /// session-file count: a session with no `write.attempt` span (or an
+    /// empty file) parses and accumulates on [`TraceCorpus::sessions`], but
+    /// holds nothing out and must not satisfy the window (aoa-d6t.23).
     pub fn observations(&self) -> usize {
-        self.sessions.len()
+        self.sessions
+            .iter()
+            .filter(|s| !held_out_edits(&s.trace).is_empty())
+            .count()
     }
 }
 

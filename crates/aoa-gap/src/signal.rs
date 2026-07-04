@@ -38,9 +38,14 @@ pub const BEHAVIORAL_METRICS: &[&str] = &[
 /// [`MetricMode::InsufficientData`].
 pub const INSUFFICIENT_DATA_REASON: &str = "no held-out behavioral signal for this repo yet";
 
-/// The count of held-out behavioral observations available for one repo:
-/// codeprobe-mined tasks plus observe-captured live-session traces. Purely
-/// mechanical — a file/trial count, no judgment.
+/// The count of held-out behavioral observations available for one repo, as
+/// supplied by the caller. Purely mechanical, no judgment. Today two producers
+/// count: the audit counts observe-captured sessions that carry a landed edit
+/// (`aoa_observe_shim::TraceCorpus::observations`), and `eval run` counts its
+/// per-trial records. No code path counts codeprobe-mineable tasks yet — a
+/// repo with rich history but no observe corpus reports zero observations
+/// (which is why [`INSUFFICIENT_DATA_REASON`] says "held-out behavioral
+/// signal", not "history").
 ///
 /// `required` is carried as data (inspectable-thresholds discipline) and is
 /// [`MAX_EXACT_N`]: below the exact-permutation window a repo cannot supply

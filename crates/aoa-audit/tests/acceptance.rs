@@ -242,6 +242,23 @@ fn audit_surfaces_structure_family_items() {
     );
 }
 
+/// Accumulate `n` observe-captured live sessions that each carry a landed
+/// edit — the held-out ground truth that makes a session count as one
+/// behavioral observation.
+fn seed_edit_sessions(repo: &Path, n: usize) {
+    let traces = repo.join(".aoa").join("traces");
+    std::fs::create_dir_all(&traces).expect("create traces dir");
+    let spans = concat!(
+        r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#,
+        "\n",
+        r#"{"type":"write.attempt","source":"native","seq":1,"attributes":{"path":"src/lib.rs"}}"#,
+        "\n",
+    );
+    for i in 0..n {
+        std::fs::write(traces.join(format!("live-s{i}.jsonl")), spans).expect("write live log");
+    }
+}
+
 // aoa-d6t.23 criterion: a history-poor repo (no held-out behavioral signal)
 // reports InsufficientData for the behavioral metrics with the reason — never
 // a fabricated mutation-surface score and never a silent checkbox degradation.
@@ -280,13 +297,7 @@ fn greenfield_repo_reports_insufficient_data_not_a_fabricated_score() {
 #[test]
 fn accumulated_trace_corpus_lights_the_behavioral_metrics_up() {
     let repo = fixture_repo();
-    let traces = repo.path().join(".aoa").join("traces");
-    std::fs::create_dir_all(&traces).expect("create traces dir");
-    let span = r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#;
-    for i in 0..10 {
-        std::fs::write(traces.join(format!("live-s{i}.jsonl")), format!("{span}\n"))
-            .expect("write live log");
-    }
+    seed_edit_sessions(repo.path(), 10);
 
     let report = audit(repo.path(), &audit_config()).expect("audit succeeds");
     assert_eq!(report.behavioral_signal.observations, 10);
@@ -300,6 +311,32 @@ fn accumulated_trace_corpus_lights_the_behavioral_metrics_up() {
         "with sufficient signal the behavioral item is measured again"
     );
     assert!(!report.render_human().contains("InsufficientData"));
+}
+
+// aoa-d6t.23 review finding: the window must not be satisfiable by sessions
+// that carry no held-out signal — ten edit-free live logs are zero
+// observations, and the behavioral item stays withheld.
+#[test]
+fn edit_free_sessions_do_not_satisfy_the_behavioral_window() {
+    let repo = fixture_repo();
+    let traces = repo.path().join(".aoa").join("traces");
+    std::fs::create_dir_all(&traces).expect("create traces dir");
+    let span = r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#;
+    for i in 0..10 {
+        std::fs::write(traces.join(format!("live-s{i}.jsonl")), format!("{span}\n"))
+            .expect("write live log");
+    }
+
+    let report = audit(repo.path(), &audit_config()).expect("audit succeeds");
+    assert_eq!(
+        report.behavioral_signal.observations, 0,
+        "edit-free sessions supply no held-out signal"
+    );
+    assert!(report.insufficient_data.is_some());
+    assert!(!report
+        .items
+        .iter()
+        .any(|i| i.kind == aoa_audit::FindingKind::MutationSurface));
 }
 
 // A corrupt corpus file must fail the audit loudly, never under-count signal.

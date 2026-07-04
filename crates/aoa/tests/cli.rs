@@ -1093,14 +1093,20 @@ fn recommend_json_joins_findings_with_metric_and_fix() {
 
 const INSUFFICIENT_REASON: &str = "no held-out behavioral signal for this repo yet";
 
-/// Accumulate `n` observe-captured live sessions under `<repo>/.aoa/traces/`.
+/// Accumulate `n` observe-captured live sessions under `<repo>/.aoa/traces/`,
+/// each carrying a landed edit — a session counts as a held-out behavioral
+/// observation only when it holds a real edit out.
 fn seed_live_sessions(repo: &Path, n: usize) {
     let traces = repo.join(".aoa").join("traces");
     std::fs::create_dir_all(&traces).expect("create traces dir");
-    let span = r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#;
+    let spans = concat!(
+        r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#,
+        "\n",
+        r#"{"type":"write.attempt","source":"native","seq":1,"attributes":{"path":"src/app.py"}}"#,
+        "\n",
+    );
     for i in 0..n {
-        std::fs::write(traces.join(format!("live-s{i}.jsonl")), format!("{span}\n"))
-            .expect("write live log");
+        std::fs::write(traces.join(format!("live-s{i}.jsonl")), spans).expect("write live log");
     }
 }
 
@@ -1150,6 +1156,33 @@ fn audit_lights_up_behavioral_metrics_once_corpus_is_sufficient() {
     assert!(
         items.iter().any(|i| i["kind"] == "mutation_surface"),
         "sufficient corpus re-enables the behavioral item"
+    );
+}
+
+// The reviewers' probe (aoa-d6t.23): ten blank live-*.jsonl files must NOT
+// satisfy the behavioral window — the precondition measures held-out signal,
+// not session-file count.
+#[test]
+fn audit_ignores_contentless_sessions_when_counting_observations() {
+    let repo = TempDir::new().expect("tempdir");
+    let traces = repo.path().join(".aoa").join("traces");
+    std::fs::create_dir_all(&traces).expect("create traces dir");
+    for i in 0..10 {
+        std::fs::write(traces.join(format!("live-s{i}.jsonl")), "").expect("write blank log");
+    }
+
+    let output = aoa()
+        .args(["audit", "--json", "--repo"])
+        .arg(repo.path())
+        .output()
+        .expect("run");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert_eq!(parsed["behavioral_signal"]["observations"], 0);
+    assert_eq!(parsed["insufficient_data"]["reason"], INSUFFICIENT_REASON);
+    let items = parsed["items"].as_array().expect("items");
+    assert!(
+        !items.iter().any(|i| i["kind"] == "mutation_surface"),
+        "blank sessions must not re-enable the behavioral item"
     );
 }
 
