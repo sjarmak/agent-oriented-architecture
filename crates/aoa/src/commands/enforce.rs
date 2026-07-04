@@ -9,7 +9,10 @@
 //! - **`check`** (PreToolUse on the mutation tools): consult [`aoa_enforce`]'s
 //!   reproduction gate against the live log; if no reproduction precedes the
 //!   pending write, append a `write.blocked` span and exit 2 (the Claude Code
-//!   signal that blocks the tool call), surfacing the reason on stderr.
+//!   signal that blocks the tool call), surfacing the reason on stderr. An
+//!   *allowed* write is recorded as a `write.attempt` span carrying its target
+//!   path — the landed edit is the contamination-free held-out ground truth
+//!   the live corpus exists to accumulate (aoa-d6t.23).
 //!
 //! The live log is owned by this layer (approach (a)): we control its format, so
 //! the gate reads exactly the spans we wrote — no dependency on the host's
@@ -74,7 +77,7 @@ pub fn run(args: &EnforceArgs) -> Result<i32> {
 fn run_record(event: &HookEvent) -> Result<i32> {
     if let Some(span_type) = recorded_span_type(event) {
         let log = live_log_path(event)?;
-        append_span(&log, span_type)?;
+        append_span(&log, span_type, Map::new())?;
     }
     Ok(0)
 }
@@ -109,15 +112,32 @@ fn run_check(event: &HookEvent) -> Result<i32> {
     // R7: reproduction gate, on unless the policy explicitly disables it.
     let reproduction_required = policy.as_ref().is_none_or(|p| p.reproduction_required);
     if !reproduction_required {
-        return Ok(0);
+        return allow(event);
     }
 
     let log = live_log_path(event)?;
     let prior = read_spans(&log)?;
     match reproduction_gate(&prior) {
-        Decision::Allow => Ok(0),
+        Decision::Allow => allow(event),
         Decision::Block(reason) => block(event, reason),
     }
+}
+
+/// The allow path for a guarded mutation: record the permitted write as a
+/// `write.attempt` span carrying its target path, then exit 0 so the tool call
+/// proceeds. The landed edit is the held-out ground truth the live corpus
+/// accumulates (aoa-d6t.23) — without this record, `held_out_edits` over a
+/// live session is always empty and the corpus carries no behavioral signal.
+/// A mutation call with no resolvable target records nothing: there is no
+/// path to hold out.
+fn allow(event: &HookEvent) -> Result<i32> {
+    if let Some(target) = write_target(event) {
+        let log = live_log_path(event)?;
+        let mut attributes = Map::new();
+        attributes.insert("path".to_string(), Value::String(target.to_string()));
+        append_span(&log, SpanType::WriteAttempt, attributes)?;
+    }
+    Ok(0)
 }
 
 /// Emit the `write.blocked` span, surface the reason on stderr, and return the
@@ -231,15 +251,15 @@ fn read_spans(log: &Path) -> Result<Vec<Span>> {
         .collect()
 }
 
-/// Append a fresh span of `span_type`, numbered after the spans already present
-/// so `seq` stays monotonic.
-fn append_span(log: &Path, span_type: SpanType) -> Result<()> {
+/// Append a fresh span of `span_type` with `attributes`, numbered after the
+/// spans already present so `seq` stays monotonic.
+fn append_span(log: &Path, span_type: SpanType, attributes: Map<String, Value>) -> Result<()> {
     let next_seq = read_spans(log)?.len() as u64;
     let span = Span {
         span_type,
         source: SpanSource::Native,
         seq: next_seq,
-        attributes: Map::new(),
+        attributes,
     };
     append_span_value(log, span)
 }
@@ -433,8 +453,8 @@ mod tests {
     fn append_then_read_round_trips_spans_monotonically() {
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join(".aoa/traces/live-x.jsonl");
-        append_span(&log, SpanType::TestRun).unwrap();
-        append_span(&log, SpanType::WriteAttempt).unwrap();
+        append_span(&log, SpanType::TestRun, Map::new()).unwrap();
+        append_span(&log, SpanType::WriteAttempt, Map::new()).unwrap();
         let spans = read_spans(&log).unwrap();
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].seq, 0);

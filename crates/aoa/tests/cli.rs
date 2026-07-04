@@ -1281,11 +1281,46 @@ fn enforce_allows_write_after_a_test_run_is_recorded() {
         .assert()
         .success();
 
-    // The live log carries the test.run and the earlier write.blocked span.
+    // The live log carries the test.run, the earlier write.blocked span, and
+    // the allowed write recorded as write.attempt with its target path — the
+    // held-out ground truth the live corpus accumulates (aoa-d6t.23).
     let log = repo.path().join(".aoa/traces/live-it-session.jsonl");
     let contents = std::fs::read_to_string(&log).expect("live log written");
     assert!(contents.contains("test.run"));
     assert!(contents.contains("write.blocked"));
+    assert!(
+        contents.contains(r#""type":"write.attempt""#),
+        "allowed write must land as write.attempt: {contents}"
+    );
+    assert!(
+        contents.contains(r#""path":"src/lib.rs""#),
+        "write.attempt carries its target path: {contents}"
+    );
+}
+
+// An allowed write is recorded even when policy disables the reproduction
+// gate: held-out truth capture is independent of gating (aoa-d6t.23).
+#[test]
+fn enforce_check_records_allowed_write_when_reproduction_is_disabled() {
+    let repo = TempDir::new().unwrap();
+    std::fs::write(
+        repo.path().join("aoa-policy.yaml"),
+        "reproduction_required: false\n",
+    )
+    .unwrap();
+
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(hook_payload("Edit", None, repo.path()))
+        .assert()
+        .success();
+
+    let log = repo.path().join(".aoa/traces/live-it-session.jsonl");
+    let contents = std::fs::read_to_string(&log).expect("live log written");
+    assert!(
+        contents.contains(r#""type":"write.attempt""#) && contents.contains("src/lib.rs"),
+        "allowed write recorded with its path: {contents}"
+    );
 }
 
 #[test]
