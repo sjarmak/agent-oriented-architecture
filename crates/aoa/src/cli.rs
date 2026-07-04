@@ -49,6 +49,28 @@ pub enum Command {
     /// Runtime enforcement hook entry points (R7). Invoked by the Claude Code
     /// hooks that `aoa observe --enforce` installs; reads the payload on stdin.
     Enforce(EnforceArgs),
+
+    /// Scaffold (or `--update`) the minimal agent-ready repo shape (R11):
+    /// capped AGENTS.md, feature-capsule layout, starter aoa-policy.yaml, and
+    /// a skill template. Ejectable: deleting `.aoa/` leaves a working repo.
+    Init(InitArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct InitArgs {
+    /// Repository root to scaffold. Must be an existing directory.
+    #[arg(long, default_value = ".")]
+    pub repo: PathBuf,
+
+    /// Migrate a previously scaffolded repo to the current template set.
+    /// User-modified files are never overwritten: the new render is written
+    /// beside them as `<path>.new` for review.
+    #[arg(long)]
+    pub update: bool,
+
+    /// Emit the structured JSON rendering instead of human text.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Args)]

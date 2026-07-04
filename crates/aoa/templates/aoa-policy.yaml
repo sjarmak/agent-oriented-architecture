@@ -1,0 +1,19 @@
+# aoa-policy.yaml — the single declared policy for {{project_name}}.
+# Compile it into the enforcement planes with: aoa policy compile
+#
+# Every field is optional; the empty starter below enforces nothing except
+# the reproduction-before-mutation gate.
+
+# Globs an agent may not write (e.g. "migrations/*.sql").
+protected_paths: []
+
+# Globs that are generated artifacts. Use the mapping form to point at the
+# source to edit instead: - { glob: "src/api.gen.ts", source: "openapi.yaml" }
+generated_paths: []
+
+# Modules permitted to perform state-changing writes; becomes the CODEOWNERS
+# spine (e.g. "features/billing/").
+gateway_allowlist: []
+
+# Require a failing reproduction before an agent mutates source (R7 gate).
+reproduction_required: true

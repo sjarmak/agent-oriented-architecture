@@ -23,6 +23,7 @@ fn main() -> ExitCode {
         Command::Falsify(args) => commands::run_falsify(args),
         Command::Policy(args) => commands::run_policy(args),
         Command::Enforce(args) => commands::run_enforce(args),
+        Command::Init(args) => commands::run_init(args),
     };
 
     match result {
