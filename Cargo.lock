@@ -209,6 +209,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "aoa-observe-shim"
+version = "0.1.0"
+dependencies = [
+ "aoa-codeprobe-shim",
+ "aoa-trace",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "aoa-policy"
 version = "0.1.0"
 dependencies = [
