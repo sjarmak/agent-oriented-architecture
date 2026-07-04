@@ -686,7 +686,8 @@ fn has_repo_global_verification(repo: &Path) -> Result<bool, AuditError> {
 
 /// Whether any CI config carries a documented test command. Scans every entry of
 /// `.github/workflows/` plus the single-file CI configs ([`CI_FILES`]) for a
-/// [`TEST_INVOCATION_MARKERS`] token. Missing CI files are simply absent signals.
+/// [`TEST_INVOCATION_MARKERS`] token. Missing CI files are simply absent signals,
+/// and symlinked ones are never followed (the family's no-follow discipline).
 fn has_ci_test_step(repo: &Path) -> Result<bool, AuditError> {
     let workflows = repo.join(CI_DIR);
     if workflows.is_dir() {
@@ -701,7 +702,12 @@ fn has_ci_test_step(repo: &Path) -> Result<bool, AuditError> {
     }
     for rel in CI_FILES {
         let path = repo.join(rel);
-        if path.is_file() && file_mentions_test_command(&path)? {
+        // `symlink_metadata` does not follow symlinks; a symlinked CI config is
+        // ignored, and a missing one is simply an absent signal.
+        let is_regular = std::fs::symlink_metadata(&path)
+            .map(|meta| meta.is_file())
+            .unwrap_or(false);
+        if is_regular && file_mentions_test_command(&path)? {
             return Ok(true);
         }
     }
@@ -1858,6 +1864,27 @@ mod tests {
             "a CI test step makes verification reachable repo-wide"
         );
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ci_probe_does_not_follow_a_symlinked_ci_config() {
+        use std::os::unix::fs::symlink;
+        // A CI config symlinked to an out-of-tree file with a test command must
+        // not count: the probe family never follows symlinks.
+        let base = tmp("verify-ci-symlink");
+        let dir = base.join("repo");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
+        let outside = base.join("outside.yml");
+        fs::write(&outside, "test:\n  script: cargo test\n").unwrap();
+        symlink(&outside, dir.join(".gitlab-ci.yml")).unwrap();
+
+        let sites = verification_sites(&dir).unwrap();
+        assert!(
+            sites.contains(&dir),
+            "a symlinked CI config must not make verification reachable"
+        );
+        fs::remove_dir_all(&base).ok();
     }
 
     #[test]
