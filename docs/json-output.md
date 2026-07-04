@@ -37,7 +37,7 @@ removed without a major version note. Field types are given as JSON types.
 | `aoa observe --json` | `traces_dir` (string), `gitignore` (string), `enforce_settings` (string or null) | `ObserveView` in `crates/aoa/src/commands/observe.rs` |
 | `aoa policy compile --json` | `planes_written` (string array of artifact paths) | `CompileView` in `crates/aoa/src/commands/policy.rs` |
 | `aoa policy guard-staged --json` | `blocked` (string array of protected staged files; exit 1 when non-empty) | `GuardStagedView` in `crates/aoa/src/commands/policy.rs` |
-| `aoa policy infer-owners --json` | `codeowners_path` (string), `entries` (array: `pattern`, `owner`, `owned_lines`, `total_lines`), `proposal` (string), `diff` (string), `written` (bool) | `InferOwnersView` in `crates/aoa/src/commands/policy.rs` |
+| `aoa policy infer-owners --json` | `codeowners_path` (string), `entries` (array: `pattern`, `owner`, `owned_lines`, `total_lines`), `proposal` (string), `diff` (string), `written` (bool); `proposal` and `diff` are empty when `entries` is empty | `InferOwnersView` in `crates/aoa/src/commands/policy.rs` |
 
 ## Exemption
 

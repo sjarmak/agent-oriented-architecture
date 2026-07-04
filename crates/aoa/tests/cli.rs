@@ -1588,6 +1588,121 @@ fn infer_owners_json_matches_human_findings() {
     }
 }
 
+// R16: enumeration and attribution share HEAD as the source of truth — a
+// staged-but-uncommitted file (a routine mid-task index state) must not abort
+// the command with a failed `git blame HEAD` on a path HEAD has never seen.
+#[test]
+fn infer_owners_ignores_staged_but_uncommitted_files() {
+    let repo = blame_repo();
+    std::fs::create_dir_all(repo.path().join("staged")).unwrap();
+    std::fs::write(repo.path().join("staged/new.txt"), "uncommitted\n").unwrap();
+    run_git(repo.path(), &["add", "staged/new.txt"]);
+    aoa()
+        .args([
+            "policy",
+            "infer-owners",
+            "--repo",
+            repo.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("+/a/ alice@example.com"))
+        .stdout(predicate::str::contains("/staged/").not());
+}
+
+// R16: a merge-conflicted file lists one index entry per stage (1/2/3); its
+// lines must be counted once, not once per stage, or its authors gain 3x
+// weight and the reported arithmetic is silently wrong.
+#[test]
+fn infer_owners_counts_conflicted_files_once() {
+    let repo = TempDir::new().unwrap();
+    init_git_repo(repo.path());
+    std::fs::create_dir_all(repo.path().join("c")).unwrap();
+    std::fs::write(repo.path().join("c/f.txt"), "one\ntwo\n").unwrap();
+    run_git(repo.path(), &["add", "."]);
+    run_git(repo.path(), &["commit", "-qm", "base"]);
+    run_git(repo.path(), &["checkout", "-qb", "side"]);
+    std::fs::write(repo.path().join("c/f.txt"), "one\ntwo side\n").unwrap();
+    run_git(repo.path(), &["commit", "-aqm", "side edit"]);
+    run_git(repo.path(), &["checkout", "-q", "-"]);
+    std::fs::write(repo.path().join("c/f.txt"), "one\ntwo main\n").unwrap();
+    run_git(repo.path(), &["commit", "-aqm", "main edit"]);
+    // The merge conflicts by construction; leave the index unmerged.
+    let merge = Command::new("git")
+        .arg("-C")
+        .arg(repo.path())
+        .args(["merge", "-q", "side"])
+        .output()
+        .expect("git available");
+    assert!(!merge.status.success(), "merge must conflict");
+
+    let output = aoa()
+        .args([
+            "policy",
+            "infer-owners",
+            "--repo",
+            repo.path().to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .expect("run");
+    assert!(output.status.success());
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    let entries = parsed["entries"].as_array().expect("entries array");
+    let c = entries
+        .iter()
+        .find(|e| e["pattern"] == "/c/")
+        .expect("/c/ entry");
+    assert_eq!(
+        c["total_lines"], 2,
+        "2-line file must not be triple-counted"
+    );
+    assert_eq!(c["owned_lines"], 2);
+}
+
+// R17: with zero attributed entries both registers carry nothing actionable —
+// the JSON must not advertise a create-diff that the human register omits and
+// that --write refuses.
+#[test]
+fn infer_owners_zero_entries_keeps_registers_in_parity() {
+    let repo = TempDir::new().unwrap();
+    init_git_repo(repo.path());
+    run_git(
+        repo.path(),
+        &["commit", "-q", "--allow-empty", "-m", "empty"],
+    );
+
+    aoa()
+        .args([
+            "policy",
+            "infer-owners",
+            "--repo",
+            repo.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nothing to propose"));
+
+    let output = aoa()
+        .args([
+            "policy",
+            "infer-owners",
+            "--repo",
+            repo.path().to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .expect("run");
+    assert!(output.status.success());
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert_eq!(parsed["entries"], serde_json::json!([]));
+    assert_eq!(
+        parsed["proposal"], "",
+        "no proposal content without entries"
+    );
+    assert_eq!(parsed["diff"], "", "no diff the human register never shows");
+}
+
 // R17: policy compile exposes the JSON register listing the written planes.
 #[test]
 fn policy_compile_json_lists_written_planes() {

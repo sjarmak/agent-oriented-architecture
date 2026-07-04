@@ -145,22 +145,10 @@ struct InferOwnersView {
 /// `--write` writes the proposal to `.github/CODEOWNERS`.
 fn infer_owners_cmd(repo: &Path, write: bool, json: bool) -> Result<i32> {
     let mut counts = Vec::new();
-    for path in tracked_blob_paths(repo)? {
+    for path in head_blob_paths(repo)? {
         counts.extend(blame_counts(repo, &path)?);
     }
     let entries = infer_owners(&counts);
-    let proposal = proposed_codeowners(&entries);
-
-    let codeowners_path = repo.join(CODEOWNERS_REL);
-    let existing = match std::fs::read_to_string(&codeowners_path) {
-        Ok(content) => Some(content),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-        Err(err) => {
-            return Err(err)
-                .with_context(|| format!("failed to read {}", codeowners_path.display()))
-        }
-    };
-    let diff = render_proposal_diff(CODEOWNERS_REL, existing.as_deref(), &proposal);
 
     // Writing an ownerless proposal would clobber CODEOWNERS with an empty
     // spine; refuse the write and say so instead of silently degrading.
@@ -170,6 +158,27 @@ fn infer_owners_cmd(repo: &Path, write: bool, json: bool) -> Result<i32> {
             repo.display()
         );
     }
+
+    // With zero entries there is nothing actionable: both registers carry an
+    // empty proposal and diff, so the JSON never advertises a create-diff the
+    // human register omits and --write refuses (R17).
+    let codeowners_path = repo.join(CODEOWNERS_REL);
+    let (proposal, diff) = if entries.is_empty() {
+        (String::new(), String::new())
+    } else {
+        let proposal = proposed_codeowners(&entries);
+        let existing = match std::fs::read_to_string(&codeowners_path) {
+            Ok(content) => Some(content),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("failed to read {}", codeowners_path.display()))
+            }
+        };
+        let diff = render_proposal_diff(CODEOWNERS_REL, existing.as_deref(), &proposal);
+        (proposal, diff)
+    };
+
     if write {
         write_artifact(&codeowners_path, &proposal)?;
     }
@@ -216,31 +225,34 @@ fn render_infer_owners_human(view: &InferOwnersView) -> String {
     out
 }
 
-/// List tracked blob paths via `git ls-files -sz`, skipping gitlink (submodule)
-/// entries, which cannot be blamed.
-fn tracked_blob_paths(repo: &Path) -> Result<Vec<String>> {
+/// List the blob paths committed at HEAD via `git ls-tree -r -z HEAD`,
+/// skipping non-blob entries (submodule gitlinks), which cannot be blamed.
+/// HEAD is the enumeration source because attribution blames HEAD: the index
+/// would list a merge-conflicted path once per unmerged stage (tripling its
+/// counts) and would include staged-but-uncommitted files HEAD cannot blame.
+fn head_blob_paths(repo: &Path) -> Result<Vec<String>> {
     let output = Command::new("git")
         .arg("-C")
         .arg(repo)
-        .args(["ls-files", "-sz"])
+        .args(["ls-tree", "-r", "-z", "HEAD"])
         .output()
-        .context("running git ls-files (is git installed?)")?;
+        .context("running git ls-tree (is git installed?)")?;
     if !output.status.success() {
         bail!(
-            "git ls-files failed in {}: {}",
+            "git ls-tree failed in {}: {}",
             repo.display(),
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    let stdout = String::from_utf8(output.stdout).context("git ls-files output was not UTF-8")?;
+    let stdout = String::from_utf8(output.stdout).context("git ls-tree output was not UTF-8")?;
     let mut paths = Vec::new();
     for entry in stdout.split('\0').filter(|e| !e.is_empty()) {
-        // Entry shape: "<mode> <oid> <stage>\t<path>".
+        // Entry shape: "<mode> <type> <oid>\t<path>".
         let (meta, path) = entry
             .split_once('\t')
-            .with_context(|| format!("unparseable git ls-files entry: {entry}"))?;
-        let mode = meta.split(' ').next().unwrap_or_default();
-        if mode == "160000" {
+            .with_context(|| format!("unparseable git ls-tree entry: {entry}"))?;
+        let objtype = meta.split(' ').nth(1).unwrap_or_default();
+        if objtype != "blob" {
             continue; // Submodule gitlink: no lines to attribute.
         }
         paths.push(path.to_string());
