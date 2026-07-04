@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::cli::AuditArgs;
+use crate::commands::self_audit;
 use crate::output::{print_human, print_json};
 
 /// The audit configuration measured from the repo itself: the defaults plus a
@@ -21,8 +22,13 @@ pub(crate) fn repo_audit_config(repo: &Path) -> Result<aoa_audit::AuditConfig> {
 }
 
 /// Run a read-only audit and render its tiered punch-list in the requested
-/// register. The exit code is driven by `--fail-on tier1`.
+/// register. The exit code is driven by `--fail-on tier1`. With `--self` the
+/// audit turns on the toolkit itself instead (R14 lint-thyself).
 pub fn run(args: &AuditArgs) -> Result<i32> {
+    if args.self_audit {
+        return self_audit::run(args);
+    }
+
     let cfg = repo_audit_config(&args.repo)?;
     let report = aoa_audit::audit(&args.repo, &cfg)
         .with_context(|| format!("failed to audit {}", args.repo.display()))?;

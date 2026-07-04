@@ -20,6 +20,7 @@ fn main() -> ExitCode {
         Command::Eval(args) => commands::run_eval(args),
         Command::Gap(args) => commands::run_gap(args),
         Command::Recommend(args) => commands::run_recommend(args),
+        Command::Report(args) => commands::run_report(args),
         Command::Falsify(args) => commands::run_falsify(args),
         Command::Policy(args) => commands::run_policy(args),
         Command::Enforce(args) => commands::run_enforce(args),

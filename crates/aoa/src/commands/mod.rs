@@ -15,6 +15,8 @@ mod observe;
 mod policy;
 mod r0b;
 mod recommend;
+mod report;
+mod self_audit;
 
 pub use audit::run as run_audit;
 pub use enforce::run as run_enforce;
@@ -27,3 +29,4 @@ pub use migrate::run as run_migrate;
 pub use observe::run as run_observe;
 pub use policy::run as run_policy;
 pub use recommend::run as run_recommend;
+pub use report::run as run_report;

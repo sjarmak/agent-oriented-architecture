@@ -69,7 +69,9 @@ fn validate_trace(path: &Path, json: bool) -> Result<i32> {
     Ok(0)
 }
 
-fn load_run(path: &Path) -> Result<RunResult> {
+/// Load a run-result JSON (byte-capped). Shared with the R14 self-audit, whose
+/// held-out leg takes the same `--baseline`/`--migrated` inputs as `compare`.
+pub(crate) fn load_run(path: &Path) -> Result<RunResult> {
     let raw = read_to_string_capped(path, MAX_JSON_BYTES)
         .with_context(|| format!("failed to read run file {}", path.display()))?;
     serde_json::from_str(&raw)
