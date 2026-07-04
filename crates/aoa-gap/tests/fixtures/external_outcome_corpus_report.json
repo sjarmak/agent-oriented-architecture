@@ -1,5 +1,5 @@
 {
-  "data_source": "codeprobe run history (runs/codeprobe-*): no post-merge revert, production-incident, or human review-acceptance fields are recorded. The only per-trial outcome is the oracle pass/reward, which is conditioned on held-out success and is therefore circular for construct validity. ground_truth_commit anchors the oracle but correlating a metric with oracle agreement is the same tautology. No external-outcome corpus is available as of 2026-06-20, so every gating candidate stays advisory.",
+  "data_source": "fixture: external_outcome_corpus_confirming.json (offline synthetic corpus; revert rate per repo over mined commits, paired with aoa-audit structure counts)",
   "thresholds": {
     "min_magnitude": 0.3,
     "min_n": 5,
@@ -45,19 +45,40 @@
     {
       "metric": "navigability_anchor_absence",
       "orientation": "lower_is_better",
-      "correlations": [],
-      "mode": "advisory"
+      "correlations": [
+        {
+          "outcome": "revert_rate",
+          "coefficient": 1.0,
+          "n": 6,
+          "p_value": 0.002777777777777778
+        }
+      ],
+      "mode": "gating"
     },
     {
       "metric": "module_size_outliers",
       "orientation": "lower_is_better",
-      "correlations": [],
+      "correlations": [
+        {
+          "outcome": "revert_rate",
+          "coefficient": 0.08571428571428572,
+          "n": 6,
+          "p_value": 0.9194444444444444
+        }
+      ],
       "mode": "advisory"
     },
     {
       "metric": "unused_import_proxy",
       "orientation": "lower_is_better",
-      "correlations": [],
+      "correlations": [
+        {
+          "outcome": "revert_rate",
+          "coefficient": 0.2571428571428571,
+          "n": 6,
+          "p_value": 0.6583333333333333
+        }
+      ],
       "mode": "advisory"
     },
     {

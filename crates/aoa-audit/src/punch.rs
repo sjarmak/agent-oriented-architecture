@@ -42,6 +42,13 @@ pub enum FindingKind {
     /// No task-discovery surface (issue-template path or in-repo issue tracker)
     /// at its well-known location.
     TaskDiscoverySurface,
+    /// The generated-artifact-protection convention (`.gitattributes`
+    /// `linguist-generated`) is absent — generated files are not marked
+    /// off-limits to an agent (R6).
+    GeneratedArtifactProtection,
+    /// Well-known write-boundary declaration surfaces (CODEOWNERS / safe-write
+    /// zone policy) are absent — no declared narrow write surface (R5).
+    WriteSafetyZone,
 }
 
 impl FindingKind {
@@ -60,6 +67,8 @@ impl FindingKind {
         FindingKind::BuildDeterminism,
         FindingKind::DevEnvironmentDeclaration,
         FindingKind::TaskDiscoverySurface,
+        FindingKind::GeneratedArtifactProtection,
+        FindingKind::WriteSafetyZone,
     ];
 }
 
@@ -130,10 +139,12 @@ mod tests {
                 | FindingKind::InvariantDiscoverability
                 | FindingKind::BuildDeterminism
                 | FindingKind::DevEnvironmentDeclaration
-                | FindingKind::TaskDiscoverySurface => {}
+                | FindingKind::TaskDiscoverySurface
+                | FindingKind::GeneratedArtifactProtection
+                | FindingKind::WriteSafetyZone => {}
             }
         }
-        assert_eq!(FindingKind::ALL.len(), 11);
+        assert_eq!(FindingKind::ALL.len(), 13);
     }
 
     #[test]

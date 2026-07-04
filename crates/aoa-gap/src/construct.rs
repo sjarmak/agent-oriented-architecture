@@ -210,6 +210,14 @@ pub const GATING_CANDIDATES: &[(&str, MetricOrientation)] = &[
         "task_discovery_surface_absence",
         MetricOrientation::LowerIsBetter,
     ),
+    (
+        "generated_artifact_protection_absence",
+        MetricOrientation::LowerIsBetter,
+    ),
+    (
+        "write_safety_zone_absence",
+        MetricOrientation::LowerIsBetter,
+    ),
 ];
 
 /// The pre-registered spec for the code-structure measures: each metric paired
@@ -226,16 +234,22 @@ pub const GATING_CANDIDATES: &[(&str, MetricOrientation)] = &[
 /// count, or review acceptance) clearing [`GatingThresholds`] — the same gate
 /// as every other candidate. The external-outcome corpus that would supply such
 /// a correlation does not yet exist (see [`NO_EXTERNAL_OUTCOME_SOURCE`]), so all
-/// three are currently Advisory.
+/// of them are currently Advisory.
 ///
-/// `module_size_outliers` carries a caveat the other two do not: its
-/// `LowerIsBetter` orientation is a *registered, falsifiable directional
-/// hypothesis*, not an earned best-practice. The navigability and unused-import
-/// measures each have a mechanical migration that drives them down
-/// (`aoa-migrate`); module size has none (splitting a large module is not
-/// mechanically safe and was ruled out of scope). Its direction therefore earns
-/// nothing until external-outcome correlation confirms it — which is exactly
-/// what pre-registering a hypothesis under R9c means.
+/// Most measures carry a caveat the navigability and unused-import ones do not:
+/// `module_size_outliers`, `build_determinism_absence`,
+/// `dev_environment_declaration_absence`, `task_discovery_surface_absence`,
+/// `generated_artifact_protection_absence`, and `write_safety_zone_absence`
+/// have no backing `aoa-migrate` migration, so their `LowerIsBetter`
+/// orientation is a *registered, falsifiable directional hypothesis*, not an
+/// earned best-practice. The navigability and unused-import measures each have
+/// a mechanical migration that drives them down (`aoa-migrate`); the others do
+/// not (splitting a large module is not mechanically safe; pinning
+/// dependencies, declaring a dev environment or task-discovery surface, a
+/// generated-artifact marker, or a write boundary are human policy choices the
+/// audit only *observes*). Their direction earns nothing until
+/// external-outcome correlation confirms it — which is exactly what
+/// pre-registering a hypothesis under R9c means.
 pub const STRUCTURE_MEASURE_SPECS: &[(&str, &str)] = &[
     (
         "navigability_anchor_absence",
@@ -278,6 +292,23 @@ tracker) exists at its well-known location (0 otherwise), per aoa-audit \
 task_discovery_item; a pure fixed-path existence fact (Factory task-discovery \
 pillar); the LowerIsBetter orientation is a registered falsifiable hypothesis (no \
 backing migration), promotable only by external-outcome correlation",
+    ),
+    (
+        "generated_artifact_protection_absence",
+        "count (0 or 1) of the well-known generated-artifact-protection marker \
+(a root .gitattributes declaring linguist-generated) that is absent, per aoa-audit \
+generated_artifact_protection_item; a pure convention-existence fact (R6 'mark \
+generated files off-limits'), never a classification of which files are generated; \
+the LowerIsBetter orientation is a registered falsifiable hypothesis (no backing \
+migration), promotable only by external-outcome correlation",
+    ),
+    (
+        "write_safety_zone_absence",
+        "count of well-known write-boundary declaration surfaces (CODEOWNERS \
+ownership map; .aoa safe-write-zone policy) absent from the repo, per aoa-audit \
+write_safety_zone_item; a pure file-existence fact (R5 'narrow mutation gateway / \
+ownership metadata'); the LowerIsBetter orientation is a registered falsifiable \
+hypothesis (no backing migration), promotable only by external-outcome correlation",
     ),
 ];
 
