@@ -345,6 +345,78 @@ fn eval_run_scip_index_takes_subtree_root_partition() {
     assert_eq!(rows[1]["subtree"], "crates/legacy");
 }
 
+// An explicit --subtree-root naming a nonexistent directory must not be
+// silently ignored: the run still completes repo-wide, but the dropped flag is
+// surfaced on stderr ("surface and fall back, never guess").
+#[test]
+fn eval_run_warns_when_subtree_root_is_not_a_directory() {
+    let output = aoa()
+        .args(["eval", "run", "--json", "--codeprobe-run"])
+        .arg(fixture("subtree_run"))
+        .arg("--scip-index")
+        .arg(fixture("subtree_scip_index.json"))
+        .args(["--subtree-root", "/does/not/exist"])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "falls back, does not abort");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--subtree-root") && stderr.contains("not a directory"),
+        "dropped explicit flag must be surfaced, got: {stderr}"
+    );
+
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert!(parsed.get("subtree_partition").is_none());
+}
+
+// An explicit --subtree-root naming a real directory that has no multi-member
+// workspace manifest is likewise surfaced, so "wrong path" is never read as
+// "this repo has no workspace".
+#[test]
+fn eval_run_warns_when_subtree_root_has_no_workspace() {
+    let output = aoa()
+        .args(["eval", "run", "--json", "--codeprobe-run"])
+        .arg(fixture("subtree_run"))
+        .arg("--scip-index")
+        .arg(fixture("subtree_scip_index.json"))
+        .arg("--subtree-root")
+        .arg(fixture("codeprobe_tasks"))
+        .output()
+        .expect("run");
+    assert!(output.status.success());
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--subtree-root") && stderr.contains("no multi-member workspace"),
+        "unpartitioned explicit root must be surfaced, got: {stderr}"
+    );
+
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert!(parsed.get("subtree_partition").is_none());
+}
+
+// The automatic --repo path keeps its silence for an unpartitioned checkout:
+// no flag was dropped, so there is nothing to surface.
+#[test]
+fn eval_run_stays_silent_for_unpartitioned_repo_without_subtree_root() {
+    let output = aoa()
+        .args(["eval", "run", "--json", "--codeprobe-run"])
+        .arg(fixture("subtree_run"))
+        .arg("--repo")
+        .arg(fixture("codeprobe_tasks"))
+        .output()
+        .expect("run");
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("--subtree-root"),
+        "automatic path must not warn, got: {stderr}"
+    );
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert!(parsed.get("subtree_partition").is_none());
+}
+
 // In --repo mode an explicit --subtree-root wins as the partition source (the
 // graph still comes from --repo): here --repo is not a workspace, so any
 // partition present came from --subtree-root.

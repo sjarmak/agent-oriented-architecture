@@ -217,9 +217,14 @@ fn build_graph(args: &EvalRunArgs) -> IndexedRepo {
 /// checkout. Returns `Some` only for a multi-member workspace — the only case
 /// where per-subtree rows add signal — and logs the automatic mode switch. A
 /// discovery failure (malformed manifest) is logged and falls back to
-/// repo-wide reporting rather than aborting the run.
+/// repo-wide reporting rather than aborting the run. An explicit
+/// `--subtree-root` that yields no partition (missing directory, or no
+/// multi-member workspace manifest) is likewise surfaced before falling back:
+/// the user asked for it, so dropping it must never be silent. The automatic
+/// `--repo` path stays quiet in that case — no flag was dropped.
 fn detect_partition(args: &EvalRunArgs) -> Option<SubtreePartition> {
-    let root = args.subtree_root.as_deref().or(args.repo.as_deref())?;
+    let explicit = args.subtree_root.as_deref();
+    let root = explicit.or(args.repo.as_deref())?;
     match discover_partition(root) {
         Ok(partition) if partition.is_partitioned() => {
             eprintln!(
@@ -230,7 +235,20 @@ fn detect_partition(args: &EvalRunArgs) -> Option<SubtreePartition> {
             );
             Some(partition)
         }
-        Ok(_) => None,
+        Ok(_) => {
+            if let Some(root) = explicit {
+                let reason = if root.is_dir() {
+                    "no multi-member workspace manifest found"
+                } else {
+                    "not a directory"
+                };
+                eprintln!(
+                    "warning: --subtree-root {}: {reason}; reporting repo-wide metrics only",
+                    root.display()
+                );
+            }
+            None
+        }
         Err(e) => {
             eprintln!("warning: subtree discovery failed ({e}); reporting repo-wide metrics only");
             None
