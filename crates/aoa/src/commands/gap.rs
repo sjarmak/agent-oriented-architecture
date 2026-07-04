@@ -13,7 +13,7 @@ use crate::output::{print_human, print_json};
 /// the provisional Factory criteria table.
 pub fn run(args: &GapArgs) -> Result<i32> {
     match &args.command {
-        Some(GapCommand::CheckboxBaseline(a)) => checkbox_baseline(a),
+        Some(GapCommand::CheckboxBaseline(a)) => checkbox_baseline(a, args.json),
         None => determination(args.json),
     }
 }
@@ -43,11 +43,11 @@ fn determination(json: bool) -> Result<i32> {
 /// JSON for batch scoring or as a human summary. `--show-excluded` lists the
 /// criteria that cannot be decided from the repo tree, with their reasons —
 /// they are carried in the JSON register regardless, never dropped.
-fn checkbox_baseline(args: &CheckboxBaselineArgs) -> Result<i32> {
+fn checkbox_baseline(args: &CheckboxBaselineArgs, json: bool) -> Result<i32> {
     let baseline = aoa_gap::score_repo(args.repo_id.as_str(), &args.root)
         .with_context(|| format!("failed to score {}", args.root.display()))?;
 
-    if args.json {
+    if json {
         print_json(&baseline)?;
     } else {
         let style = Style {

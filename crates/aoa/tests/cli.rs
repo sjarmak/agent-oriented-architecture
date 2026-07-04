@@ -1576,6 +1576,24 @@ fn gap_checkbox_baseline_missing_root_fails_loud() {
         .stderr(predicate::str::contains("not a directory"));
 }
 
+// `--json` is global on `aoa gap`: placed before the subcommand (the position
+// that works for bare `aoa gap --json`) it must still select the JSON register,
+// never parse-and-ignore into human text.
+#[test]
+fn gap_parent_json_flag_reaches_checkbox_baseline() {
+    let repo = checkbox_repo();
+    let output = aoa()
+        .args(["gap", "--json", "checkbox-baseline"])
+        .arg(repo.path())
+        .args(["--repo-id", "demo-repo"])
+        .output()
+        .expect("run");
+    assert!(output.status.success());
+    let parsed: Value = serde_json::from_slice(&output.stdout)
+        .expect("parent-position --json emits the CheckboxBaseline artifact");
+    assert_eq!(parsed["repo_id"], "demo-repo");
+}
+
 // The bare `aoa gap` surface (no subcommand) still renders the R9c
 // determination — the new subcommand must not displace it.
 #[test]

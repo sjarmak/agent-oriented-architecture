@@ -298,8 +298,9 @@ pub struct GapArgs {
     #[command(subcommand)]
     pub command: Option<GapCommand>,
 
-    /// Emit the structured JSON rendering instead of human text.
-    #[arg(long)]
+    /// Emit the structured JSON rendering instead of human text. Global, so it
+    /// selects the JSON register on either side of a subcommand.
+    #[arg(long, global = true)]
     pub json: bool,
 }
 
@@ -326,10 +327,6 @@ pub struct CheckboxBaselineArgs {
     /// register. The JSON register carries them regardless.
     #[arg(long)]
     pub show_excluded: bool,
-
-    /// Emit the CheckboxBaseline JSON instead of human text.
-    #[arg(long)]
-    pub json: bool,
 }
 
 #[derive(Debug, Args)]
