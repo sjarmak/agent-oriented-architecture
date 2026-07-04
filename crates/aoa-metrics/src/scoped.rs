@@ -67,6 +67,38 @@ pub fn compute_subtree_metrics(
         }
     }
 
+    // Gold is attributed by its anchored (migrated) name — the name the trace
+    // actually references — but carried as base names so the extractor's own
+    // anchoring still applies. Grouped in one pass like the maps above.
+    let mut gold_by: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+    for base in input.gold_set {
+        let anchored = input
+            .transform
+            .base_to_migrated
+            .get(base)
+            .map(String::as_str)
+            .unwrap_or(base);
+        if let Some(subtree) = partition.attribute(anchored) {
+            gold_by.entry(subtree).or_default().insert(base.clone());
+        }
+    }
+
+    // Per-subtree views must keep one entry per accepted solution (possibly
+    // empty) so the ≥2-solutions edit-locality precondition is judged on the
+    // solution count, not on how many touched this subtree.
+    let solution_count = input.accepted_solutions.len();
+    let mut solutions_by: BTreeMap<&str, Vec<BTreeSet<String>>> = BTreeMap::new();
+    for (i, solution) in input.accepted_solutions.iter().enumerate() {
+        for file in solution {
+            if let Some(subtree) = partition.attribute(file) {
+                solutions_by
+                    .entry(subtree)
+                    .or_insert_with(|| vec![BTreeSet::new(); solution_count])[i]
+                    .insert(file.clone());
+            }
+        }
+    }
+
     // Active subtrees only; BTreeSet gives the lexicographic row order.
     let active: BTreeSet<&str> = spans_by.keys().chain(edited_by.keys()).copied().collect();
 
@@ -76,35 +108,11 @@ pub fn compute_subtree_metrics(
             let trace = Trace {
                 spans: spans_by.remove(subtree).unwrap_or_default(),
             };
-            // Gold is attributed by its anchored (migrated) name — the name the
-            // trace actually references — but passed through as base names so
-            // the extractor's own anchoring still applies.
-            let gold_set: BTreeSet<String> = input
-                .gold_set
-                .iter()
-                .filter(|base| {
-                    let anchored = input
-                        .transform
-                        .base_to_migrated
-                        .get(*base)
-                        .map(String::as_str)
-                        .unwrap_or(base);
-                    partition.attribute(anchored) == Some(subtree)
-                })
-                .cloned()
-                .collect();
+            let gold_set = gold_by.remove(subtree).unwrap_or_default();
             let edited_files = edited_by.remove(subtree).unwrap_or_default();
-            let accepted_solutions: Vec<BTreeSet<String>> = input
-                .accepted_solutions
-                .iter()
-                .map(|solution| {
-                    solution
-                        .iter()
-                        .filter(|f| partition.attribute(f) == Some(subtree))
-                        .cloned()
-                        .collect()
-                })
-                .collect();
+            let accepted_solutions = solutions_by
+                .remove(subtree)
+                .unwrap_or_else(|| vec![BTreeSet::new(); solution_count]);
 
             let view = MetricInputRef {
                 trace: &trace,

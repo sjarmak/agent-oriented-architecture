@@ -87,7 +87,15 @@ impl SubtreePartition {
     fn new(repo_root: &Path, members: Vec<String>, source: WorkspaceSource) -> Self {
         let dedup: BTreeSet<String> = members.into_iter().collect();
         let mut members: Vec<String> = dedup.into_iter().collect();
-        members.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+        // The root sentinel `.` matches every path, so it must be evaluated
+        // strictly last — by explicit rule, not by length, or a one-character
+        // member like `x` would lose the length tie and misattribute to `.`.
+        members.sort_by(|a, b| {
+            (a == ".")
+                .cmp(&(b == "."))
+                .then_with(|| b.len().cmp(&a.len()))
+                .then_with(|| a.cmp(b))
+        });
         SubtreePartition {
             repo_root: repo_root.display().to_string(),
             members,
@@ -173,20 +181,42 @@ pub fn discover_partition(repo_root: &Path) -> Result<SubtreePartition, SubtreeE
 }
 
 /// Read a manifest if it exists; `Ok(None)` when absent.
+///
+/// A manifest checked into the repo as a symlink is rejected, never followed:
+/// the repo under analysis is untrusted, and a followed link would read (and,
+/// via parse-error messages, disclose) any file the scanning process can see.
+/// This mirrors the no-follow discipline `child_dirs` applies to directories.
 fn read_manifest(path: &Path) -> Result<Option<String>, SubtreeError> {
+    use std::io::Read;
     let io_err = |source| SubtreeError::Io {
         path: path.display().to_string(),
         source,
     };
-    match fs::metadata(path) {
-        Ok(meta) if meta.len() > MAX_MANIFEST_BYTES => Err(SubtreeError::Manifest {
+    let meta = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(io_err(e)),
+    };
+    if !meta.is_file() {
+        return Err(SubtreeError::Manifest {
+            path: path.display().to_string(),
+            message: "not a regular file (symlinked manifests are not followed)".to_string(),
+        });
+    }
+    // Bounded read on the open handle (no metadata-then-read TOCTOU window),
+    // one byte past the cap so oversize is detectable without reading it all.
+    let mut raw = String::new();
+    let file = fs::File::open(path).map_err(io_err)?;
+    file.take(MAX_MANIFEST_BYTES + 1)
+        .read_to_string(&mut raw)
+        .map_err(io_err)?;
+    if raw.len() as u64 > MAX_MANIFEST_BYTES {
+        return Err(SubtreeError::Manifest {
             path: path.display().to_string(),
             message: format!("file exceeds {MAX_MANIFEST_BYTES} bytes"),
-        }),
-        Ok(_) => fs::read_to_string(path).map(Some).map_err(io_err),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(io_err(e)),
+        });
     }
+    Ok(Some(raw))
 }
 
 fn manifest_err(path: &Path, message: impl ToString) -> SubtreeError {
@@ -229,7 +259,8 @@ fn toml_string_array(value: Option<&toml::Value>) -> Vec<String> {
 /// `go.work` `use` directives: `use ./dir` or a `use ( ... )` block.
 /// go.work has no globs; comments (`//`) are stripped mechanically.
 fn go_work_members(root: &Path) -> Result<Option<Vec<String>>, SubtreeError> {
-    let Some(raw) = read_manifest(&root.join("go.work"))? else {
+    let path = root.join("go.work");
+    let Some(raw) = read_manifest(&path)? else {
         return Ok(None);
     };
     let mut members = Vec::new();
@@ -257,6 +288,12 @@ fn go_work_members(root: &Path) -> Result<Option<Vec<String>>, SubtreeError> {
                 members.push(clean_member(rest));
             }
         }
+    }
+    // go.work legitimately allows `use ../outside`, but a member outside the
+    // repo root is meaningless as a subtree; reject and let the caller fall
+    // back to repo-wide reporting rather than emit an escaping label.
+    for member in &members {
+        validate_member(&path, member)?;
     }
     Ok((!members.is_empty()).then_some(members))
 }
@@ -337,6 +374,7 @@ fn expand_members(
     for pattern in includes {
         let pattern = clean_member(pattern);
         if !has_glob(&pattern) {
+            validate_member(manifest, &pattern)?;
             members.insert(pattern);
             continue;
         }
@@ -361,6 +399,24 @@ fn expand_members(
         .into_iter()
         .filter(|m| !literals.contains(m) && !matchers.iter().any(|g| g.is_match(m)))
         .collect())
+}
+
+/// Reject a declared member path that points outside the repo root.
+///
+/// Members are attribution labels and are never joined back onto the
+/// filesystem here, but an absolute or `..`-carrying member is a latent
+/// traversal primitive for any future consumer and lets a hostile manifest
+/// inject arbitrary subtree labels into reports. Cargo itself rejects
+/// out-of-workspace members, so erroring matches ecosystem semantics; the
+/// caller degrades to repo-wide reporting with a visible warning.
+fn validate_member(manifest: &Path, member: &str) -> Result<(), SubtreeError> {
+    if member.starts_with('/') || member.split('/').any(|seg| seg == "..") {
+        return Err(manifest_err(
+            manifest,
+            format!("member path escapes the repo root: {member:?}"),
+        ));
+    }
+    Ok(())
 }
 
 /// Normalize a declared member path: trim, strip quotes, `./`, trailing `/`.
@@ -401,7 +457,7 @@ fn expand_glob_dirs(
                 if !base.is_empty() {
                     next.push(base.clone()); // `**` matches zero segments
                 }
-                descendant_dirs(root, base, &mut next)?;
+                descendant_dirs(root, base, 0, &mut next)?;
             }
         } else if has_glob(segment) {
             let matcher = segment_glob(manifest, segment)?;
@@ -466,11 +522,24 @@ fn child_dirs(root: &Path, base: &str) -> Result<Vec<String>, SubtreeError> {
     Ok(out)
 }
 
+/// Defense-in-depth recursion cap for `**` expansion, mirroring the walk cap
+/// aoa-audit applies to every recursive directory walk: a pathologically deep
+/// tree degrades to a truncated expansion instead of overflowing the stack.
+const MAX_WALK_DEPTH: usize = 64;
+
 /// All non-hidden descendant directories of `root/base` (relative to `root`).
-fn descendant_dirs(root: &Path, base: &str, out: &mut Vec<String>) -> Result<(), SubtreeError> {
+fn descendant_dirs(
+    root: &Path,
+    base: &str,
+    depth: usize,
+    out: &mut Vec<String>,
+) -> Result<(), SubtreeError> {
+    if depth >= MAX_WALK_DEPTH {
+        return Ok(());
+    }
     for child in child_dirs(root, base)? {
         let rel = join_rel(base, &child);
-        descendant_dirs(root, &rel, out)?;
+        descendant_dirs(root, &rel, depth + 1, out)?;
         out.push(rel);
     }
     Ok(())

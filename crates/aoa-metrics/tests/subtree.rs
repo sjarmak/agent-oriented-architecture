@@ -480,3 +480,114 @@ fn subtree_metrics_anchor_gold_through_the_transform_map() {
         "anchored (migrated) gold path matches the trace and the subtree"
     );
 }
+
+// --- adversarial input: the repo under analysis is untrusted ------------------
+
+#[cfg(unix)]
+#[test]
+fn symlinked_manifest_is_rejected_not_followed() {
+    let dir = TempDir::new().unwrap();
+    let secret = dir.path().join("outside-secret.txt");
+    fs::write(&secret, "SUPER_SECRET_TOKEN not valid toml {{{").unwrap();
+    let repo = dir.path().join("repo");
+    fs::create_dir(&repo).unwrap();
+    std::os::unix::fs::symlink(&secret, repo.join("Cargo.toml")).unwrap();
+
+    let err = discover_partition(&repo).unwrap_err();
+    assert!(
+        matches!(err, aoa_metrics::SubtreeError::Manifest { .. }),
+        "symlinked manifest is a typed manifest error: {err}"
+    );
+    let msg = err.to_string();
+    assert!(msg.contains("not a regular file"), "names the cause: {msg}");
+    assert!(
+        !msg.contains("SUPER_SECRET_TOKEN"),
+        "link target content never reaches the error text: {msg}"
+    );
+}
+
+#[test]
+fn literal_cargo_member_escaping_repo_root_is_rejected() {
+    for member in ["../../etc", "/etc"] {
+        let dir = TempDir::new().unwrap();
+        write(
+            dir.path(),
+            "Cargo.toml",
+            &format!("[workspace]\nmembers = [\"{member}\"]\n"),
+        );
+        let err = discover_partition(dir.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("escapes the repo root"),
+            "member {member:?} is rejected: {err}"
+        );
+    }
+}
+
+#[test]
+fn go_work_member_escaping_repo_root_is_rejected() {
+    let dir = TempDir::new().unwrap();
+    write(dir.path(), "go.work", "use ../outside\n");
+    let err = discover_partition(dir.path()).unwrap_err();
+    assert!(
+        err.to_string().contains("escapes the repo root"),
+        "go.work `use ../outside` is rejected: {err}"
+    );
+}
+
+#[test]
+fn root_sentinel_attributes_only_after_single_char_members() {
+    let dir = TempDir::new().unwrap();
+    write(dir.path(), "go.work", "use (\n\t.\n\t./x\n)\n");
+
+    let partition = discover_partition(dir.path()).unwrap();
+    assert_eq!(
+        partition.attribute("x/foo.go"),
+        Some("x"),
+        "a one-character member beats the root sentinel `.` for its own files"
+    );
+    assert_eq!(
+        partition.attribute("y/foo.go"),
+        Some("."),
+        "the root sentinel still catches everything outside deeper members"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_child_dir_names_are_skipped_by_glob_expansion() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"crates/*\"]\n",
+    );
+    write(dir.path(), "crates/core/Cargo.toml", "[package]\n");
+    fs::create_dir(
+        dir.path()
+            .join("crates")
+            .join(OsStr::from_bytes(b"bad-\xff")),
+    )
+    .unwrap();
+
+    let partition = discover_partition(dir.path()).unwrap();
+    assert_eq!(
+        partition.members(),
+        &["crates/core".to_string()],
+        "a non-UTF-8 directory name cannot match a string member and is skipped"
+    );
+}
+
+#[test]
+fn invalid_utf8_manifest_is_a_typed_io_error() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("Cargo.toml"), b"[workspace]\xff\xfe").unwrap();
+
+    let err = discover_partition(dir.path()).unwrap_err();
+    assert!(
+        matches!(err, aoa_metrics::SubtreeError::Io { .. }),
+        "non-UTF-8 manifest content surfaces as a typed IO error, not a panic: {err}"
+    );
+}
