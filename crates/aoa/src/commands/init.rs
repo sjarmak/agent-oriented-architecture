@@ -136,14 +136,19 @@ fn init(repo: &Path, project: &str) -> Result<InitView> {
         let rendered = render(template.body, project);
         let target = safe_target(repo, template.path)?;
         if exists_nofollow(&target) {
+            // Never overwrite a pre-existing file. Adopt it into the manifest
+            // only when its content already equals our render, so a later
+            // `--update` treats it as pristine (clean rewrite on a template
+            // bump) instead of parking a `.new` forever. Genuinely different
+            // user content stays unrecorded, hence user-owned.
+            if content_equals(&target, &rendered) {
+                files.push(manifest_entry(template.path, &rendered));
+            }
             view.skipped.push(template.path.to_string());
             continue;
         }
         write_file(&target, &rendered)?;
-        files.push(ManifestFile {
-            path: template.path.to_string(),
-            sha256: sha256_hex(&rendered),
-        });
+        files.push(manifest_entry(template.path, &rendered));
         view.written.push(template.path.to_string());
     }
 
@@ -220,39 +225,21 @@ fn reconcile(
 ) -> Result<(Outcome, Option<ManifestFile>)> {
     let path = template.path.to_string();
     let rendered = render(template.body, project);
-    let rendered_hash = sha256_hex(&rendered);
     let target = safe_target(repo, template.path)?;
+    let fresh = || manifest_entry(&path, &rendered);
 
     if !exists_nofollow(&target) {
         write_file(&target, &rendered)?;
-        return Ok((
-            Outcome::Written,
-            Some(ManifestFile {
-                path,
-                sha256: rendered_hash,
-            }),
-        ));
+        return Ok((Outcome::Written, Some(fresh())));
     }
     let disk = std::fs::read_to_string(&target)
         .with_context(|| format!("failed to read {}", target.display()))?;
     if disk == rendered {
-        return Ok((
-            Outcome::Skipped,
-            Some(ManifestFile {
-                path,
-                sha256: rendered_hash,
-            }),
-        ));
+        return Ok((Outcome::Skipped, Some(fresh())));
     }
     if recorded.get(&path) == Some(&sha256_hex(&disk)) {
         write_file(&target, &rendered)?;
-        return Ok((
-            Outcome::Written,
-            Some(ManifestFile {
-                path,
-                sha256: rendered_hash,
-            }),
-        ));
+        return Ok((Outcome::Written, Some(fresh())));
     }
     // User-owned content (edited, or never written by init): park the new
     // render beside it and keep the old hash, if any, so the edit stays
@@ -260,7 +247,7 @@ fn reconcile(
     let review_target = safe_target(repo, &format!("{}.new", template.path))?;
     write_file(&review_target, &rendered)?;
     let retained = recorded.get(&path).map(|old| ManifestFile {
-        path,
+        path: path.clone(),
         sha256: old.clone(),
     });
     Ok((Outcome::Review, retained))
@@ -326,6 +313,22 @@ fn safe_target(repo: &Path, rel: &str) -> Result<PathBuf> {
 /// first; this guards the plain "already there, skip it" decision.)
 fn exists_nofollow(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok()
+}
+
+/// A manifest entry recording that init owns `path` with the given rendered body.
+fn manifest_entry(path: &str, rendered: &str) -> ManifestFile {
+    ManifestFile {
+        path: path.to_string(),
+        sha256: sha256_hex(rendered),
+    }
+}
+
+/// True when the file at `path` reads back byte-for-byte as `rendered`. A read
+/// failure (binary content, unreadable file) means "not our render", so the
+/// pre-existing file is left unadopted — the conservative default that matches
+/// init's never-touch-a-pre-existing-file contract.
+fn content_equals(path: &Path, rendered: &str) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|disk| disk == rendered)
 }
 
 fn sha256_hex(content: &str) -> String {

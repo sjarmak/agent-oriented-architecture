@@ -113,6 +113,90 @@ fn eject_leaves_a_self_sufficient_repo() {
 }
 
 #[test]
+fn init_adopts_a_preexisting_identical_scaffold_file_into_the_manifest() {
+    // A repo that already carries scaffold files byte-identical to the render
+    // (the classic "re-init after `rm -rf .aoa/`" case) must ADOPT them into the
+    // manifest, so a later `--update` sees them as pristine rather than leaving
+    // the manifest empty and re-parking a `.new` on a template bump.
+    let dir = init_repo();
+    std::fs::remove_dir_all(dir.path().join(".aoa")).unwrap();
+
+    aoa()
+        .args(["init", "--repo"])
+        .arg(dir.path())
+        .assert()
+        .success();
+
+    let raw = std::fs::read_to_string(dir.path().join(MANIFEST)).unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let recorded: Vec<&str> = manifest["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
+    for rel in SCAFFOLD_FILES {
+        assert!(
+            recorded.contains(rel),
+            "{rel} was not adopted into the manifest"
+        );
+    }
+
+    // The adopted files are pristine, so `--update` is a clean no-op — no churn.
+    aoa()
+        .args(["init", "--update", "--repo"])
+        .arg(dir.path())
+        .assert()
+        .success();
+    for rel in SCAFFOLD_FILES {
+        assert!(
+            !dir.path().join(format!("{rel}.new")).exists(),
+            "{rel}.new churned after adoption"
+        );
+    }
+}
+
+#[test]
+fn init_does_not_adopt_a_preexisting_file_with_user_content() {
+    // A pre-existing file whose content differs from the render is genuinely
+    // user-owned: init must skip it WITHOUT recording it, so `--update` keeps
+    // treating it as user content and parks a `.new` for review.
+    let dir = TempDir::new().expect("tempdir");
+    std::fs::write(dir.path().join("AGENTS.md"), "locally customized\n").unwrap();
+
+    aoa()
+        .args(["init", "--repo"])
+        .arg(dir.path())
+        .assert()
+        .success();
+
+    let raw = std::fs::read_to_string(dir.path().join(MANIFEST)).unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let recorded: Vec<&str> = manifest["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
+    assert!(
+        !recorded.contains(&"AGENTS.md"),
+        "user-owned AGENTS.md must not be adopted into the manifest"
+    );
+
+    aoa()
+        .args(["init", "--update", "--repo"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("AGENTS.md.new"));
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap(),
+        "locally customized\n"
+    );
+    assert!(dir.path().join("AGENTS.md.new").exists());
+}
+
+#[test]
 fn update_on_pristine_repo_is_a_clean_no_op() {
     let dir = init_repo();
     let before = std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
