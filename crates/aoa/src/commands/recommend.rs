@@ -12,11 +12,15 @@ use crate::output::{print_human, print_json};
 /// Exit code is always 0: surfacing advisory findings must not pressure an
 /// operator to "fix" a metric that has not earned gating — that is the Goodhart
 /// dynamic the construct-validity determination exists to prevent.
+///
+/// The determination is conditioned on the repo's behavioral signal (counted by
+/// the audit from the observe-captured corpus, aoa-d6t.23): a history-poor repo
+/// reports its behavioral metrics as InsufficientData, never Advisory.
 pub fn run(args: &RecommendArgs) -> Result<i32> {
     let cfg = aoa_audit::AuditConfig::default();
     let audit = aoa_audit::audit(&args.repo, &cfg)
         .with_context(|| format!("failed to audit {}", args.repo.display()))?;
-    let determination = aoa_gap::current_determination();
+    let determination = aoa_gap::determination_with_signal(&audit.behavioral_signal);
     let fixes = aoa_migrate::all_fixes();
 
     let report = aoa_recommend::recommend(&audit, &determination, &fixes);

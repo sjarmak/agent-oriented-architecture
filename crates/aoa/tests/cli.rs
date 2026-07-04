@@ -1089,6 +1089,134 @@ fn recommend_json_joins_findings_with_metric_and_fix() {
     assert_eq!(plane["advisory_reason"], "no_fix_available");
 }
 
+// --- aoa-d6t.23: greenfield/cold-start InsufficientData across the surfaces ---
+
+const INSUFFICIENT_REASON: &str = "no held-out behavioral signal for this repo yet";
+
+/// Accumulate `n` observe-captured live sessions under `<repo>/.aoa/traces/`.
+fn seed_live_sessions(repo: &Path, n: usize) {
+    let traces = repo.join(".aoa").join("traces");
+    std::fs::create_dir_all(&traces).expect("create traces dir");
+    let span = r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#;
+    for i in 0..n {
+        std::fs::write(traces.join(format!("live-s{i}.jsonl")), format!("{span}\n"))
+            .expect("write live log");
+    }
+}
+
+// A history-poor repo: audit reports InsufficientData with the reason, and no
+// fabricated mutation-surface score, in both registers.
+#[test]
+fn audit_reports_insufficient_data_on_a_history_poor_repo() {
+    let repo = TempDir::new().expect("tempdir");
+    aoa()
+        .args(["audit", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("InsufficientData"))
+        .stdout(predicate::str::contains(INSUFFICIENT_REASON));
+
+    let output = aoa()
+        .args(["audit", "--json", "--repo"])
+        .arg(repo.path())
+        .output()
+        .expect("run");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert_eq!(parsed["behavioral_signal"]["observations"], 0);
+    assert_eq!(parsed["insufficient_data"]["reason"], INSUFFICIENT_REASON);
+    let items = parsed["items"].as_array().expect("items");
+    assert!(
+        !items.iter().any(|i| i["kind"] == "mutation_surface"),
+        "no fabricated behavioral score on a history-poor repo"
+    );
+}
+
+// Once enough observe-captured sessions accumulate, the metrics light up.
+#[test]
+fn audit_lights_up_behavioral_metrics_once_corpus_is_sufficient() {
+    let repo = TempDir::new().expect("tempdir");
+    seed_live_sessions(repo.path(), 10);
+
+    let output = aoa()
+        .args(["audit", "--json", "--repo"])
+        .arg(repo.path())
+        .output()
+        .expect("run");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert_eq!(parsed["behavioral_signal"]["observations"], 10);
+    assert!(parsed.get("insufficient_data").is_none());
+    let items = parsed["items"].as_array().expect("items");
+    assert!(
+        items.iter().any(|i| i["kind"] == "mutation_surface"),
+        "sufficient corpus re-enables the behavioral item"
+    );
+}
+
+// recommend on a history-poor repo: the determination tags the behavioral
+// metrics InsufficientData (not Advisory) and the note carries the reason.
+#[test]
+fn recommend_reports_insufficient_data_on_a_history_poor_repo() {
+    let repo = TempDir::new().expect("tempdir");
+    aoa()
+        .args(["recommend", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("InsufficientData"))
+        .stdout(predicate::str::contains(INSUFFICIENT_REASON));
+
+    let output = aoa()
+        .args(["recommend", "--json", "--repo"])
+        .arg(repo.path())
+        .output()
+        .expect("run");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    let note = &parsed["insufficient_data"];
+    assert_eq!(note["reason"], INSUFFICIENT_REASON);
+    let metrics = note["metrics"].as_array().expect("metrics");
+    assert_eq!(metrics.len(), 4, "the four locality metrics");
+    assert!(metrics.iter().any(|m| m == "retrieval_locality"));
+}
+
+// recommend with a sufficient corpus carries no InsufficientData note.
+#[test]
+fn recommend_omits_insufficient_data_with_a_sufficient_corpus() {
+    let repo = TempDir::new().expect("tempdir");
+    seed_live_sessions(repo.path(), 10);
+    let output = aoa()
+        .args(["recommend", "--json", "--repo"])
+        .arg(repo.path())
+        .output()
+        .expect("run");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert!(parsed.get("insufficient_data").is_none());
+}
+
+// eval run: the report counts its held-out observations against the window and
+// carries the InsufficientData note (the fixture run has only two trials).
+#[test]
+fn eval_run_reports_insufficient_data_below_the_window() {
+    let output = aoa()
+        .args(["eval", "run", "--json", "--codeprobe-run"])
+        .arg(run_dir())
+        .arg("--tasks")
+        .arg(tasks_dir())
+        .output()
+        .expect("run");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert_eq!(parsed["behavioral_signal"]["observations"], 2);
+    assert_eq!(parsed["insufficient_data"]["reason"], INSUFFICIENT_REASON);
+
+    aoa()
+        .args(["eval", "run", "--codeprobe-run"])
+        .arg(run_dir())
+        .arg("--tasks")
+        .arg(tasks_dir())
+        .assert()
+        .stdout(predicate::str::contains(INSUFFICIENT_REASON));
+}
+
 // R7 keystone end-to-end: the reproduction-before-mutation gate blocks a write
 // when no test ran, and allows it once a reproduction span is recorded.
 //

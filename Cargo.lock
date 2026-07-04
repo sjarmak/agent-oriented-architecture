@@ -101,7 +101,9 @@ name = "aoa-audit"
 version = "0.1.0"
 dependencies = [
  "aoa-budget",
+ "aoa-gap",
  "aoa-metrics",
+ "aoa-observe-shim",
  "aoa-trace",
  "serde",
  "serde_json",

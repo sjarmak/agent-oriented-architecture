@@ -104,6 +104,20 @@ impl InsufficientDataNote {
             reason: INSUFFICIENT_DATA_REASON.to_string(),
         }
     }
+
+    /// The one-line human rendering of the note against its signal, shared by
+    /// every surface (audit, eval) that reports the withheld metrics alongside
+    /// the observation count.
+    #[must_use]
+    pub fn render_line(&self, signal: &BehavioralSignal) -> String {
+        format!(
+            "behavioral metrics [InsufficientData]: {} — {} ({} of {} observation(s))",
+            self.metrics.join(", "),
+            self.reason,
+            signal.observations,
+            signal.required,
+        )
+    }
 }
 
 /// The R9c determination conditioned on a repo's behavioral signal.

@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use aoa_budget::{count_budget, resolve_closure, Config};
+use aoa_gap::BehavioralSignal;
 use aoa_metrics::{compute_mutation_surface, IndexQuality, MetricInput, SymbolGraph, TransformMap};
 use aoa_trace::Trace;
 
@@ -81,18 +82,30 @@ impl Default for AuditConfig {
 /// mutation-surface proxy (aoa-metrics), structural enforcement-plane checks,
 /// and the code-structure family (navigability anchors, module-size outliers —
 /// born Tier-3/advisory). Writes nothing.
+///
+/// Greenfield/cold-start precondition (aoa-d6t.23): the observe-captured trace
+/// corpus under `.aoa/traces/` is counted first. Below the behavioral-signal
+/// window the behavioral punch item (mutation surface) is withheld — a repo
+/// with no held-out signal must report InsufficientData on
+/// [`AuditReport::insufficient_data`], never a fabricated score. Structural
+/// items need no traces and are unaffected.
 pub fn audit(repo: &Path, cfg: &AuditConfig) -> Result<AuditReport, AuditError> {
+    let corpus = aoa_observe_shim::load_corpus(repo)?;
+    let signal = BehavioralSignal::from_observations(corpus.observations());
+
     let mut items = Vec::new();
 
     if let Some(item) = context_budget_item(repo, cfg)? {
         items.push(item);
     }
-    items.push(mutation_surface_item(cfg));
+    if signal.is_sufficient() {
+        items.push(mutation_surface_item(cfg));
+    }
     items.extend(plane_items(repo));
     items.extend(structure_items(repo, cfg.size_outlier_k)?);
 
     rank(&mut items);
-    Ok(AuditReport::new(items))
+    Ok(AuditReport::with_signal(items, signal))
 }
 
 /// Measure the context-file token closure and, when over the ceiling, emit an

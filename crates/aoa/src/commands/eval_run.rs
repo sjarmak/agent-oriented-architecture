@@ -36,7 +36,10 @@ use serde::{Deserialize, Serialize};
 
 use aoa_bench::load_task;
 use aoa_codeprobe_shim::parse_transcript_file;
-use aoa_gap::{compute_gap, GapOutcome, HeldOutProvenance, RunResult, TaskOutcome};
+use aoa_gap::{
+    compute_gap, BehavioralSignal, GapOutcome, HeldOutProvenance, InsufficientDataNote, RunResult,
+    TaskOutcome,
+};
 use aoa_metrics::{
     compute_edit_locality, compute_invariant_discoverability, compute_mutation_surface,
     compute_retrieval_locality, compute_subtree_metrics, discover_partition, ConditionedOn,
@@ -81,6 +84,14 @@ struct EvalRunReport {
     /// Trials that produced a record (excludes failed trials, counted separately).
     record_count: usize,
     error_count: usize,
+    /// The run's held-out behavioral signal: one observation per record,
+    /// counted against the exact-permutation window (aoa-d6t.23).
+    behavioral_signal: BehavioralSignal,
+    /// Present when the run is below the window: the per-record metrics are
+    /// real per-trial measurements, but the run supplies too little held-out
+    /// signal to stand as repo-level behavioral evidence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    insufficient_data: Option<InsufficientDataNote>,
     /// Present only when a multi-member workspace was detected under `--repo`
     /// (aoa-d6t.26). Additive: absent, the schema is unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -169,10 +180,13 @@ pub fn run(args: &EvalRunArgs) -> Result<i32> {
         }
     }
 
+    let behavioral_signal = BehavioralSignal::from_observations(records.len());
     let report = EvalRunReport {
         run_dir: args.codeprobe_run.display().to_string(),
         record_count: records.len(),
         error_count: errors.len(),
+        insufficient_data: behavioral_signal.insufficient_data(),
+        behavioral_signal,
         subtree_partition: partition.as_ref().map(|p| {
             let mut members = p.members().to_vec();
             members.sort_unstable();
@@ -425,6 +439,9 @@ fn render_human(report: &EvalRunReport) -> String {
     }
     for e in &report.errors {
         let _ = writeln!(out, "  ERROR {:<26} {}", e.task_id.escape_debug(), e.error);
+    }
+    if let Some(note) = &report.insufficient_data {
+        let _ = writeln!(out, "{}", note.render_line(&report.behavioral_signal));
     }
     out
 }
