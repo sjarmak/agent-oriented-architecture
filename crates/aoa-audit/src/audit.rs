@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use aoa_budget::{count_budget, resolve_closure, Config};
 use aoa_metrics::{
-    compute_mutation_surface, discover_partition, IndexQuality, MetricInput, SymbolGraph,
-    TransformMap,
+    compute_mutation_surface, discover_partition, IndexQuality, MetricInput, SubtreePartition,
+    SymbolGraph, TransformMap,
 };
 use aoa_trace::Trace;
 
@@ -88,9 +88,19 @@ pub fn audit(repo: &Path, cfg: &AuditConfig) -> Result<AuditReport, AuditError> 
     let mut items = Vec::new();
 
     // The workspace partition scopes path-carrying structure findings to
-    // their member subtree. A manifest that exists but cannot be used is a
-    // loud failure (never a guess); absence is the implicit-root partition.
-    let partition = discover_partition(repo)?;
+    // their member subtree. A manifest that exists but cannot be used never
+    // costs the operator the punch-list: attribution degrades to repo-wide
+    // findings with the failure surfaced on the report — never silently, and
+    // never a guess. Absence of a manifest is the implicit-root partition.
+    let (partition, subtree_discovery_warning) = match discover_partition(repo) {
+        Ok(partition) => (partition, None),
+        Err(e) => (
+            SubtreePartition::implicit_root(repo),
+            Some(format!(
+                "subtree discovery failed ({e}); findings are repo-wide"
+            )),
+        ),
+    };
 
     if let Some(item) = context_budget_item(repo, cfg)? {
         items.push(item);
@@ -100,7 +110,10 @@ pub fn audit(repo: &Path, cfg: &AuditConfig) -> Result<AuditReport, AuditError> 
     items.extend(structure_items(repo, cfg.size_outlier_k, &partition)?);
 
     rank(&mut items);
-    Ok(AuditReport::new(items))
+    Ok(AuditReport {
+        items,
+        subtree_discovery_warning,
+    })
 }
 
 /// Measure the context-file token closure and, when over the ceiling, emit an

@@ -16,6 +16,11 @@ pub fn run(args: &RecommendArgs) -> Result<i32> {
     let cfg = aoa_audit::AuditConfig::default();
     let audit = aoa_audit::audit(&args.repo, &cfg)
         .with_context(|| format!("failed to audit {}", args.repo.display()))?;
+    // The recommendation report carries no warning field of its own; a
+    // degraded subtree discovery in the underlying audit surfaces here.
+    if let Some(warning) = &audit.subtree_discovery_warning {
+        eprintln!("warning: {warning}");
+    }
     let determination = aoa_gap::current_determination();
     let fixes = aoa_migrate::all_fixes();
 

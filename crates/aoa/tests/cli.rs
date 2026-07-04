@@ -484,6 +484,55 @@ fn audit_json_is_parseable() {
     assert!(parsed["items"].is_array());
 }
 
+// aoa-d6t.31 review follow-up: a repo whose workspace manifest is malformed
+// must still get its full punch-list — the CLI degrades to repo-wide findings
+// with the discovery failure surfaced, never an abort with no report.
+#[test]
+fn audit_degrades_on_malformed_workspace_manifest() {
+    let repo = TempDir::new().expect("tempdir");
+    std::fs::write(repo.path().join("package.json"), "{ \"name\": \"x\", }").unwrap();
+    std::fs::write(repo.path().join("main.rs"), "fn main() {}\n").unwrap();
+
+    let output = aoa()
+        .args(["audit", "--json", "--repo"])
+        .arg(repo.path())
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "audit must not abort: {output:?}");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert!(!parsed["items"].as_array().expect("items").is_empty());
+    assert!(parsed["subtree_discovery_warning"]
+        .as_str()
+        .expect("warning surfaced on the wire")
+        .contains("package.json"));
+}
+
+#[test]
+fn recommend_degrades_on_malformed_workspace_manifest() {
+    let repo = TempDir::new().expect("tempdir");
+    std::fs::write(repo.path().join("package.json"), "{ \"name\": \"x\", }").unwrap();
+    std::fs::write(repo.path().join("main.rs"), "fn main() {}\n").unwrap();
+
+    let output = aoa()
+        .args(["recommend", "--json", "--repo"])
+        .arg(repo.path())
+        .output()
+        .expect("run");
+    assert!(
+        output.status.success(),
+        "recommend must not abort: {output:?}"
+    );
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert!(!parsed["items"].as_array().expect("items").is_empty());
+    // The recommendation report has no warning field of its own; the CLI
+    // surfaces the audit's degradation on stderr.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("package.json"),
+        "discovery failure must be surfaced on stderr: {stderr}"
+    );
+}
+
 #[test]
 fn audit_fail_on_tier1_exits_non_zero_when_tier1_present() {
     // A bare repo is missing the runtime-hook and CI planes (both Tier-1).

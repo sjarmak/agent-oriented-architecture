@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
 use tempfile::TempDir;
@@ -257,6 +257,35 @@ fn attribution_normalizes_dot_slash_and_repo_root_prefix() {
         partition.attribute(absolute.to_str().unwrap()),
         Some("crates/core"),
         "absolute path under the repo root is attributed"
+    );
+    assert_eq!(partition.attribute("docs/README.md"), None);
+}
+
+#[test]
+fn attribution_tolerates_a_trailing_slash_on_the_repo_root() {
+    // `--repo /path/ws/` (the form shell tab-completion produces) must
+    // attribute exactly like `--repo /path/ws`: a trailing separator on the
+    // root must not defeat relativize's `/`-boundary check and silently
+    // disable attribution for every absolute path.
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"crates/core\"]\n",
+    );
+
+    let root_with_slash = PathBuf::from(format!("{}/", dir.path().display()));
+    let partition = discover_partition(&root_with_slash).unwrap();
+    let absolute = dir.path().join("crates/core/src/lib.rs");
+    assert_eq!(
+        partition.attribute(absolute.to_str().unwrap()),
+        Some("crates/core"),
+        "absolute path under a trailing-slash root must still attribute"
+    );
+    assert_eq!(
+        partition.attribute("crates/core/src/lib.rs"),
+        Some("crates/core"),
+        "relative paths are unaffected by root normalization"
     );
     assert_eq!(partition.attribute("docs/README.md"), None);
 }
