@@ -84,6 +84,10 @@ pub struct ObserveArgs {
     /// flag `observe` stays zero-write toward tracked files.
     #[arg(long)]
     pub enforce: bool,
+
+    /// Emit the structured JSON rendering instead of human text.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Args)]
@@ -358,6 +362,10 @@ pub enum PolicyCommand {
         /// The forge to compile the CI plane for. Fails loudly on an unknown forge.
         #[arg(long, default_value = "github-actions")]
         forge: String,
+
+        /// Emit the structured JSON rendering instead of human text.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Pre-commit plane entry point: exit non-zero if any of the given staged
@@ -370,5 +378,28 @@ pub enum PolicyCommand {
         /// Staged files to check (supplied by pre-commit).
         #[arg(value_name = "FILE")]
         files: Vec<PathBuf>,
+
+        /// Emit the structured JSON rendering instead of human text.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Propose a CODEOWNERS map inferred from git-blame line ownership (R16):
+    /// each top-level directory (and the repo root) is assigned its dominant
+    /// author. Prints a reviewable diff by default; writes nothing without
+    /// `--write`.
+    InferOwners {
+        /// Repository checkout to blame. Defaults to the cwd.
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+
+        /// Write the proposal to `.github/CODEOWNERS` (the default only prints
+        /// the reviewable diff).
+        #[arg(long)]
+        write: bool,
+
+        /// Emit the structured JSON rendering instead of human text.
+        #[arg(long)]
+        json: bool,
     },
 }

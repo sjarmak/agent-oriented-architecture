@@ -21,8 +21,12 @@ use serde::Deserialize;
 use thiserror::Error;
 
 mod generate;
+mod infer;
 
 pub use generate::{ci_workflow, codeowners, precommit_config};
+pub use infer::{
+    infer_owners, proposed_codeowners, render_proposal_diff, BlameCount, OwnedPattern,
+};
 
 /// Errors raised parsing or compiling a policy.
 #[derive(Debug, Error)]
