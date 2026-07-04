@@ -85,6 +85,16 @@ pub struct SubtreePartition {
 
 impl SubtreePartition {
     fn new(repo_root: &Path, members: Vec<String>, source: WorkspaceSource) -> Self {
+        // Trailing separators on the root (`--repo /path/ws/`, the form shell
+        // tab-completion produces) would defeat `relativize`'s `/`-boundary
+        // check and silently turn every absolute path unattributable; trim to
+        // the canonical form. The filesystem root `/` trims to the empty
+        // prefix, which relativizes absolute paths correctly.
+        let repo_root = repo_root
+            .display()
+            .to_string()
+            .trim_end_matches('/')
+            .to_string();
         let dedup: BTreeSet<String> = members.into_iter().collect();
         let mut members: Vec<String> = dedup.into_iter().collect();
         // The root sentinel `.` matches every path, so it must be evaluated
@@ -97,7 +107,7 @@ impl SubtreePartition {
                 .then_with(|| a.cmp(b))
         });
         SubtreePartition {
-            repo_root: repo_root.display().to_string(),
+            repo_root,
             members,
             source,
         }

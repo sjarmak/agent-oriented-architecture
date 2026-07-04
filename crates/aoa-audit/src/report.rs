@@ -13,11 +13,21 @@ const TIER1_FAILURE_CODE: i32 = 2;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditReport {
     pub items: Vec<PunchItem>,
+    /// Present when a workspace manifest exists but could not be used for
+    /// subtree discovery: the punch-list is complete, but path-carrying
+    /// findings stay repo-wide (no `subtree` labels). Never set for a repo
+    /// with no workspace manifest — that is the implicit-root partition, not
+    /// a failure. Omitted from the wire form when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtree_discovery_warning: Option<String>,
 }
 
 impl AuditReport {
     pub fn new(items: Vec<PunchItem>) -> Self {
-        Self { items }
+        Self {
+            items,
+            subtree_discovery_warning: None,
+        }
     }
 
     /// Whether any punch-list item is a Tier-1 gap.
@@ -30,6 +40,9 @@ impl AuditReport {
     pub fn render_human(&self) -> String {
         let mut out = String::new();
         let _ = writeln!(out, "AOA audit punch-list ({} item(s))", self.items.len());
+        if let Some(warning) = &self.subtree_discovery_warning {
+            let _ = writeln!(out, "warning: {warning}");
+        }
         for (index, item) in self.items.iter().enumerate() {
             let _ = writeln!(
                 out,

@@ -35,6 +35,8 @@
 
 use std::path::{Path, PathBuf};
 
+use aoa_metrics::SubtreePartition;
+
 use crate::error::AuditError;
 use crate::punch::{FindingKind, MeasuredCost, PunchItem};
 use crate::tier::Tier;
@@ -279,25 +281,27 @@ const WRITE_BOUNDARY_SURFACES: &[&[&str]] = &[
 
 /// Run the code-structure audit family over `repo`, returning measured-fact
 /// punch items (each born [`Tier::Tier3`]). `size_outlier_k` is the caller's
-/// documented multiplier for the module-size measure.
+/// documented multiplier for the module-size measure; `partition` scopes
+/// path-carrying findings to their workspace subtree (see [`common_subtree`]).
 pub(crate) fn structure_items(
     repo: &Path,
     size_outlier_k: f64,
+    partition: &SubtreePartition,
 ) -> Result<Vec<PunchItem>, AuditError> {
     let mut items = Vec::new();
-    if let Some(item) = navigability_anchor_item(repo)? {
+    if let Some(item) = navigability_anchor_item(repo, partition)? {
         items.push(item);
     }
-    if let Some(item) = module_size_outlier_item(repo, size_outlier_k)? {
+    if let Some(item) = module_size_outlier_item(repo, size_outlier_k, partition)? {
         items.push(item);
     }
-    if let Some(item) = unused_import_proxy_item(repo)? {
+    if let Some(item) = unused_import_proxy_item(repo, partition)? {
         items.push(item);
     }
-    if let Some(item) = verification_reachability_item(repo)? {
+    if let Some(item) = verification_reachability_item(repo, partition)? {
         items.push(item);
     }
-    if let Some(item) = invariant_discoverability_item(repo)? {
+    if let Some(item) = invariant_discoverability_item(repo, partition)? {
         items.push(item);
     }
     if let Some(item) = build_determinism_item(repo) {
@@ -390,7 +394,30 @@ fn absence_item(
         tier: Tier::Tier3,
         measured_cost: MeasuredCost::new(1, unit),
         plane: None,
+        subtree: None,
     })
+}
+
+/// The one workspace subtree every path in `paths` attributes to, or `None`.
+///
+/// `None` when the partition is not meaningful (a single-member repo, where a
+/// subtree label adds no signal — the same [`SubtreePartition::is_partitioned`]
+/// gate the per-subtree metric rows apply), when any path falls outside every
+/// member (e.g. the repo root itself in a workspace whose members are all
+/// nested), or when the paths span more than one member. Attribution is
+/// unanimous or absent — never a majority guess.
+fn common_subtree<'p>(
+    partition: &SubtreePartition,
+    paths: impl Iterator<Item = &'p PathBuf>,
+) -> Option<String> {
+    if !partition.is_partitioned() {
+        return None;
+    }
+    let mut subtrees = paths.map(|p| partition.attribute(&p.to_string_lossy()));
+    let first = subtrees.next()??;
+    subtrees
+        .all(|s| s == Some(first))
+        .then(|| first.to_string())
 }
 
 /// The package roots under `repo` that lack a navigability anchor (README) —
@@ -474,9 +501,12 @@ fn collect_container_members(container: &Path, out: &mut Vec<PathBuf>) -> Result
 /// anchor is a measured fact about how findable its entry point is. The count
 /// is exactly the length of [`navigability_sites`] — the migration acts on the
 /// same set.
-fn navigability_anchor_item(repo: &Path) -> Result<Option<PunchItem>, AuditError> {
-    let missing = navigability_sites(repo)?.len();
-    if missing == 0 {
+fn navigability_anchor_item(
+    repo: &Path,
+    partition: &SubtreePartition,
+) -> Result<Option<PunchItem>, AuditError> {
+    let sites = navigability_sites(repo)?;
+    if sites.is_empty() {
         return Ok(None);
     }
 
@@ -484,8 +514,9 @@ fn navigability_anchor_item(repo: &Path) -> Result<Option<PunchItem>, AuditError
         title: "package roots without a navigability anchor (README)".to_string(),
         kind: FindingKind::NavigabilityAnchor,
         tier: Tier::Tier3,
-        measured_cost: MeasuredCost::new(missing as u64, "package roots"),
+        measured_cost: MeasuredCost::new(sites.len() as u64, "package roots"),
         plane: None,
+        subtree: common_subtree(partition, sites.iter()),
     }))
 }
 
@@ -526,9 +557,12 @@ pub fn verification_sites(repo: &Path) -> Result<Vec<PathBuf>, AuditError> {
 
 /// Count package roots with no statically discoverable verification entrypoint.
 /// The count is exactly the length of [`verification_sites`].
-fn verification_reachability_item(repo: &Path) -> Result<Option<PunchItem>, AuditError> {
-    let missing = verification_sites(repo)?.len();
-    if missing == 0 {
+fn verification_reachability_item(
+    repo: &Path,
+    partition: &SubtreePartition,
+) -> Result<Option<PunchItem>, AuditError> {
+    let sites = verification_sites(repo)?;
+    if sites.is_empty() {
         return Ok(None);
     }
 
@@ -536,8 +570,9 @@ fn verification_reachability_item(repo: &Path) -> Result<Option<PunchItem>, Audi
         title: "package roots without a reachable verification entrypoint".to_string(),
         kind: FindingKind::VerificationReachability,
         tier: Tier::Tier3,
-        measured_cost: MeasuredCost::new(missing as u64, "package roots"),
+        measured_cost: MeasuredCost::new(sites.len() as u64, "package roots"),
         plane: None,
+        subtree: common_subtree(partition, sites.iter()),
     }))
 }
 
@@ -582,9 +617,12 @@ pub fn invariant_sites(repo: &Path) -> Result<Vec<PathBuf>, AuditError> {
 
 /// Count package roots with no statically discoverable declared rules/invariants.
 /// The count is exactly the length of [`invariant_sites`].
-fn invariant_discoverability_item(repo: &Path) -> Result<Option<PunchItem>, AuditError> {
-    let missing = invariant_sites(repo)?.len();
-    if missing == 0 {
+fn invariant_discoverability_item(
+    repo: &Path,
+    partition: &SubtreePartition,
+) -> Result<Option<PunchItem>, AuditError> {
+    let sites = invariant_sites(repo)?;
+    if sites.is_empty() {
         return Ok(None);
     }
 
@@ -592,8 +630,9 @@ fn invariant_discoverability_item(repo: &Path) -> Result<Option<PunchItem>, Audi
         title: "package roots without discoverable rules/invariants".to_string(),
         kind: FindingKind::InvariantDiscoverability,
         tier: Tier::Tier3,
-        measured_cost: MeasuredCost::new(missing as u64, "package roots"),
+        measured_cost: MeasuredCost::new(sites.len() as u64, "package roots"),
         plane: None,
+        subtree: common_subtree(partition, sites.iter()),
     }))
 }
 
@@ -828,14 +867,19 @@ fn has_infix_before_ext(name: &str, infix: &str, ext: &str) -> bool {
 /// source-file line count. Self-calibrating: the threshold is the repo's own
 /// distribution, not an external magic size, so the measure asserts no absolute
 /// best-practice. Abstains below [`MIN_FILES_FOR_MEDIAN`] files.
-fn module_size_outlier_item(repo: &Path, k: f64) -> Result<Option<PunchItem>, AuditError> {
-    let mut line_counts: Vec<u64> = Vec::new();
-    collect_source_line_counts(repo, &mut line_counts)?;
+fn module_size_outlier_item(
+    repo: &Path,
+    k: f64,
+    partition: &SubtreePartition,
+) -> Result<Option<PunchItem>, AuditError> {
+    let mut files: Vec<(PathBuf, u64)> = Vec::new();
+    collect_source_line_counts(repo, &mut files)?;
 
-    if line_counts.len() < MIN_FILES_FOR_MEDIAN {
+    if files.len() < MIN_FILES_FOR_MEDIAN {
         return Ok(None);
     }
 
+    let mut line_counts: Vec<u64> = files.iter().map(|(_, n)| *n).collect();
     line_counts.sort_unstable();
     let median = median(&line_counts);
     // A zero median (a repo of empty source files) has no scale to compare
@@ -848,11 +892,12 @@ fn module_size_outlier_item(repo: &Path, k: f64) -> Result<Option<PunchItem>, Au
     // f64's 2^53 exact-integer range, so these casts lose no precision; `k` is
     // fractional, so the comparison must be in f64.
     let threshold = median as f64 * k;
-    let outliers = line_counts
+    let outliers: Vec<&PathBuf> = files
         .iter()
-        .filter(|&&n| n as f64 > threshold)
-        .count();
-    if outliers == 0 {
+        .filter(|(_, n)| *n as f64 > threshold)
+        .map(|(path, _)| path)
+        .collect();
+    if outliers.is_empty() {
         return Ok(None);
     }
 
@@ -860,8 +905,9 @@ fn module_size_outlier_item(repo: &Path, k: f64) -> Result<Option<PunchItem>, Au
         title: format!("source files exceeding {k:.1}x the repo median size"),
         kind: FindingKind::ModuleSizeOutlier,
         tier: Tier::Tier3,
-        measured_cost: MeasuredCost::new(outliers as u64, "outlier files"),
+        measured_cost: MeasuredCost::new(outliers.len() as u64, "outlier files"),
         plane: None,
+        subtree: common_subtree(partition, outliers.into_iter()),
     }))
 }
 
@@ -894,10 +940,13 @@ fn module_size_outlier_item(repo: &Path, k: f64) -> Result<Option<PunchItem>, Au
 /// NOTE for `aoa-migrate` (DeadImportFix): do NOT import this scanner to *select*
 /// what to remove — that would collapse verify into define. The compiler's
 /// `unused_imports` diagnostics are the authority; this stays private to the audit.
-fn unused_import_proxy_item(repo: &Path) -> Result<Option<PunchItem>, AuditError> {
-    let mut count: u64 = 0;
-    collect_unused_imports(repo, &mut count)?;
-    if count == 0 {
+fn unused_import_proxy_item(
+    repo: &Path,
+    partition: &SubtreePartition,
+) -> Result<Option<PunchItem>, AuditError> {
+    let mut files: Vec<(PathBuf, u64)> = Vec::new();
+    collect_unused_imports(repo, &mut files)?;
+    if files.is_empty() {
         return Ok(None);
     }
 
@@ -905,8 +954,9 @@ fn unused_import_proxy_item(repo: &Path) -> Result<Option<PunchItem>, AuditError
         title: "likely-unused imports (syntactic proxy)".to_string(),
         kind: FindingKind::UnusedImportProxy,
         tier: Tier::Tier3,
-        measured_cost: MeasuredCost::new(count, "imports"),
+        measured_cost: MeasuredCost::new(files.iter().map(|(_, n)| n).sum(), "imports"),
         plane: None,
+        subtree: common_subtree(partition, files.iter().map(|(path, _)| path)),
     }))
 }
 
@@ -935,6 +985,7 @@ fn generated_artifact_protection_item(repo: &Path) -> Result<Option<PunchItem>, 
         tier: Tier::Tier3,
         measured_cost: MeasuredCost::new(1, "protection markers absent"),
         plane: None,
+        subtree: None,
     }))
 }
 
@@ -983,17 +1034,20 @@ fn write_safety_zone_item(repo: &Path) -> Option<PunchItem> {
         tier: Tier::Tier3,
         measured_cost: MeasuredCost::new(absent as u64, "write-boundary surfaces absent"),
         plane: None,
+        subtree: None,
     })
 }
 
-/// Recursively sum the per-file likely-unused import count over `.rs` files.
+/// Recursively collect the per-file likely-unused import counts over `.rs`
+/// files. Only files with at least one likely-unused import are pushed — the
+/// clean majority carries no signal for either the sum or the attribution.
 ///
 /// Kept separate from [`collect_source_line_counts`] rather than sharing a walk:
 /// that one is multi-language and counts newline bytes, this one is Rust-only and
 /// scans tokens — the only genuinely shared invariant is the bounded read, which
 /// [`read_source_capped`] carries. Same skip-hidden / skip-build-output /
 /// never-follow-symlinks discipline as the rest of the family.
-fn collect_unused_imports(dir: &Path, count: &mut u64) -> Result<(), AuditError> {
+fn collect_unused_imports(dir: &Path, out: &mut Vec<(PathBuf, u64)>) -> Result<(), AuditError> {
     for entry in read_dir(dir)? {
         let entry = entry.map_err(|source| io_err(dir, source))?;
         let name = entry.file_name();
@@ -1004,12 +1058,15 @@ fn collect_unused_imports(dir: &Path, count: &mut u64) -> Result<(), AuditError>
         let path = entry.path();
         let file_type = entry.file_type().map_err(|source| io_err(&path, source))?;
         if file_type.is_dir() {
-            collect_unused_imports(&path, count)?;
+            collect_unused_imports(&path, out)?;
         } else if file_type.is_file() && is_rust_file(&path) {
             // `None` is an oversized file: skipped, not fatal (lossy proxy by
             // contract). A genuine read error propagates.
             if let Some(src) = read_source_capped(&path)? {
-                *count += count_unused_imports_in_source(&src);
+                let count = count_unused_imports_in_source(&src);
+                if count > 0 {
+                    out.push((path, count));
+                }
             }
         }
     }
@@ -1243,11 +1300,12 @@ fn has_readme(dir: &Path) -> bool {
     })
 }
 
-/// Recursively collect line counts of source files under `dir`, skipping hidden
-/// and build-output directories and never following symlinks (matching
-/// aoa-scip-graph's best-effort walk). An oversized single file is skipped, not
-/// fatal; a genuine read error propagates.
-fn collect_source_line_counts(dir: &Path, out: &mut Vec<u64>) -> Result<(), AuditError> {
+/// Recursively collect source-file paths and their line counts under `dir`,
+/// skipping hidden and build-output directories and never following symlinks
+/// (matching aoa-scip-graph's best-effort walk). The path rides along so an
+/// outlier can be attributed to its workspace subtree. An oversized single
+/// file is skipped, not fatal; a genuine read error propagates.
+fn collect_source_line_counts(dir: &Path, out: &mut Vec<(PathBuf, u64)>) -> Result<(), AuditError> {
     for entry in read_dir(dir)? {
         let entry = entry.map_err(|source| io_err(dir, source))?;
         let name = entry.file_name();
@@ -1264,7 +1322,7 @@ fn collect_source_line_counts(dir: &Path, out: &mut Vec<u64>) -> Result<(), Audi
             // lossy structural proxy by contract). A genuine read error
             // propagates.
             if let Some(n) = count_lines(&path)? {
-                out.push(n);
+                out.push((path, n));
             }
         }
     }
@@ -1322,6 +1380,31 @@ mod tests {
         dir
     }
 
+    /// The single-subtree partition most fixtures need (no workspace manifest):
+    /// attribution is gated off, so items carry `subtree: None`.
+    fn implicit(dir: &Path) -> SubtreePartition {
+        SubtreePartition::implicit_root(dir)
+    }
+
+    /// A two-member Cargo-workspace fixture (`crates/foo`, `crates/bar`) whose
+    /// discovered partition is meaningful, for the attribution tests.
+    fn workspace(name: &str) -> (PathBuf, SubtreePartition) {
+        let dir = tmp(name);
+        fs::write(
+            dir.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/foo\", \"crates/bar\"]\n",
+        )
+        .unwrap();
+        for member in ["foo", "bar"] {
+            let root = dir.join("crates").join(member);
+            fs::create_dir_all(&root).unwrap();
+            fs::write(root.join("Cargo.toml"), "[package]\n").unwrap();
+        }
+        let partition = aoa_metrics::discover_partition(&dir).unwrap();
+        assert!(partition.is_partitioned(), "fixture must be a workspace");
+        (dir, partition)
+    }
+
     #[test]
     fn median_handles_odd_and_even() {
         assert_eq!(median(&[1, 2, 3]), 2);
@@ -1358,7 +1441,9 @@ mod tests {
         let dir = tmp("nav-missing");
         fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
 
-        let item = navigability_anchor_item(&dir).unwrap().expect("item");
+        let item = navigability_anchor_item(&dir, &implicit(&dir))
+            .unwrap()
+            .expect("item");
         assert_eq!(item.tier, Tier::Tier3);
         assert_eq!(item.measured_cost.unit, "package roots");
         assert_eq!(item.measured_cost.value, 1);
@@ -1370,7 +1455,9 @@ mod tests {
         let dir = tmp("nav-present");
         fs::write(dir.join("README.md"), "# repo\n").unwrap();
 
-        assert!(navigability_anchor_item(&dir).unwrap().is_none());
+        assert!(navigability_anchor_item(&dir, &implicit(&dir))
+            .unwrap()
+            .is_none());
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -1386,7 +1473,9 @@ mod tests {
         let plain = dir.join("docs");
         fs::create_dir_all(&plain).unwrap();
 
-        let item = navigability_anchor_item(&dir).unwrap().expect("item");
+        let item = navigability_anchor_item(&dir, &implicit(&dir))
+            .unwrap()
+            .expect("item");
         assert_eq!(
             item.measured_cost.value, 1,
             "only the manifest child counts"
@@ -1516,7 +1605,9 @@ mod tests {
         }
         fs::write(dir.join("huge.rs"), "x\n".repeat(200)).unwrap();
 
-        let item = module_size_outlier_item(&dir, 4.0).unwrap().expect("item");
+        let item = module_size_outlier_item(&dir, 4.0, &implicit(&dir))
+            .unwrap()
+            .expect("item");
         assert_eq!(item.tier, Tier::Tier3);
         assert_eq!(item.measured_cost.unit, "outlier files");
         assert_eq!(item.measured_cost.value, 1);
@@ -1529,7 +1620,9 @@ mod tests {
         for i in 0..8 {
             fs::write(dir.join(format!("m{i}.rs")), "x\n".repeat(20)).unwrap();
         }
-        assert!(module_size_outlier_item(&dir, 4.0).unwrap().is_none());
+        assert!(module_size_outlier_item(&dir, 4.0, &implicit(&dir))
+            .unwrap()
+            .is_none());
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -1539,7 +1632,9 @@ mod tests {
         // Two files, one much larger: too few to self-calibrate a median.
         fs::write(dir.join("a.rs"), "x\n").unwrap();
         fs::write(dir.join("b.rs"), "x\n".repeat(500)).unwrap();
-        assert!(module_size_outlier_item(&dir, 4.0).unwrap().is_none());
+        assert!(module_size_outlier_item(&dir, 4.0, &implicit(&dir))
+            .unwrap()
+            .is_none());
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -1551,7 +1646,9 @@ mod tests {
         for i in 0..6 {
             fs::write(dir.join(format!("m{i}.rs")), "").unwrap();
         }
-        assert!(module_size_outlier_item(&dir, 4.0).unwrap().is_none());
+        assert!(module_size_outlier_item(&dir, 4.0, &implicit(&dir))
+            .unwrap()
+            .is_none());
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -1600,7 +1697,9 @@ mod tests {
         fs::create_dir_all(&target).unwrap();
         fs::write(target.join("gen.rs"), "x\n".repeat(5000)).unwrap();
 
-        assert!(module_size_outlier_item(&dir, 4.0).unwrap().is_none());
+        assert!(module_size_outlier_item(&dir, 4.0, &implicit(&dir))
+            .unwrap()
+            .is_none());
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -1719,7 +1818,9 @@ mod tests {
         fs::write(dir.join("a.rs"), "use std::path::Path;\nfn main() {}\n").unwrap();
         fs::write(dir.join("b.rs"), "use std::fmt::Debug;\nfn main() {}\n").unwrap();
 
-        let item = unused_import_proxy_item(&dir).unwrap().expect("item");
+        let item = unused_import_proxy_item(&dir, &implicit(&dir))
+            .unwrap()
+            .expect("item");
         assert_eq!(item.tier, Tier::Tier3);
         assert_eq!(item.measured_cost.unit, "imports");
         assert_eq!(item.measured_cost.value, 2);
@@ -1731,7 +1832,9 @@ mod tests {
         let dir = tmp("unused-import-non-rust");
         // No `.rs` files: nothing to measure -> honest abstention.
         fs::write(dir.join("app.py"), "import os\nimport sys\n").unwrap();
-        assert!(unused_import_proxy_item(&dir).unwrap().is_none());
+        assert!(unused_import_proxy_item(&dir, &implicit(&dir))
+            .unwrap()
+            .is_none());
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -1743,7 +1846,9 @@ mod tests {
             "use std::path::Path;\nfn f(p: &Path) {}\n",
         )
         .unwrap();
-        assert!(unused_import_proxy_item(&dir).unwrap().is_none());
+        assert!(unused_import_proxy_item(&dir, &implicit(&dir))
+            .unwrap()
+            .is_none());
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -1760,7 +1865,9 @@ mod tests {
         fs::create_dir_all(&target).unwrap();
         fs::write(target.join("gen.rs"), "use std::fmt::Debug;\nfn g() {}\n").unwrap();
 
-        assert!(unused_import_proxy_item(&dir).unwrap().is_none());
+        assert!(unused_import_proxy_item(&dir, &implicit(&dir))
+            .unwrap()
+            .is_none());
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -2010,7 +2117,9 @@ mod tests {
         fs::write(dir.join("README.md"), "# repo\n").unwrap();
         fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
 
-        let item = verification_reachability_item(&dir).unwrap().expect("item");
+        let item = verification_reachability_item(&dir, &implicit(&dir))
+            .unwrap()
+            .expect("item");
         assert_eq!(item.kind, FindingKind::VerificationReachability);
         assert_eq!(item.tier, Tier::Tier3);
         assert_eq!(item.measured_cost.unit, "package roots");
@@ -2026,7 +2135,9 @@ mod tests {
         fs::create_dir_all(dir.join("tests")).unwrap();
         fs::write(dir.join("tests").join("it.rs"), "#[test]\nfn t() {}\n").unwrap();
 
-        assert!(verification_reachability_item(&dir).unwrap().is_none());
+        assert!(verification_reachability_item(&dir, &implicit(&dir))
+            .unwrap()
+            .is_none());
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -2211,7 +2322,9 @@ mod tests {
         fs::write(dir.join("README.md"), "# repo\n").unwrap();
         fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
 
-        let item = invariant_discoverability_item(&dir).unwrap().expect("item");
+        let item = invariant_discoverability_item(&dir, &implicit(&dir))
+            .unwrap()
+            .expect("item");
         assert_eq!(item.kind, FindingKind::InvariantDiscoverability);
         assert_eq!(item.tier, Tier::Tier3);
         assert_eq!(item.measured_cost.unit, "package roots");
@@ -2226,7 +2339,9 @@ mod tests {
         fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
         fs::write(dir.join("AGENTS.md"), "# conventions\n").unwrap();
 
-        assert!(invariant_discoverability_item(&dir).unwrap().is_none());
+        assert!(invariant_discoverability_item(&dir, &implicit(&dir))
+            .unwrap()
+            .is_none());
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -2489,13 +2604,151 @@ mod tests {
         let dir = tmp("factory-integration");
         fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
 
-        let items = structure_items(&dir, 4.0).unwrap();
+        let items = structure_items(&dir, 4.0, &implicit(&dir)).unwrap();
         let kinds: Vec<FindingKind> = items.iter().map(|i| i.kind).collect();
         assert!(kinds.contains(&FindingKind::BuildDeterminism));
         assert!(kinds.contains(&FindingKind::DevEnvironmentDeclaration));
         assert!(kinds.contains(&FindingKind::TaskDiscoverySurface));
         assert!(kinds.contains(&FindingKind::GeneratedArtifactProtection));
         assert!(kinds.contains(&FindingKind::WriteSafetyZone));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- subtree attribution (aoa-d6t.31) ---
+
+    #[test]
+    fn navigability_finding_attributes_to_its_single_subtree() {
+        let (dir, partition) = workspace("attr-nav-single");
+        fs::write(dir.join("README.md"), "# root\n").unwrap();
+        fs::write(dir.join("crates/bar/README.md"), "# bar\n").unwrap();
+        // Only crates/foo lacks a README: the finding is scoped to that member.
+
+        let item = navigability_anchor_item(&dir, &partition)
+            .unwrap()
+            .expect("item");
+        assert_eq!(item.measured_cost.value, 1);
+        assert_eq!(item.subtree.as_deref(), Some("crates/foo"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn navigability_finding_spanning_members_is_repo_wide() {
+        let (dir, partition) = workspace("attr-nav-span");
+        fs::write(dir.join("README.md"), "# root\n").unwrap();
+        // Both members lack a README: no single subtree owns the finding.
+
+        let item = navigability_anchor_item(&dir, &partition)
+            .unwrap()
+            .expect("item");
+        assert_eq!(item.measured_cost.value, 2);
+        assert!(
+            item.subtree.is_none(),
+            "spanning finding must stay repo-wide"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn navigability_finding_touching_the_root_is_repo_wide() {
+        let (dir, partition) = workspace("attr-nav-root");
+        fs::write(dir.join("crates/bar/README.md"), "# bar\n").unwrap();
+        // The repo root (outside every member) and crates/foo both lack a
+        // README: a path outside all members blocks attribution.
+
+        let item = navigability_anchor_item(&dir, &partition)
+            .unwrap()
+            .expect("item");
+        assert_eq!(item.measured_cost.value, 2);
+        assert!(item.subtree.is_none(), "root site is outside every member");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn size_outlier_finding_attributes_to_its_subtree() {
+        let (dir, partition) = workspace("attr-size");
+        for i in 0..6 {
+            fs::write(dir.join(format!("crates/bar/m{i}.rs")), "x\n".repeat(10)).unwrap();
+        }
+        fs::write(dir.join("crates/foo/huge.rs"), "x\n".repeat(200)).unwrap();
+
+        let item = module_size_outlier_item(&dir, 4.0, &partition)
+            .unwrap()
+            .expect("item");
+        assert_eq!(item.measured_cost.value, 1);
+        assert_eq!(item.subtree.as_deref(), Some("crates/foo"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unused_import_finding_attributes_to_its_subtree() {
+        let (dir, partition) = workspace("attr-unused");
+        fs::write(
+            dir.join("crates/foo/a.rs"),
+            "use std::path::Path;\nfn main() {}\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("crates/bar/b.rs"),
+            "use std::path::Path;\nfn f(p: &Path) {}\n",
+        )
+        .unwrap();
+
+        let item = unused_import_proxy_item(&dir, &partition)
+            .unwrap()
+            .expect("item");
+        assert_eq!(item.measured_cost.value, 1);
+        assert_eq!(item.subtree.as_deref(), Some("crates/foo"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn verification_finding_attributes_to_its_subtree() {
+        let (dir, partition) = workspace("attr-verify");
+        // foo's #[cfg(test)] covers foo AND (via the recursive walk) the root;
+        // bar alone has no reachable verification.
+        fs::create_dir_all(dir.join("crates/foo/src")).unwrap();
+        fs::write(
+            dir.join("crates/foo/src/lib.rs"),
+            "#[cfg(test)]\nmod t {}\n",
+        )
+        .unwrap();
+        fs::write(dir.join("crates/bar/lib.rs"), "pub fn f() {}\n").unwrap();
+
+        let item = verification_reachability_item(&dir, &partition)
+            .unwrap()
+            .expect("item");
+        assert_eq!(item.measured_cost.value, 1);
+        assert_eq!(item.subtree.as_deref(), Some("crates/bar"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn invariant_finding_attributes_to_its_subtree() {
+        let (dir, partition) = workspace("attr-inv");
+        // foo's rustfmt.toml covers foo AND (via the recursive walk) the root;
+        // bar alone has no discoverable rules.
+        fs::write(dir.join("crates/foo/rustfmt.toml"), "edition = \"2021\"\n").unwrap();
+
+        let item = invariant_discoverability_item(&dir, &partition)
+            .unwrap()
+            .expect("item");
+        assert_eq!(item.measured_cost.value, 1);
+        assert_eq!(item.subtree.as_deref(), Some("crates/bar"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn attribution_is_gated_off_for_a_single_subtree_repo() {
+        // An implicit-root partition attributes every path to `.`, which adds
+        // no signal — the is_partitioned gate keeps the field None (and thus
+        // off the wire) for non-workspace repos.
+        let dir = tmp("attr-implicit");
+        fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
+
+        let item = navigability_anchor_item(&dir, &implicit(&dir))
+            .unwrap()
+            .expect("item");
+        assert!(item.subtree.is_none());
         fs::remove_dir_all(&dir).ok();
     }
 
