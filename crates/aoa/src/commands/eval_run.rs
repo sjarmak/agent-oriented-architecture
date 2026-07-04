@@ -39,9 +39,10 @@ use aoa_codeprobe_shim::parse_transcript_file;
 use aoa_gap::{compute_gap, GapOutcome, HeldOutProvenance, RunResult, TaskOutcome};
 use aoa_metrics::{
     compute_edit_locality, compute_invariant_discoverability, compute_mutation_surface,
-    compute_retrieval_locality, ConditionedOn, Confidence, EditLocality, IndexQuality,
-    InvariantDiscoverability, MetricError, MetricInputRef, MutationSurface, RetrievalLocality,
-    TransformMap,
+    compute_retrieval_locality, compute_subtree_metrics, discover_partition, ConditionedOn,
+    Confidence, EditLocality, IndexQuality, InvariantDiscoverability, MetricError, MetricInputRef,
+    MutationSurface, RetrievalLocality, SubtreeMetrics, SubtreePartition, TransformMap,
+    WorkspaceSource,
 };
 use aoa_scip_graph::{build_symbol_graph, degraded, IndexSource, IndexedRepo};
 use aoa_trace::{SpanType, Trace};
@@ -80,8 +81,20 @@ struct EvalRunReport {
     /// Trials that produced a record (excludes failed trials, counted separately).
     record_count: usize,
     error_count: usize,
+    /// Present only when a multi-member workspace was detected under `--repo`
+    /// (aoa-d6t.26). Additive: absent, the schema is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subtree_partition: Option<SubtreePartitionInfo>,
     records: Vec<TaskRecord>,
     errors: Vec<TaskError>,
+}
+
+/// How the repo was partitioned into subtrees, for JSON consumers.
+#[derive(Debug, Serialize)]
+struct SubtreePartitionInfo {
+    source: WorkspaceSource,
+    /// Member dirs relative to the repo root, lexicographic.
+    members: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -118,6 +131,10 @@ struct TaskRecord {
     edit_locality: Option<EditLocality>,
     #[serde(skip_serializing_if = "Option::is_none")]
     edit_locality_unavailable: Option<String>,
+    /// Per-subtree rows (aoa-d6t.26), present only when a multi-member
+    /// workspace was detected. Repo-wide fields above are unaffected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subtree_metrics: Option<Vec<SubtreeMetrics>>,
     gap: GapOutcome,
 }
 
@@ -131,13 +148,17 @@ pub fn run(args: &EvalRunArgs) -> Result<i32> {
         eprintln!("warning: {reason}; all records will score weight=0.0 (R0-ineligible)");
     }
 
+    // Per-subtree scoping (aoa-d6t.26): automatic when the --repo checkout is a
+    // multi-member workspace. The mode switch is logged, never silent.
+    let partition = detect_partition(args);
+
     let task_ids = discover_tasks(&args.codeprobe_run)?;
 
     let mut records = Vec::new();
     let mut errors = Vec::new();
     for task_id in task_ids {
         let task_dir = args.codeprobe_run.join(&task_id);
-        match process_task(&task_id, &task_dir, args, &indexed) {
+        match process_task(&task_id, &task_dir, args, &indexed, partition.as_ref()) {
             Ok(record) => records.push(record),
             // Fail loud for THIS trial — reported, never silently skipped — and
             // keep processing the rest of the batch.
@@ -152,6 +173,14 @@ pub fn run(args: &EvalRunArgs) -> Result<i32> {
         run_dir: args.codeprobe_run.display().to_string(),
         record_count: records.len(),
         error_count: errors.len(),
+        subtree_partition: partition.as_ref().map(|p| {
+            let mut members = p.members().to_vec();
+            members.sort_unstable();
+            SubtreePartitionInfo {
+                source: p.source(),
+                members,
+            }
+        }),
         records,
         errors,
     };
@@ -179,12 +208,39 @@ fn build_graph(args: &EvalRunArgs) -> IndexedRepo {
     }
 }
 
+/// Detect the subtree partition of the `--repo` checkout, when one is given.
+///
+/// Returns `Some` only for a multi-member workspace — the only case where
+/// per-subtree rows add signal — and logs the automatic mode switch. A
+/// discovery failure (malformed manifest) is logged and falls back to
+/// repo-wide reporting rather than aborting the run.
+fn detect_partition(args: &EvalRunArgs) -> Option<SubtreePartition> {
+    let repo = args.repo.as_deref()?;
+    match discover_partition(repo) {
+        Ok(partition) if partition.is_partitioned() => {
+            eprintln!(
+                "per-subtree metrics enabled: {} workspace members detected via {} in {}",
+                partition.members().len(),
+                partition.source().label(),
+                repo.display()
+            );
+            Some(partition)
+        }
+        Ok(_) => None,
+        Err(e) => {
+            eprintln!("warning: subtree discovery failed ({e}); reporting repo-wide metrics only");
+            None
+        }
+    }
+}
+
 /// Build one task's metric record, or fail loud for this trial.
 fn process_task(
     task_id: &str,
     task_dir: &Path,
     args: &EvalRunArgs,
     indexed: &IndexedRepo,
+    partition: Option<&SubtreePartition>,
 ) -> Result<TaskRecord> {
     let transcript = task_dir.join("agent_output.txt");
     let shim = parse_transcript_file(&transcript)
@@ -289,6 +345,7 @@ fn process_task(
         mutation_surface: compute_mutation_surface(input),
         edit_locality,
         edit_locality_unavailable,
+        subtree_metrics: partition.map(|p| compute_subtree_metrics(input, p)),
         gap,
     })
 }
@@ -350,6 +407,21 @@ fn render_human(report: &EvalRunReport) -> String {
             gap,
             edit
         );
+        // Per-subtree rows (aoa-d6t.26): indented under their task record.
+        for row in r.subtree_metrics.iter().flatten() {
+            let first = match row.retrieval_locality.tool_calls_to_first_relevant_artifact {
+                Some(n) => n.to_string(),
+                None => "-".to_string(),
+            };
+            let _ = writeln!(
+                out,
+                "    subtree {:<24} spans={} edits={} first_relevant={}",
+                row.subtree.escape_debug(),
+                row.attributed_span_count,
+                row.edited_file_count,
+                first
+            );
+        }
     }
     for e in &report.errors {
         let _ = writeln!(out, "  ERROR {:<26} {}", e.task_id.escape_debug(), e.error);

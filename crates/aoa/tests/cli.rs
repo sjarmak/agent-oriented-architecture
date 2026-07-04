@@ -241,6 +241,76 @@ fn eval_run_human_renders_text() {
         .stdout(predicate::str::contains("external-filelist-000"));
 }
 
+// --- aoa-d6t.26: per-subtree metric scoping in monorepos -----------------------
+
+// A multi-member Cargo workspace repo enables automatic per-subtree metrics:
+// the report carries the partition (additive fields), each record carries
+// per-subtree rows, and the mode switch is logged to stderr, never silent.
+#[test]
+fn eval_run_emits_per_subtree_rows_for_multi_member_workspace() {
+    let output = aoa()
+        .args(["eval", "run", "--json", "--codeprobe-run"])
+        .arg(fixture("subtree_run"))
+        .arg("--repo")
+        .arg(fixture("subtree_repo"))
+        .output()
+        .expect("run");
+    assert!(output.status.success());
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("per-subtree"),
+        "automatic per-subtree mode must be logged, got: {stderr}"
+    );
+
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert_eq!(parsed["subtree_partition"]["source"], "cargo_workspace");
+    let members = parsed["subtree_partition"]["members"]
+        .as_array()
+        .expect("members array");
+    assert_eq!(members.len(), 2);
+
+    let rec = &parsed["records"].as_array().expect("records")[0];
+    let rows = rec["subtree_metrics"].as_array().expect("subtree rows");
+    assert_eq!(rows.len(), 2, "one row per active subtree");
+    assert_eq!(rows[0]["subtree"], "crates/core");
+    assert_eq!(rows[0]["edited_file_count"], 0);
+    assert_eq!(rows[1]["subtree"], "crates/legacy");
+    assert_eq!(rows[1]["edited_file_count"], 1);
+    // Repo-wide fields are untouched by the additive schema.
+    assert!(rec["retrieval_locality"].is_object());
+    assert!(rec["mutation_surface"].is_object());
+}
+
+#[test]
+fn eval_run_subtree_rows_render_in_human_output() {
+    aoa()
+        .args(["eval", "run", "--codeprobe-run"])
+        .arg(fixture("subtree_run"))
+        .arg("--repo")
+        .arg(fixture("subtree_repo"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("crates/core"))
+        .stdout(predicate::str::contains("crates/legacy"));
+}
+
+// Without --repo there is no partition source: the additive fields are absent
+// so existing JSON consumers see an unchanged schema.
+#[test]
+fn eval_run_omits_subtree_fields_without_repo() {
+    let output = aoa()
+        .args(["eval", "run", "--json", "--codeprobe-run"])
+        .arg(fixture("subtree_run"))
+        .output()
+        .expect("run");
+    assert!(output.status.success());
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert!(parsed.get("subtree_partition").is_none());
+    let rec = &parsed["records"].as_array().expect("records")[0];
+    assert!(rec.get("subtree_metrics").is_none());
+}
+
 // --- aoa-2ce: R0b on live data — compose the leakage canary over codeprobe ----
 
 fn r0b_baseline() -> PathBuf {
