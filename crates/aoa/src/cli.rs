@@ -127,9 +127,9 @@ pub struct AuditArgs {
     pub self_audit: bool,
 
     /// Baseline run-result JSON (the `aoa eval compare` input) supplying the
-    /// held-out leg for `--self`. Without the pair, held-out evidence is
-    /// reported absent — and an undemonstrated gain cannot justify a context
-    /// rise.
+    /// held-out leg for `--self`. Only a pair the gap gate labels `good`
+    /// justifies a context rise; without the pair, held-out evidence is
+    /// reported absent — and an undemonstrated gain cannot justify one either.
     #[arg(long, requires = "self_audit", requires = "migrated")]
     pub baseline: Option<PathBuf>,
 
