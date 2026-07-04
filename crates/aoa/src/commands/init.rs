@@ -15,7 +15,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -115,8 +115,8 @@ pub fn run(args: &InitArgs) -> Result<i32> {
 /// Fresh scaffold. Refuses to run twice (the manifest is the marker) and never
 /// overwrites a pre-existing file — collisions are skipped and reported.
 fn init(repo: &Path, project: &str) -> Result<InitView> {
-    let manifest_path = repo.join(MANIFEST_REL);
-    if manifest_path.exists() {
+    let manifest_path = safe_target(repo, MANIFEST_REL)?;
+    if exists_nofollow(&manifest_path) {
         bail!(
             "already initialized ({} exists); run `aoa init --update` to migrate",
             manifest_path.display()
@@ -134,8 +134,8 @@ fn init(repo: &Path, project: &str) -> Result<InitView> {
 
     for template in TEMPLATES {
         let rendered = render(template.body, project);
-        let target = repo.join(template.path);
-        if target.exists() {
+        let target = safe_target(repo, template.path)?;
+        if exists_nofollow(&target) {
             view.skipped.push(template.path.to_string());
             continue;
         }
@@ -158,8 +158,8 @@ fn init(repo: &Path, project: &str) -> Result<InitView> {
 /// place; anything else is user-owned → write `<path>.new` for review and
 /// leave the file alone.
 fn update(repo: &Path, project: &str) -> Result<InitView> {
-    let manifest_path = repo.join(MANIFEST_REL);
-    if !manifest_path.exists() {
+    let manifest_path = safe_target(repo, MANIFEST_REL)?;
+    if !exists_nofollow(&manifest_path) {
         bail!(
             "no manifest at {} — this repo was not scaffolded here; run `aoa init` first",
             manifest_path.display()
@@ -184,45 +184,86 @@ fn update(repo: &Path, project: &str) -> Result<InitView> {
     let mut files = Vec::new();
 
     for template in TEMPLATES {
-        let rendered = render(template.body, project);
-        let rendered_hash = sha256_hex(&rendered);
-        let target = repo.join(template.path);
-        let path = template.path.to_string();
-
-        if !target.exists() {
-            write_file(&target, &rendered)?;
-            view.written.push(path.clone());
-        } else {
-            let disk = std::fs::read_to_string(&target)
-                .with_context(|| format!("failed to read {}", target.display()))?;
-            if disk == rendered {
-                view.skipped.push(path.clone());
-            } else if recorded.get(&path) == Some(&sha256_hex(&disk)) {
-                write_file(&target, &rendered)?;
-                view.written.push(path.clone());
-            } else {
-                // User-owned content (edited, or never written by init): park
-                // the new render beside it and keep the old hash, if any, so
-                // the local edit stays detected on the next update.
-                write_file(&repo.join(format!("{}.new", template.path)), &rendered)?;
-                view.review.push(format!("{path}.new"));
-                if let Some(old) = recorded.get(&path) {
-                    files.push(ManifestFile {
-                        path,
-                        sha256: old.clone(),
-                    });
-                }
-                continue;
-            }
+        let (outcome, manifest_entry) = reconcile(repo, template, project, &recorded)?;
+        match outcome {
+            Outcome::Written => view.written.push(template.path.to_string()),
+            Outcome::Skipped => view.skipped.push(template.path.to_string()),
+            Outcome::Review => view.review.push(format!("{}.new", template.path)),
         }
-        files.push(ManifestFile {
-            path: template.path.to_string(),
-            sha256: rendered_hash,
-        });
+        files.extend(manifest_entry);
     }
 
     write_manifest(&manifest_path, files)?;
     Ok(view)
+}
+
+/// What `--update` did with a single template.
+enum Outcome {
+    /// File was missing or pristine-vs-manifest and got the fresh render.
+    Written,
+    /// On-disk content already equals the render; nothing to do.
+    Skipped,
+    /// File carries local edits; the render was parked as `<path>.new`.
+    Review,
+}
+
+/// Reconcile one template against the repo: the four-way state machine
+/// (missing → write; disk == render → skip; disk matches the recorded hash →
+/// rewrite; else user-owned → park `.new`). Returns the outcome plus the
+/// manifest entry to persist, if any (a review outcome retains the old hash so
+/// the local edit stays detected on the next update).
+fn reconcile(
+    repo: &Path,
+    template: &Template,
+    project: &str,
+    recorded: &BTreeMap<String, String>,
+) -> Result<(Outcome, Option<ManifestFile>)> {
+    let path = template.path.to_string();
+    let rendered = render(template.body, project);
+    let rendered_hash = sha256_hex(&rendered);
+    let target = safe_target(repo, template.path)?;
+
+    if !exists_nofollow(&target) {
+        write_file(&target, &rendered)?;
+        return Ok((
+            Outcome::Written,
+            Some(ManifestFile {
+                path,
+                sha256: rendered_hash,
+            }),
+        ));
+    }
+    let disk = std::fs::read_to_string(&target)
+        .with_context(|| format!("failed to read {}", target.display()))?;
+    if disk == rendered {
+        return Ok((
+            Outcome::Skipped,
+            Some(ManifestFile {
+                path,
+                sha256: rendered_hash,
+            }),
+        ));
+    }
+    if recorded.get(&path) == Some(&sha256_hex(&disk)) {
+        write_file(&target, &rendered)?;
+        return Ok((
+            Outcome::Written,
+            Some(ManifestFile {
+                path,
+                sha256: rendered_hash,
+            }),
+        ));
+    }
+    // User-owned content (edited, or never written by init): park the new
+    // render beside it and keep the old hash, if any, so the edit stays
+    // detected on the next update.
+    let review_target = safe_target(repo, &format!("{}.new", template.path))?;
+    write_file(&review_target, &rendered)?;
+    let retained = recorded.get(&path).map(|old| ManifestFile {
+        path,
+        sha256: old.clone(),
+    });
+    Ok((Outcome::Review, retained))
 }
 
 /// Render a template body: the single mechanical substitution.
@@ -235,13 +276,56 @@ fn project_name(repo: &Path) -> Result<String> {
     let canonical = repo
         .canonicalize()
         .with_context(|| format!("failed to resolve {}", repo.display()))?;
-    match canonical.file_name() {
-        Some(name) => Ok(name.to_string_lossy().into_owned()),
+    let name = match canonical.file_name() {
+        Some(name) => name.to_string_lossy().into_owned(),
         None => bail!(
             "cannot derive a project name from {} (filesystem root?)",
             repo.display()
         ),
+    };
+    // The name is substituted verbatim into YAML/Markdown templates, so a
+    // directory name carrying control characters (e.g. an embedded newline)
+    // could inject structure into the generated files. Reject at this boundary
+    // rather than silently corrupting the output.
+    if name.chars().any(char::is_control) {
+        bail!("project directory name {name:?} contains control characters");
     }
+    Ok(name)
+}
+
+/// Resolve `rel` under `repo`, refusing to traverse or land on a symlink.
+///
+/// `init`/`--update` write scaffold files into a possibly-untrusted checkout;
+/// a planted symlink (a file link, or a symlinked directory component) would
+/// otherwise let a write escape the repo. Walk every component of `rel` from
+/// the repo root down and reject the first that already exists as a symlink,
+/// mirroring the no-follow discipline in `aoa-audit`. Only plain `Normal`
+/// components are allowed, so `..`/absolute segments can never widen the path.
+fn safe_target(repo: &Path, rel: &str) -> Result<PathBuf> {
+    let mut cur = repo.to_path_buf();
+    for component in Path::new(rel).components() {
+        match component {
+            Component::Normal(part) => cur.push(part),
+            other => bail!("unsafe template path {rel:?}: illegal component {other:?}"),
+        }
+        if let Ok(meta) = std::fs::symlink_metadata(&cur) {
+            if meta.file_type().is_symlink() {
+                bail!(
+                    "refusing to write through a symlink at {} (aoa init does not follow links)",
+                    cur.display()
+                );
+            }
+        }
+    }
+    Ok(cur)
+}
+
+/// No-follow existence check: reports `true` for a real file/dir AND for a
+/// dangling symlink, so a planted broken link is never mistaken for "absent"
+/// and silently written through. (`safe_target` rejects the symlink case
+/// first; this guards the plain "already there, skip it" decision.)
+fn exists_nofollow(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok()
 }
 
 fn sha256_hex(content: &str) -> String {

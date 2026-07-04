@@ -237,6 +237,84 @@ fn init_json_output_lists_written_files() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn init_refuses_to_follow_a_symlinked_file_target() {
+    // A hostile checkout plants AGENTS.md as a (dangling) symlink pointing
+    // outside the repo. init must refuse rather than materialize the render
+    // at the link's target.
+    let dir = TempDir::new().expect("tempdir");
+    let outside = TempDir::new().expect("outside");
+    let escape = outside.path().join("pwned.txt");
+    std::os::unix::fs::symlink(&escape, dir.path().join("AGENTS.md")).unwrap();
+
+    aoa()
+        .args(["init", "--repo"])
+        .arg(dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("symlink"));
+
+    assert!(
+        !escape.exists(),
+        "init followed the symlink and wrote outside the repo"
+    );
+    assert!(
+        !dir.path().join(MANIFEST).exists(),
+        "a refused init must not leave a manifest behind"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn init_refuses_a_symlinked_directory_component() {
+    // `features` is a symlink to an external directory; the write of
+    // features/README.md would otherwise land outside the repo.
+    let dir = TempDir::new().expect("tempdir");
+    let outside = TempDir::new().expect("outside");
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("features")).unwrap();
+
+    aoa()
+        .args(["init", "--repo"])
+        .arg(dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("symlink"));
+
+    assert!(
+        !outside.path().join("README.md").exists(),
+        "init wrote through a symlinked directory component"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn update_refuses_to_follow_a_symlinked_target() {
+    // Start from a clean init, then replace a scaffold file with a symlink to
+    // an external file. --update must not overwrite the external file.
+    let dir = init_repo();
+    let outside = TempDir::new().expect("outside");
+    let victim = outside.path().join("victim.txt");
+    std::fs::write(&victim, "external content\n").unwrap();
+
+    let agents = dir.path().join("AGENTS.md");
+    std::fs::remove_file(&agents).unwrap();
+    std::os::unix::fs::symlink(&victim, &agents).unwrap();
+
+    aoa()
+        .args(["init", "--update", "--repo"])
+        .arg(dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("symlink"));
+
+    assert_eq!(
+        std::fs::read_to_string(&victim).unwrap(),
+        "external content\n",
+        "update followed the symlink and clobbered an external file"
+    );
+}
+
 #[test]
 fn manifest_records_version_and_relative_paths_with_hashes() {
     let dir = init_repo();
