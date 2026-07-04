@@ -217,7 +217,11 @@ fn mode_for(determination: &ConstructValidityReport, metric: &str) -> Option<Met
 /// `VerificationReachability`, and `InvariantDiscoverability` join neither a
 /// metric nor a fix: all three are pure reachability/presence facts with no
 /// construct-validity metric and no migration that mechanically resolves them, so
-/// they are advisory-only by construction.
+/// they are advisory-only by construction. The Factory-pillar absence probes
+/// (`BuildDeterminism`, `DevEnvironmentDeclaration`, `TaskDiscoverySurface`) each
+/// join their registered `*_absence` gating-candidate metric with no fix: no
+/// migration mechanically pins a build, declares an environment, or adopts a
+/// tracker, so they can promote past advisory only via their metric.
 fn join(kind: FindingKind) -> (Option<&'static str>, Option<&'static str>) {
     match kind {
         FindingKind::ContextBudget => (Some("budget_adherence"), None),
@@ -231,6 +235,11 @@ fn join(kind: FindingKind) -> (Option<&'static str>, Option<&'static str>) {
         FindingKind::UnusedImportProxy => (Some("unused_import_proxy"), Some("dead-imports")),
         FindingKind::VerificationReachability => (None, None),
         FindingKind::InvariantDiscoverability => (None, None),
+        FindingKind::BuildDeterminism => (Some("build_determinism_absence"), None),
+        FindingKind::DevEnvironmentDeclaration => {
+            (Some("dev_environment_declaration_absence"), None)
+        }
+        FindingKind::TaskDiscoverySurface => (Some("task_discovery_surface_absence"), None),
     }
 }
 
@@ -536,6 +545,39 @@ mod tests {
         assert_eq!(rec.fix_id, None);
         assert_eq!(rec.actionability, Actionability::AdvisoryOnly);
         assert_eq!(rec.advisory_reason, Some(AdvisoryReason::NoFixAvailable));
+    }
+
+    #[test]
+    fn factory_pillar_probes_join_metric_only() {
+        // The Factory-pillar absence probes each inform a registered gating-
+        // candidate metric but have no mechanical migration: metric-only join,
+        // advisory-only with the no-fix blocker, mirroring ModuleSizeOutlier.
+        let cases = [
+            (
+                FindingKind::BuildDeterminism,
+                "build_determinism_absence",
+                "build-determinism markers absent",
+            ),
+            (
+                FindingKind::DevEnvironmentDeclaration,
+                "dev_environment_declaration_absence",
+                "dev-environment declarations absent",
+            ),
+            (
+                FindingKind::TaskDiscoverySurface,
+                "task_discovery_surface_absence",
+                "task-discovery surfaces absent",
+            ),
+        ];
+        for (kind, metric, unit) in cases {
+            let audit = AuditReport::new(vec![item(kind, "probe", Tier::Tier3, 1, unit)]);
+            let rec = &recommend(&audit, &aoa_gap::current_determination(), &all_fixes()).items[0];
+            assert_eq!(rec.metric.as_deref(), Some(metric), "{kind:?}");
+            assert_eq!(rec.metric_mode, Some(MetricMode::Advisory), "{kind:?}");
+            assert_eq!(rec.fix_id, None, "{kind:?} has no migration");
+            assert_eq!(rec.actionability, Actionability::AdvisoryOnly);
+            assert_eq!(rec.advisory_reason, Some(AdvisoryReason::NoFixAvailable));
+        }
     }
 
     #[test]
