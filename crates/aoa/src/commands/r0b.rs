@@ -215,6 +215,7 @@ fn refusal_kind(err: &GapError) -> &'static str {
         GapError::SynthesizedHeldOut => "synthesized_held_out",
         GapError::LeakageDetected => "leakage_detected",
         GapError::GapUnavailable => "gap_unavailable",
+        GapError::RevertMiner(_) => "revert_miner",
     }
 }
 

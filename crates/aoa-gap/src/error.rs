@@ -17,4 +17,11 @@ pub enum GapError {
     /// Labeling a migration on an absent gap is prohibited (R9c/R9).
     #[error("gap unavailable: no native composed held-out suite, refusing to label migration")]
     GapUnavailable,
+
+    /// The offline revert miner could not produce SHAs: either the injected
+    /// git runner failed or the clone path is not representable on the git
+    /// command line. Carries the underlying message verbatim so the real
+    /// cause is never obscured.
+    #[error("revert miner failed: {0}")]
+    RevertMiner(String),
 }

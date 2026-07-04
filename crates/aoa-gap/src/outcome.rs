@@ -19,6 +19,9 @@
 //! against captured log text, never a live clone. A future live session supplies
 //! a real clone path and a command runner; nothing here runs git itself.
 
+use std::collections::HashSet;
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 
 use crate::construct::{
@@ -26,6 +29,7 @@ use crate::construct::{
     OutcomeCorrelation, GATING_CANDIDATES,
 };
 use crate::correlation::{spearman, CorrelationError};
+use crate::error::GapError;
 
 /// One commit mined from a repo's history, with its outcome flags. `reverted`
 /// is the primary revert signal; `churn` is the post-merge line-churn proxy
@@ -163,20 +167,22 @@ fn correlate_metric(
 /// Pure mechanical extraction: each `This reverts commit <40-hex>.` line names
 /// one SHA that was reverted. The full-40-hex form is git's canonical body line
 /// (`git revert` writes it verbatim), so matching it is exact, not a heuristic.
-/// Returned in first-seen order with duplicates removed.
+/// Returned in first-seen order with duplicates removed — a [`HashSet`] tracks
+/// membership (O(1) per line) while the returned `Vec` keeps the order.
 pub fn parse_reverted_shas(git_log: &str) -> Vec<String> {
     const MARKER: &str = "This reverts commit ";
-    let mut seen = Vec::new();
+    let mut seen = HashSet::new();
+    let mut ordered = Vec::new();
     for line in git_log.lines() {
         let Some(rest) = line.trim().strip_prefix(MARKER) else {
             continue;
         };
         let sha: String = rest.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
-        if sha.len() == 40 && !seen.contains(&sha) {
-            seen.push(sha);
+        if sha.len() == 40 && seen.insert(sha.clone()) {
+            ordered.push(sha);
         }
     }
-    seen
+    ordered
 }
 
 /// The exact git command the live miner runs to surface reverts in a clone. Built
@@ -185,22 +191,29 @@ pub fn parse_reverted_shas(git_log: &str) -> Vec<String> {
 /// supplies; this crate never executes it. The format is the commit body alone —
 /// the canonical `This reverts commit <sha>` line lives there and is all
 /// [`parse_reverted_shas`] reads.
-#[must_use]
-pub fn revert_log_command(dir: &str) -> Vec<String> {
-    vec![
+///
+/// Errs with [`GapError::RevertMiner`] when `dir` is not valid UTF-8: git's `-C`
+/// argument is a string, and silently lossy-converting the path would point the
+/// miner at the wrong directory.
+pub fn revert_log_command(dir: &Path) -> Result<Vec<String>, GapError> {
+    let dir = dir
+        .to_str()
+        .ok_or_else(|| GapError::RevertMiner(format!("clone path is not valid UTF-8: {dir:?}")))?;
+    Ok(vec![
         "git".into(),
         "-C".into(),
         dir.into(),
         "log".into(),
         "--grep=This reverts commit".into(),
         "--format=%b".into(),
-    ]
+    ])
 }
 
 /// Runs a command and returns its stdout. The injection point that keeps this
 /// module offline: tests pass a closure over captured text; a live session passes
-/// a real subprocess runner. Returns the error string on failure so the caller
-/// can surface a real failure rather than masking it.
+/// a real subprocess runner. The runner reports failure as an opaque message
+/// string (whatever the subprocess surface produced); [`mine_reverts`] wraps it
+/// into the typed [`GapError::RevertMiner`] at the boundary.
 pub type GitRunner<'a> = dyn Fn(&[String]) -> Result<String, String> + 'a;
 
 /// Mine the reverted SHAs from a real clone at `dir`, using the injected `run`.
@@ -210,9 +223,13 @@ pub type GitRunner<'a> = dyn Fn(&[String]) -> Result<String, String> + 'a;
 /// a runner over captured text. A future live session supplies a runner that
 /// shells out to git; the offline clamp is enforced by never wiring a real
 /// subprocess runner into any test or default.
-pub fn mine_reverts(dir: &str, run: &GitRunner<'_>) -> Result<Vec<String>, String> {
-    let cmd = revert_log_command(dir);
-    let stdout = run(&cmd)?;
+///
+/// Errs with [`GapError::RevertMiner`] when the path is not valid UTF-8 (see
+/// [`revert_log_command`]) or when the runner fails; the runner's message is
+/// carried verbatim inside the variant.
+pub fn mine_reverts(dir: &Path, run: &GitRunner<'_>) -> Result<Vec<String>, GapError> {
+    let cmd = revert_log_command(dir)?;
+    let stdout = run(&cmd).map_err(GapError::RevertMiner)?;
     Ok(parse_reverted_shas(&stdout))
 }
 
@@ -456,13 +473,44 @@ prose: this reverts commit nothing in particular
     }
 
     #[test]
+    fn parse_reverted_shas_dedup_preserves_first_seen_order_at_scale() {
+        // 100 distinct SHAs, each appearing twice. Vec::contains would be
+        // O(n^2) here; the HashSet path is O(n). Order must stay first-seen.
+        let shas: Vec<String> = (0..100).map(|i| format!("{i:040x}")).collect();
+        let log: String = shas
+            .iter()
+            .chain(shas.iter())
+            .map(|s| format!("This reverts commit {s}.\n"))
+            .collect();
+        assert_eq!(parse_reverted_shas(&log), shas);
+    }
+
+    #[test]
     fn revert_log_command_shape_is_stable() {
         // The miner and a future live session share this command shape.
-        let cmd = revert_log_command("/scratch/clone");
+        let cmd = revert_log_command(Path::new("/scratch/clone")).expect("UTF-8 path");
         assert_eq!(cmd[0], "git");
         assert_eq!(cmd[1], "-C");
         assert_eq!(cmd[2], "/scratch/clone");
         assert!(cmd.iter().any(|a| a.contains("This reverts commit")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn revert_log_command_rejects_non_utf8_path() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let bad = Path::new(OsStr::from_bytes(b"/scratch/\xff\xfe"));
+        let err = revert_log_command(bad).expect_err("non-UTF-8 path must fail loudly");
+        assert!(
+            matches!(err, GapError::RevertMiner(_)),
+            "expected RevertMiner, got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("not valid UTF-8"),
+            "error must name the UTF-8 failure: {err}"
+        );
     }
 
     #[test]
@@ -472,7 +520,7 @@ prose: this reverts commit nothing in particular
 4444444444444444444444444444444444444444.\n"
             .to_string();
         let run = |_cmd: &[String]| -> Result<String, String> { Ok(captured.clone()) };
-        let reverted = mine_reverts("/scratch/clone", &run).expect("runner ok");
+        let reverted = mine_reverts(Path::new("/scratch/clone"), &run).expect("runner ok");
         assert_eq!(
             reverted,
             vec!["4444444444444444444444444444444444444444".to_string()]
@@ -480,11 +528,14 @@ prose: this reverts commit nothing in particular
     }
 
     #[test]
-    fn mine_reverts_propagates_runner_failure() {
+    fn mine_reverts_wraps_runner_failure_in_typed_error() {
         let run = |_cmd: &[String]| -> Result<String, String> { Err("git not found".into()) };
-        assert_eq!(
-            mine_reverts("/scratch/clone", &run),
-            Err("git not found".to_string())
+        let err = mine_reverts(Path::new("/scratch/clone"), &run)
+            .expect_err("runner failure must propagate");
+        assert_eq!(err, GapError::RevertMiner("git not found".into()));
+        assert!(
+            err.to_string().contains("git not found"),
+            "display must carry the runner's message: {err}"
         );
     }
 }
