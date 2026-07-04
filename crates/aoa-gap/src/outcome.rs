@@ -23,6 +23,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::construct::{
     build_report, CorrelationReport, ExternalOutcome, GatingThresholds, MetricOrientation,
@@ -109,6 +110,29 @@ impl Corpus {
     }
 }
 
+/// A gating-candidate metric's correlation could not be computed against the
+/// corpus, and the failure is a real data problem the caller must fix — not a
+/// benign "no external tie". Names the offending metric so the culprit corpus
+/// row is obvious; the underlying [`CorrelationError`] (which carries the `n`,
+/// cap, or non-finite value) is preserved as the [`std::error::Error::source`].
+///
+/// Only the *hard* correlation errors reach here: [`CorrelationError::SampleTooLarge`]
+/// (the corpus carries more than [`crate::MAX_EXACT_N`] repos for this metric —
+/// a precondition the 5–10-repo corpus is designed to satisfy) and
+/// [`CorrelationError::NonFiniteObservation`]. The "not computable on this
+/// corpus" outcomes ([`CorrelationError::TooFewObservations`],
+/// [`CorrelationError::ZeroVariance`]) are absorbed upstream in
+/// [`correlate_metric`] and never surface as this error.
+#[derive(Debug, Clone, PartialEq, Error)]
+#[error("metric {metric}: {source}")]
+pub struct CorpusMetricError {
+    /// The [`GATING_CANDIDATES`] metric name whose correlation failed.
+    pub metric: String,
+    /// The underlying rank-correlation error, carried verbatim.
+    #[source]
+    pub source: CorrelationError,
+}
+
 /// Correlate every gating-candidate metric against the corpus's revert rate and
 /// build the reproducible construct-validity artifact.
 ///
@@ -119,14 +143,29 @@ impl Corpus {
 /// across the corpus) yields NO correlation, so the metric honestly stays
 /// Advisory rather than being handed a fabricated tie. The classification itself
 /// is [`build_report`]'s job under the supplied thresholds.
+///
+/// **Contract — all-or-nothing, but diagnosable.** If any metric hits a *hard*
+/// data error (its sample exceeds [`crate::MAX_EXACT_N`], or an observation is
+/// non-finite), the whole report is refused: the caller gets no partial report,
+/// which keeps "these metrics were validated together against this corpus"
+/// honest. Unlike the previous bare-`?` propagation, the refusal now names the
+/// offending metric via [`CorpusMetricError`] so the culprit corpus row is
+/// diagnosable rather than an anonymous "sample size N exceeds cap". Because
+/// `MAX_EXACT_N` is a precondition the corpus is built to satisfy, this rarely
+/// fires — the point is a legible failure, not a hot path.
 pub fn build_report_from_corpus(
     data_source: impl Into<String>,
     corpus: &Corpus,
     thresholds: &GatingThresholds,
-) -> Result<crate::construct::ConstructValidityReport, CorrelationError> {
+) -> Result<crate::construct::ConstructValidityReport, CorpusMetricError> {
     let mut reports = Vec::with_capacity(GATING_CANDIDATES.len());
     for (metric, orientation) in GATING_CANDIDATES {
-        reports.push(correlate_metric(metric, *orientation, corpus)?);
+        let report =
+            correlate_metric(metric, *orientation, corpus).map_err(|source| CorpusMetricError {
+                metric: (*metric).to_string(),
+                source,
+            })?;
+        reports.push(report);
     }
     Ok(build_report(data_source, &reports, thresholds))
 }
@@ -433,6 +472,95 @@ revert rate per repo over mined commits, paired with aoa-audit structure counts)
         assert_eq!(
             from_disk, report,
             "committed artifact must match the pipeline output"
+        );
+    }
+
+    // --- F3b: the report contract on a real data error vs a benign "no tie" ---
+
+    #[test]
+    fn sample_too_large_for_one_metric_names_it_instead_of_discarding() {
+        // 11 repos all carrying ONLY "module_size_outliers" (an early candidate,
+        // retrieval_locality, therefore sees 0 pairs -> TooFewObservations, which
+        // must be ABSORBED as Advisory and NOT abort the loop). The offending
+        // metric produces 11 observation pairs, one past MAX_EXACT_N=10, so
+        // spearman returns SampleTooLarge. The report is refused all-or-nothing,
+        // but the error must NAME the offending metric and its n — not surface a
+        // bare "sample size 11 exceeds cap 10" with no clue which row is at fault.
+        let repos: Vec<Repo> = (0..11)
+            .map(|i| Repo {
+                repo_id: format!("r{i}"),
+                structure_counts: std::collections::BTreeMap::from([(
+                    "module_size_outliers".to_string(),
+                    i as u64,
+                )]),
+                mined_commits: vec![MinedCommit {
+                    sha: format!("s{i}"),
+                    reverted: i % 2 == 0,
+                    churn: i as u64,
+                }],
+            })
+            .collect();
+        let c = Corpus { repos };
+
+        let err = build_report_from_corpus("fixture: oversized", &c, &GatingThresholds::default())
+            .expect_err("a metric past MAX_EXACT_N must refuse the report");
+
+        assert_eq!(
+            err.metric, "module_size_outliers",
+            "the error must name the offending metric"
+        );
+        assert!(
+            matches!(
+                err.source,
+                CorrelationError::SampleTooLarge { n: 11, cap: 10 }
+            ),
+            "source must carry the typed SampleTooLarge with n and cap, got {:?}",
+            err.source
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("module_size_outliers") && msg.contains("sample size 11"),
+            "Display must name metric and n: {msg}"
+        );
+    }
+
+    #[test]
+    fn zero_variance_metric_is_absorbed_as_advisory_not_error() {
+        // A metric that never varies across the corpus yields ZeroVariance from
+        // spearman. That is "no external tie", NOT a data error: the report must
+        // still build (Ok), with the metric honestly Advisory — the absorb path
+        // must not regress into the refuse path.
+        let repos: Vec<Repo> = (0..4)
+            .map(|i| Repo {
+                repo_id: format!("r{i}"),
+                structure_counts: std::collections::BTreeMap::from([(
+                    "unused_import_proxy".to_string(),
+                    5, // constant across every repo -> zero variance
+                )]),
+                mined_commits: vec![MinedCommit {
+                    sha: format!("s{i}"),
+                    reverted: i % 2 == 0, // revert rate varies; only x is constant
+                    churn: 1,
+                }],
+            })
+            .collect();
+        let c = Corpus { repos };
+
+        let report = build_report_from_corpus("fixture: flat", &c, &GatingThresholds::default())
+            .expect("a zero-variance metric is absorbed, not an error");
+        let m = report
+            .metrics
+            .iter()
+            .find(|m| m.metric == "unused_import_proxy")
+            .expect("candidate present");
+        assert_eq!(
+            m.mode,
+            MetricMode::Advisory,
+            "zero-variance metric stays advisory"
+        );
+        assert!(
+            m.correlations.is_empty(),
+            "no tie means no fabricated correlation"
         );
     }
 
