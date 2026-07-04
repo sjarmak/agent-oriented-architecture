@@ -81,8 +81,9 @@ struct EvalRunReport {
     /// Trials that produced a record (excludes failed trials, counted separately).
     record_count: usize,
     error_count: usize,
-    /// Present only when a multi-member workspace was detected under `--repo`
-    /// (aoa-d6t.26). Additive: absent, the schema is unchanged.
+    /// Present only when a multi-member workspace was detected under the
+    /// partition root (`--subtree-root`, defaulting to `--repo`; aoa-d6t.26,
+    /// aoa-d6t.32). Additive: absent, the schema is unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
     subtree_partition: Option<SubtreePartitionInfo>,
     records: Vec<TaskRecord>,
@@ -148,8 +149,9 @@ pub fn run(args: &EvalRunArgs) -> Result<i32> {
         eprintln!("warning: {reason}; all records will score weight=0.0 (R0-ineligible)");
     }
 
-    // Per-subtree scoping (aoa-d6t.26): automatic when the --repo checkout is a
-    // multi-member workspace. The mode switch is logged, never silent.
+    // Per-subtree scoping (aoa-d6t.26): automatic when the partition root
+    // (--subtree-root, defaulting to the --repo checkout) is a multi-member
+    // workspace. The mode switch is logged, never silent.
     let partition = detect_partition(args);
 
     let task_ids = discover_tasks(&args.codeprobe_run)?;
@@ -208,25 +210,45 @@ fn build_graph(args: &EvalRunArgs) -> IndexedRepo {
     }
 }
 
-/// Detect the subtree partition of the `--repo` checkout, when one is given.
+/// Detect the subtree partition of the checkout, when a partition root exists.
 ///
-/// Returns `Some` only for a multi-member workspace — the only case where
-/// per-subtree rows add signal — and logs the automatic mode switch. A
+/// The root is `--subtree-root` when given (aoa-d6t.32: the only source on
+/// `--scip-index` runs, an explicit override otherwise), else the `--repo`
+/// checkout. Returns `Some` only for a multi-member workspace — the only case
+/// where per-subtree rows add signal — and logs the automatic mode switch. A
 /// discovery failure (malformed manifest) is logged and falls back to
-/// repo-wide reporting rather than aborting the run.
+/// repo-wide reporting rather than aborting the run. An explicit
+/// `--subtree-root` that yields no partition (missing directory, or no
+/// multi-member workspace manifest) is likewise surfaced before falling back:
+/// the user asked for it, so dropping it must never be silent. The automatic
+/// `--repo` path stays quiet in that case — no flag was dropped.
 fn detect_partition(args: &EvalRunArgs) -> Option<SubtreePartition> {
-    let repo = args.repo.as_deref()?;
-    match discover_partition(repo) {
+    let explicit = args.subtree_root.as_deref();
+    let root = explicit.or(args.repo.as_deref())?;
+    match discover_partition(root) {
         Ok(partition) if partition.is_partitioned() => {
             eprintln!(
                 "per-subtree metrics enabled: {} workspace members detected via {} in {}",
                 partition.members().len(),
                 partition.source().label(),
-                repo.display()
+                root.display()
             );
             Some(partition)
         }
-        Ok(_) => None,
+        Ok(_) => {
+            if let Some(root) = explicit {
+                let reason = if root.is_dir() {
+                    "no multi-member workspace manifest found"
+                } else {
+                    "not a directory"
+                };
+                eprintln!(
+                    "warning: --subtree-root {}: {reason}; reporting repo-wide metrics only",
+                    root.display()
+                );
+            }
+            None
+        }
         Err(e) => {
             eprintln!("warning: subtree discovery failed ({e}); reporting repo-wide metrics only");
             None

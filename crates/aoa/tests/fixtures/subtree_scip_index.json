@@ -1,0 +1,20 @@
+{
+  "documents": [
+    {
+      "relative_path": "crates/core/src/lib.rs",
+      "occurrences": [
+        { "symbol": "core.lib.entry", "roles": ["definition"] },
+        { "symbol": "legacy.old.helper", "roles": ["reference"], "enclosing": "core.lib.entry" }
+      ]
+    },
+    {
+      "relative_path": "crates/legacy/src/old.rs",
+      "occurrences": [
+        { "symbol": "legacy.old.helper", "roles": ["definition"] }
+      ]
+    }
+  ],
+  "writable": ["core.lib.entry", "legacy.old.helper"],
+  "gold": ["legacy.old.helper"],
+  "invariants": ["legacy.old.helper"]
+}
