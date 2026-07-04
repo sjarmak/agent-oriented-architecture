@@ -128,8 +128,8 @@ impl Corpus {
 pub struct CorpusMetricError {
     /// The [`GATING_CANDIDATES`] metric name whose correlation failed.
     pub metric: String,
-    /// The underlying rank-correlation error, carried verbatim.
-    #[source]
+    /// The underlying rank-correlation error, carried verbatim. thiserror
+    /// treats a field named `source` as the error source automatically.
     pub source: CorrelationError,
 }
 

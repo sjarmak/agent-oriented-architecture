@@ -189,13 +189,13 @@ fn update(repo: &Path, project: &str) -> Result<InitView> {
     let mut files = Vec::new();
 
     for template in TEMPLATES {
-        let (outcome, manifest_entry) = reconcile(repo, template, project, &recorded)?;
+        let (outcome, entry) = reconcile(repo, template, project, &recorded)?;
         match outcome {
             Outcome::Written => view.written.push(template.path.to_string()),
             Outcome::Skipped => view.skipped.push(template.path.to_string()),
             Outcome::Review => view.review.push(format!("{}.new", template.path)),
         }
-        files.extend(manifest_entry);
+        files.extend(entry);
     }
 
     write_manifest(&manifest_path, files)?;
@@ -232,8 +232,8 @@ fn reconcile(
         write_file(&target, &rendered)?;
         return Ok((Outcome::Written, Some(fresh())));
     }
-    let disk = std::fs::read_to_string(&target)
-        .with_context(|| format!("failed to read {}", target.display()))?;
+    let disk =
+        read_nonsymlink(&target).with_context(|| format!("failed to read {}", target.display()))?;
     if disk == rendered {
         return Ok((Outcome::Skipped, Some(fresh())));
     }
@@ -324,11 +324,26 @@ fn manifest_entry(path: &str, rendered: &str) -> ManifestFile {
 }
 
 /// True when the file at `path` reads back byte-for-byte as `rendered`. A read
-/// failure (binary content, unreadable file) means "not our render", so the
-/// pre-existing file is left unadopted — the conservative default that matches
-/// init's never-touch-a-pre-existing-file contract.
+/// failure (binary content, unreadable file, or a symlink) means "not our
+/// render", so the pre-existing file is left unadopted — the conservative
+/// default that matches init's never-touch-a-pre-existing-file contract.
 fn content_equals(path: &Path, rendered: &str) -> bool {
-    std::fs::read_to_string(path).is_ok_and(|disk| disk == rendered)
+    read_nonsymlink(path).is_ok_and(|disk| disk == rendered)
+}
+
+/// Read `path` as a regular file, refusing to follow a symlink. `safe_target`
+/// already rejects a statically-planted symlink before we get here; re-checking
+/// immediately before the read narrows the TOCTOU window so a file swapped for a
+/// symlink mid-run is not followed, keeping the read consistent with the
+/// no-follow invariant `safe_target` documents.
+fn read_nonsymlink(path: &Path) -> std::io::Result<String> {
+    if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "refusing to follow a symlink",
+        ));
+    }
+    std::fs::read_to_string(path)
 }
 
 fn sha256_hex(content: &str) -> String {
@@ -374,4 +389,28 @@ fn render_human(view: &InitView) -> String {
         );
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn read_nonsymlink_refuses_a_symlink_and_does_not_follow_it() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let real = dir.path().join("real.txt");
+        std::fs::write(&real, "secret\n").unwrap();
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        // Reading the symlink is refused (not followed to `real`).
+        let err = read_nonsymlink(&link).expect_err("symlink must be refused");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        // The regular file it points at still reads normally.
+        assert_eq!(read_nonsymlink(&real).unwrap(), "secret\n");
+        // content_equals therefore never adopts a symlinked pre-existing file.
+        assert!(!content_equals(&link, "secret\n"));
+        assert!(content_equals(&real, "secret\n"));
+    }
 }
