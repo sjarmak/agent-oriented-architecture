@@ -238,6 +238,12 @@ pub struct EvalRunArgs {
     #[arg(long, value_name = "DIR")]
     pub repo: Option<PathBuf>,
 
+    /// Partition source for per-subtree metrics: a checkout whose workspace
+    /// manifest names the subtrees. Defaults to `--repo`; the only source on
+    /// `--scip-index` runs, which have no checkout.
+    #[arg(long, value_name = "DIR")]
+    pub subtree_root: Option<PathBuf>,
+
     /// Emit the structured JSON rendering instead of human text.
     #[arg(long)]
     pub json: bool,
