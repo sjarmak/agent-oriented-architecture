@@ -9,9 +9,10 @@
 // Planned and research work is tagged so it renders distinctly from what is
 // already built (see spec.c4 for the tag legend).
 //
-// Elements carry `link`s to their source crate and, where a design decision
-// is documented, to prd_aoa_toolkit.md / premortem_aoa_toolkit.md / report.md,
-// so a reviewer can jump from any box to the code and the rationale behind it.
+// Elements carry `link`s to their source crate so a reviewer can jump from
+// any box straight to the code. The PRD, premortem, and evidence-audited
+// report that shaped this design are gitignored working documents, not part
+// of the published repo, so they are described inline rather than linked.
 
 model {
 
@@ -48,9 +49,6 @@ model {
   aoa = system 'AOA Toolkit' {
     description 'Runs an agent against real tasks mined from a repository, then scores retrieval locality, edit locality, invariant discoverability, and mutation surface'
     link ../README.md 'README — quickstart'
-    link ../prd_aoa_toolkit.md 'PRD'
-    link ../premortem_aoa_toolkit.md 'Premortem — risk registry'
-    link ../report.md 'Evidence-audited report'
 
     cli = container 'aoa CLI' {
       #built
@@ -137,7 +135,6 @@ model {
         #risk
         description 'R0 falsification gate: across at least five held-out repositories, proceeds to migrate only if repo-delta beats harness-delta on held-out success for a majority; a tie defaults to pivot. RISK: premortem’s six independent, mutually blind reviews each broke this gate a different way and five of six scored the failure 12/12 — hardened into R0′ with a robust / abstaining / monitored verdict rather than a one-shot boolean'
         link ../crates/aoa-falsify 'crates/aoa-falsify/'
-        link ../premortem_aoa_toolkit.md 'Premortem — R0 risk registry'
       }
       policy = component 'aoa-policy' {
         #built
