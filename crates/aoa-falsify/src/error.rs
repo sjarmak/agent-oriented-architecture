@@ -20,4 +20,22 @@ pub enum FalsifyError {
     /// The configured determinism replication count must be at least three.
     #[error("k_runs must be >= 3, got {0}")]
     InsufficientReplication(u32),
+
+    /// The input's tasks carry convention inputs of more than one family. One
+    /// experiment scores one task shape; a mixed input cannot be evaluated under
+    /// a single admissible convention set.
+    #[error("convention inputs mix task families; one experiment carries one task shape")]
+    MixedInputFamilies,
+
+    /// A configured convention's family does not match the family of the tasks'
+    /// convention inputs. Scoring would silently admit nothing, so the mismatch
+    /// is an input error, not a verdict.
+    #[error(
+        "convention '{name}' is {convention:?}-family but the task inputs are {input:?}-family"
+    )]
+    ConventionFamilyMismatch {
+        name: String,
+        convention: crate::convention::ConventionFamily,
+        input: crate::convention::ConventionFamily,
+    },
 }

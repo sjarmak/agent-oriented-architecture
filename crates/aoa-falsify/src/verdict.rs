@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::convention::ScoringConvention;
+use crate::convention::{ConventionFamily, ScoringConvention};
 use crate::delta::repo_votes_for_proceed;
 use crate::eligibility::is_eligible;
 use crate::types::{FalsifyConfig, RepoResult};
@@ -62,10 +62,18 @@ pub struct HardenedVerdict {
 /// `Inconclusive` whenever a precondition fails. An `Inconclusive` produced by
 /// any stage is preserved verbatim — it is never mapped onto `Pivot`.
 ///
+/// `family` is the (validated, uniform) family of the tasks' convention inputs;
+/// the canonical convention is built for it so every task is admitted.
+///
 /// Order: eligibility filter -> power precondition -> determinism across runs ->
 /// convention-invariance. The canonical convention is run index 0's base tally.
-pub fn decide(eligible: &[&RepoResult], config: &FalsifyConfig) -> HardenedVerdict {
+pub fn decide(
+    eligible: &[&RepoResult],
+    config: &FalsifyConfig,
+    family: ConventionFamily,
+) -> HardenedVerdict {
     let mut notes = Vec::new();
+    let canonical = ScoringConvention::canonical(family);
 
     if eligible.len() < MIN_ELIGIBLE_REPOS {
         notes.push(format!(
@@ -79,14 +87,12 @@ pub fn decide(eligible: &[&RepoResult], config: &FalsifyConfig) -> HardenedVerdi
         };
     }
 
-    if !power_satisfied(eligible, config, &mut notes) {
+    if !power_satisfied(eligible, config, &canonical, &mut notes) {
         return HardenedVerdict {
             verdict: Verdict::Inconclusive,
             notes,
         };
     }
-
-    let canonical = ScoringConvention::canonical();
 
     let stable = determinism_satisfied(eligible, config, &canonical, &mut notes);
     let base = tally(eligible, 0, &canonical);
@@ -119,10 +125,9 @@ pub fn decide(eligible: &[&RepoResult], config: &FalsifyConfig) -> HardenedVerdi
 fn power_satisfied(
     eligible: &[&RepoResult],
     config: &FalsifyConfig,
+    canonical: &ScoringConvention,
     notes: &mut Vec<String>,
 ) -> bool {
-    let canonical = ScoringConvention::canonical();
-
     for repo in eligible {
         if repo.holdout_size < config.min_holdout_size {
             notes.push(format!(
@@ -135,7 +140,7 @@ fn power_satisfied(
 
     let mut effect_sum = 0.0;
     for repo in eligible {
-        let d = crate::delta::repo_deltas(&repo.runs[0].tasks, &canonical);
+        let d = crate::delta::repo_deltas(&repo.runs[0].tasks, canonical);
         effect_sum += (d.repo_delta - d.harness_delta).abs();
     }
     let effect = effect_sum / eligible.len() as f64;

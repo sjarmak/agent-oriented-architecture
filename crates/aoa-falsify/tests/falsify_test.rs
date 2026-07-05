@@ -2,8 +2,8 @@ use aoa_gap::HeldOutProvenance;
 use aoa_metrics::Confidence;
 
 use aoa_falsify::{
-    falsify, Eligibility, FalsifyConfig, FalsifyError, FalsifyInput, PairTask, RepoResult, RepoRun,
-    Verdict,
+    falsify, ConventionInputs, Eligibility, FalsifyConfig, FalsifyError, FalsifyInput, PairTask,
+    RepoResult, RepoRun, ScoringConvention, Verdict,
 };
 
 /// An eligible repo: high-confidence, native-composed, calibrated.
@@ -23,8 +23,27 @@ fn pair(task_id: u64, repo_ok: bool, harness_ok: bool) -> PairTask {
         is_identical_pair: true,
         repo_held_out_success: repo_ok,
         harness_held_out_success: harness_ok,
-        edit_locality: 0.5,
-        mutation_depth: 1,
+        convention_inputs: ConventionInputs::Edit {
+            edit_locality: 0.5,
+            mutation_depth: 1,
+        },
+    }
+}
+
+/// The answer-task analogue of [`pair`]: focused traces (locality 1.0) at depth
+/// 0 in both arms, admitted by every pre-registered answer convention.
+fn answer_pair(task_id: u64, repo_ok: bool, harness_ok: bool) -> PairTask {
+    PairTask {
+        task_id,
+        is_identical_pair: true,
+        repo_held_out_success: repo_ok,
+        harness_held_out_success: harness_ok,
+        convention_inputs: ConventionInputs::Answer {
+            repo_trace_locality: 1.0,
+            harness_trace_locality: 1.0,
+            repo_trace_reach_depth: 0,
+            harness_trace_reach_depth: 0,
+        },
     }
 }
 
@@ -371,4 +390,107 @@ fn too_few_repos_is_error() {
         .collect();
     let err = falsify(&input(repos)).unwrap_err();
     assert_eq!(err, FalsifyError::TooFewRepos(4));
+}
+
+// --- answer-task convention family (pre-registered 2026-07-04, aoa-dhk.1) ----
+
+/// A repo of answer-shaped pairs, stable across `k_runs` and eligible.
+fn answer_repo(id: &str, tasks: Vec<PairTask>) -> RepoResult {
+    RepoResult {
+        repo_id: id.to_string(),
+        eligibility: eligible(),
+        runs: stable_runs(3, tasks),
+        holdout_size: 40,
+    }
+}
+
+fn answer_input(repos: Vec<RepoResult>) -> FalsifyInput {
+    FalsifyInput {
+        repos,
+        config: FalsifyConfig {
+            conventions: ScoringConvention::admissible_answer(),
+            ..FalsifyConfig::default()
+        },
+    }
+}
+
+/// Answer-shaped inputs score end to end under the answer convention set, and
+/// the report names the family and the trace-convention names as data.
+#[test]
+fn answer_family_scores_and_reports_family_as_data() {
+    let repos: Vec<RepoResult> = (0..5)
+        .map(|i| answer_repo(&format!("r{i}"), vec![answer_pair(1, true, false)]))
+        .collect();
+
+    let report = falsify(&answer_input(repos)).expect("falsify runs");
+    assert_eq!(report.verdict, Verdict::Proceed);
+
+    let value: serde_json::Value = serde_json::from_str(&report.to_json().unwrap()).unwrap();
+    assert_eq!(value["convention_family"], "answer");
+    assert!(report
+        .conventions_tried
+        .contains(&"trace_locality_floor".to_string()));
+    assert!(report
+        .conventions_tried
+        .contains(&"trace_reach_depth_k".to_string()));
+}
+
+/// A deep (or unreachable) trace-reach in EITHER arm drops the task under the
+/// depth-k convention; a proceed that depends on such tasks flips and the
+/// verdict downgrades to inconclusive.
+#[test]
+fn answer_depth_flip_downgrades_to_inconclusive() {
+    // Per repo: a repo-arm win whose harness-arm trace never reaches the oracle
+    // chain (unreachable depth), plus a shallow harness-arm win. Canonical: 0.5
+    // vs 0.5, tie => every repo votes proceed. Under trace_reach_depth_k only
+    // the shallow harness win is admitted => the vote flips => inconclusive.
+    let deep_repo_win = PairTask {
+        convention_inputs: ConventionInputs::Answer {
+            repo_trace_locality: 1.0,
+            harness_trace_locality: 1.0,
+            repo_trace_reach_depth: 0,
+            harness_trace_reach_depth: aoa_falsify::UNREACHABLE_TRACE_REACH_DEPTH,
+        },
+        ..answer_pair(1, true, false)
+    };
+    let shallow_harness_win = answer_pair(2, false, true);
+    let repos: Vec<RepoResult> = (0..5)
+        .map(|i| answer_repo(&format!("r{i}"), vec![deep_repo_win, shallow_harness_win]))
+        .collect();
+
+    let report = falsify(&answer_input(repos)).expect("falsify runs");
+    assert_eq!(report.verdict, Verdict::Inconclusive);
+    assert!(report
+        .notes
+        .iter()
+        .any(|n| n.contains("trace_reach_depth_k")));
+}
+
+/// Tasks carrying convention inputs of both families in one input are a
+/// structural error — never scored under a single convention set.
+#[test]
+fn mixed_input_families_are_an_error() {
+    let mut repos: Vec<RepoResult> = (0..4)
+        .map(|i| repo(&format!("r{i}"), true, false))
+        .collect();
+    repos.push(answer_repo("r4", vec![answer_pair(1, true, false)]));
+
+    let err = falsify(&input(repos)).unwrap_err();
+    assert_eq!(err, FalsifyError::MixedInputFamilies);
+}
+
+/// A convention set whose family does not match the tasks' inputs is a
+/// structural error — otherwise every convention would silently admit nothing.
+#[test]
+fn convention_family_mismatch_is_an_error() {
+    // Edit-family default conventions over answer-shaped tasks.
+    let repos: Vec<RepoResult> = (0..5)
+        .map(|i| answer_repo(&format!("r{i}"), vec![answer_pair(1, true, false)]))
+        .collect();
+
+    let err = falsify(&input(repos)).unwrap_err();
+    assert!(matches!(
+        err,
+        FalsifyError::ConventionFamilyMismatch { .. }
+    ));
 }
