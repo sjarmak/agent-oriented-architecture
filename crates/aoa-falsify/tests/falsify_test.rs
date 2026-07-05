@@ -435,6 +435,102 @@ fn answer_family_scores_and_reports_family_as_data() {
         .contains(&"trace_reach_depth_k".to_string()));
 }
 
+/// TOTAL exclusion is a failed precondition, not vacuous invariance: when a
+/// configured convention admits ZERO pairs (every repo's harness trace-reach
+/// saturates beyond depth-k), the gate must abstain naming the convention.
+/// Regression: the zero-admission deltas used to compare `0.0 >= 0.0`, so every
+/// repo "voted proceed" under the all-excluding convention and the invariance
+/// check passed on no evidence.
+#[test]
+fn answer_total_exclusion_under_depth_k_is_inconclusive_not_proceed() {
+    let saturated = PairTask {
+        convention_inputs: ConventionInputs::Answer {
+            repo_trace_locality: 1.0,
+            harness_trace_locality: 1.0,
+            repo_trace_reach_depth: 0,
+            harness_trace_reach_depth: aoa_falsify::UNREACHABLE_TRACE_REACH_DEPTH,
+        },
+        ..answer_pair(1, true, false)
+    };
+    let repos: Vec<RepoResult> = (0..5)
+        .map(|i| answer_repo(&format!("r{i}"), vec![saturated]))
+        .collect();
+
+    let report = falsify(&answer_input(repos)).expect("falsify runs");
+    assert_eq!(report.verdict, Verdict::Inconclusive);
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n.contains("trace_reach_depth_k") && n.contains("zero")),
+        "abstention must name the all-excluding convention, got {:?}",
+        report.notes
+    );
+}
+
+/// The edit family closes the same hole: pairs all deeper than the
+/// mutation-surface depth-k bound leave that convention with zero admissions,
+/// and the verdict abstains instead of proceeding.
+#[test]
+fn edit_total_exclusion_under_depth_k_is_inconclusive_not_proceed() {
+    let deep = PairTask {
+        convention_inputs: ConventionInputs::Edit {
+            edit_locality: 0.5,
+            mutation_depth: 10,
+        },
+        ..pair(1, true, false)
+    };
+    let repos: Vec<RepoResult> = (0..5)
+        .map(|i| RepoResult {
+            repo_id: format!("r{i}"),
+            eligibility: eligible(),
+            runs: stable_runs(3, vec![deep]),
+            holdout_size: 40,
+        })
+        .collect();
+
+    let report = falsify(&input(repos)).expect("falsify runs");
+    assert_eq!(report.verdict, Verdict::Inconclusive);
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n.contains("mutation_surface_depth_k") && n.contains("zero")),
+        "abstention must name the all-excluding convention, got {:?}",
+        report.notes
+    );
+}
+
+/// A repo whose runs carry no identical-pair tasks casts no vote even under the
+/// canonical convention: the base tally abstains rather than counting the empty
+/// repo as a proceed vote.
+#[test]
+fn repo_with_zero_identical_pairs_cannot_vote() {
+    let mut non_paired = pair(1, true, false);
+    non_paired.is_identical_pair = false;
+
+    let mut repos: Vec<RepoResult> = (0..4)
+        .map(|i| repo(&format!("r{i}"), true, false))
+        .collect();
+    repos.push(RepoResult {
+        repo_id: "empty".to_string(),
+        eligibility: eligible(),
+        runs: stable_runs(3, vec![non_paired]),
+        holdout_size: 40,
+    });
+
+    let report = falsify(&input(repos)).expect("falsify runs");
+    assert_eq!(report.verdict, Verdict::Inconclusive);
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n.contains("empty") && n.contains("canonical")),
+        "abstention must name the evidence-free repo, got {:?}",
+        report.notes
+    );
+}
+
 /// A deep (or unreachable) trace-reach in EITHER arm drops the task under the
 /// depth-k convention; a proceed that depends on such tasks flips and the
 /// verdict downgrades to inconclusive.

@@ -18,7 +18,9 @@ pub struct RepoDeltas {
 ///
 /// Only identical-pair tasks the convention admits contribute; non-paired tasks
 /// and tasks excluded by the convention are dropped. With no admitted tasks both
-/// deltas are zero (no evidence is not negative evidence).
+/// deltas are zero and `admitted` is zero — callers MUST read `admitted` and
+/// treat that as absent evidence (see [`repo_votes_for_proceed`]), never as a
+/// `0.0 >= 0.0` tie that favors proceed.
 pub fn repo_deltas(tasks: &[PairTask], convention: &ScoringConvention) -> RepoDeltas {
     let admitted: Vec<&PairTask> = tasks
         .iter()
@@ -49,7 +51,54 @@ pub fn repo_deltas(tasks: &[PairTask], convention: &ScoringConvention) -> RepoDe
 
 /// Whether a repo votes "repo arm wins" under one convention: its repo-delta is
 /// at least its harness-delta on its admitted identical-pair tasks.
-pub fn repo_votes_for_proceed(tasks: &[PairTask], convention: &ScoringConvention) -> bool {
+///
+/// `None` when the convention admits zero of the repo's pairs: a repo with no
+/// admitted evidence casts NO vote. (Comparing the zero deltas would read
+/// `0.0 >= 0.0` as a proceed vote, letting a convention that excludes
+/// everything pass R0' convention-invariance vacuously.)
+pub fn repo_votes_for_proceed(tasks: &[PairTask], convention: &ScoringConvention) -> Option<bool> {
     let d = repo_deltas(tasks, convention);
-    d.repo_delta >= d.harness_delta
+    if d.admitted == 0 {
+        return None;
+    }
+    Some(d.repo_delta >= d.harness_delta)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::ConventionInputs;
+
+    fn answer_pair(harness_depth: u32) -> PairTask {
+        PairTask {
+            task_id: 1,
+            is_identical_pair: true,
+            repo_held_out_success: true,
+            harness_held_out_success: false,
+            convention_inputs: ConventionInputs::Answer {
+                repo_trace_locality: 1.0,
+                harness_trace_locality: 1.0,
+                repo_trace_reach_depth: 0,
+                harness_trace_reach_depth: harness_depth,
+            },
+        }
+    }
+
+    /// Zero admitted pairs is absent evidence (no vote), never a proceed vote.
+    #[test]
+    fn zero_admitted_pairs_casts_no_vote() {
+        let depth_k = ScoringConvention::admissible_answer()
+            .into_iter()
+            .find(|c| c.name == "trace_reach_depth_k")
+            .unwrap();
+
+        // The single pair saturates harness reach: depth-k admits nothing.
+        let tasks = vec![answer_pair(u32::MAX)];
+        assert_eq!(repo_deltas(&tasks, &depth_k).admitted, 0);
+        assert_eq!(repo_votes_for_proceed(&tasks, &depth_k), None);
+
+        // The same pair within the bound is admitted and votes.
+        let tasks = vec![answer_pair(0)];
+        assert_eq!(repo_votes_for_proceed(&tasks, &depth_k), Some(true));
+    }
 }
