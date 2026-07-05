@@ -21,6 +21,7 @@ mod record;
 mod retrieval;
 mod scoped;
 mod subtree;
+mod trace_locality;
 
 pub use common::ConditionedOn;
 pub use edit::{compute_edit_locality, EditLocality};
@@ -32,3 +33,7 @@ pub use record::{compute_metrics, MetricRecord};
 pub use retrieval::{compute_retrieval_locality, RetrievalLocality};
 pub use scoped::{compute_subtree_metrics, SubtreeMetrics};
 pub use subtree::{discover_partition, SubtreeError, SubtreePartition, WorkspaceSource};
+pub use trace_locality::{
+    compute_trace_convention_inputs, match_repo_relative, trace_footprint, TraceConventionInputs,
+    TraceInputError, TraceReach,
+};
