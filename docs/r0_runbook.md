@@ -159,6 +159,25 @@ oracle (held-out provenance) — never declared. A repo that is not
 high-confidence **and** native-composed **and** calibrated is reported as
 *excluded* and casts no vote (R-silent).
 
+**R11 scope note for answer-shaped tasks (pre-registered 2026-07-05, before
+any campaign arm ran).** The `calibrated` assertion attests *scoring
+validity*. R11's curator-calibration gate (two independent curators, Pearson
+≥ 0.6 over a ≥100-row holdout) validates *subjective curator ratings*, the
+scoring basis for PR-mined SDLC tasks. Answer-shaped comprehension tasks are
+scored `dual_composite` against oracles that are mechanically derived and
+consensus-verified by two independent backends (regex + AST graph; witness
+chains certified hop-by-hop by both) — the verdict path consumes no curator
+score anywhere. For `task_shape: "answer"` repos, `calibrated: true` is
+therefore backed by that mechanical consensus verification, declared as
+`calibrated_basis: "consensus-verified-answer-oracles-r11-scope-note-2026-07-05"`
+in the manifest. Two curator-calibration attempts on this corpus were run
+anyway and both honestly rejected (Pearson 0.132 with a variance-collapsed
+haiku rater, then 0.258 with sonnet×opus genuinely disagreeing); they are
+documented verbatim in the campaign's `CALIBRATION_TRACK.md` and do not back
+the assertion — the consensus verification does. This note reinterprets
+nothing for edit-shaped tasks: PR-mined corpora still require the curator
+gate.
+
 **Pre-registered gate parameters** (the values the campaign runs with):
 
 - `k_runs: 3` — the K≥3 determinism floor. The gate hard-errors below 3; the
