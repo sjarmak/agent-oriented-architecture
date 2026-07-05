@@ -38,4 +38,17 @@ pub enum FalsifyError {
         convention: crate::convention::ConventionFamily,
         input: crate::convention::ConventionFamily,
     },
+
+    /// The configured conventions are not, structurally, the pre-registered
+    /// admissible set for the input's family. A hand-edited threshold, depth,
+    /// weight, or a dropped/added convention would be invisible behind the
+    /// convention names, so anything but the exact pre-registered set is an
+    /// input error — there is no override.
+    #[error(
+        "configured conventions do not match the pre-registered {family:?}-family admissible \
+         set; the pre-registered set is the only admissible set (no override)"
+    )]
+    ConventionSetNotPreRegistered {
+        family: crate::convention::ConventionFamily,
+    },
 }

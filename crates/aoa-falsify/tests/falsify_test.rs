@@ -257,7 +257,8 @@ fn convention_invariance_flip_downgrades_to_inconclusive() {
     // Conventions are emitted as data.
     assert!(report
         .conventions_tried
-        .contains(&"alternative_metric_weights".to_string()));
+        .iter()
+        .any(|c| c.name == "alternative_metric_weights"));
 }
 
 /// Criterion 6: ineligible repos (low-confidence / reconstructed) do not vote.
@@ -429,10 +430,83 @@ fn answer_family_scores_and_reports_family_as_data() {
     assert_eq!(value["convention_family"], "answer");
     assert!(report
         .conventions_tried
-        .contains(&"trace_locality_floor".to_string()));
+        .iter()
+        .any(|c| c.name == "trace_locality_floor"));
     assert!(report
         .conventions_tried
-        .contains(&"trace_reach_depth_k".to_string()));
+        .iter()
+        .any(|c| c.name == "trace_reach_depth_k"));
+}
+
+/// falsification.json emits every convention's FULL parameters, not just names:
+/// a reader can verify the thresholds, depths, and weights actually applied.
+#[test]
+fn report_emits_full_convention_parameters() {
+    let repos: Vec<RepoResult> = (0..5)
+        .map(|i| answer_repo(&format!("r{i}"), vec![answer_pair(1, true, false)]))
+        .collect();
+
+    let report = falsify(&answer_input(repos)).expect("falsify runs");
+    let value: serde_json::Value = serde_json::from_str(&report.to_json().unwrap()).unwrap();
+    let conventions = value["conventions_tried"].as_array().expect("array");
+    assert_eq!(conventions.len(), 4);
+
+    let depth_k = conventions
+        .iter()
+        .find(|c| c["name"] == "trace_reach_depth_k")
+        .expect("depth-k present");
+    assert_eq!(depth_k["max_depth"], 3);
+    assert_eq!(depth_k["locality_threshold"], 0.0);
+
+    let weights = conventions
+        .iter()
+        .find(|c| c["name"] == "alternative_metric_weights")
+        .expect("weights present");
+    assert_eq!(weights["repo_weight"], 0.75);
+    assert_eq!(weights["harness_weight"], 1.25);
+}
+
+/// A hand-edited convention set — tampered threshold/depth behind unchanged
+/// names, or a dropped entry — is a structural error. The pre-registered
+/// admissible set is the only set the gate accepts; there is no override.
+#[test]
+fn tampered_convention_set_is_a_structural_error() {
+    let repos: Vec<RepoResult> = (0..5)
+        .map(|i| answer_repo(&format!("r{i}"), vec![answer_pair(1, true, false)]))
+        .collect();
+
+    // The demonstrated tamper: strengthen the floor and zero the depth bound.
+    let mut tampered = ScoringConvention::admissible_answer();
+    tampered[0].locality_threshold = 0.9;
+    tampered[2].max_depth = 0;
+    let err = falsify(&FalsifyInput {
+        repos: repos.clone(),
+        config: FalsifyConfig {
+            conventions: tampered,
+            ..FalsifyConfig::default()
+        },
+    })
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        FalsifyError::ConventionSetNotPreRegistered { .. }
+    ));
+
+    // A subset (dropped convention) is equally inadmissible.
+    let mut subset = ScoringConvention::admissible_answer();
+    subset.pop();
+    let err = falsify(&FalsifyInput {
+        repos,
+        config: FalsifyConfig {
+            conventions: subset,
+            ..FalsifyConfig::default()
+        },
+    })
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        FalsifyError::ConventionSetNotPreRegistered { .. }
+    ));
 }
 
 /// TOTAL exclusion is a failed precondition, not vacuous invariance: when a

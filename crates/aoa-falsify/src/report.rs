@@ -26,8 +26,10 @@ pub struct FalsifyReport {
     /// The task-shape family of the convention inputs the verdict was computed
     /// over — `edit` (SDLC tasks) or `answer` (comprehension tasks).
     pub convention_family: ConventionFamily,
-    /// The admissible conventions the verdict was checked against, as data.
-    pub conventions_tried: Vec<String>,
+    /// The admissible conventions the verdict was checked against, with FULL
+    /// parameters (thresholds, depths, weights) — names alone cannot show a
+    /// tampered set, so the whole pre-registered data is emitted.
+    pub conventions_tried: Vec<ScoringConvention>,
     pub notes: Vec<String>,
 }
 
@@ -38,13 +40,21 @@ impl FalsifyReport {
     }
 }
 
-/// Derive the single task-shape family of the input and validate it.
+/// Derive the single task-shape family of the input and validate the
+/// configured conventions against it.
 ///
 /// Every task's `convention_inputs` must carry the same family, and every
 /// configured convention must score that family — otherwise scoring would
 /// silently admit nothing (or the wrong things), so both are input errors. An
 /// input with no tasks at all defaults to `Edit`; no admission decision is ever
 /// taken on it.
+///
+/// Beyond the family, the configured set must structurally EQUAL the
+/// pre-registered admissible set for that family
+/// ([`ScoringConvention::admissible_edit`] / [`admissible_answer`]
+/// (ScoringConvention::admissible_answer)): a hand-edited threshold, depth, or
+/// weight hides behind an unchanged name, so nothing but the exact
+/// pre-registered data is accepted. There is deliberately no override flag.
 fn validated_family(input: &FalsifyInput) -> Result<ConventionFamily, FalsifyError> {
     let mut family: Option<ConventionFamily> = None;
     for repo in &input.repos {
@@ -70,6 +80,13 @@ fn validated_family(input: &FalsifyInput) -> Result<ConventionFamily, FalsifyErr
                 input: family,
             });
         }
+    }
+    let admissible = match family {
+        ConventionFamily::Edit => ScoringConvention::admissible_edit(),
+        ConventionFamily::Answer => ScoringConvention::admissible_answer(),
+    };
+    if input.config.conventions != admissible {
+        return Err(FalsifyError::ConventionSetNotPreRegistered { family });
     }
     Ok(family)
 }
@@ -119,12 +136,7 @@ pub fn falsify(input: &FalsifyInput) -> Result<FalsifyReport, FalsifyError> {
         eligible_repos: eligible.iter().map(|r| r.repo_id.clone()).collect(),
         excluded_repos: excluded.iter().map(|r| r.repo_id.clone()).collect(),
         convention_family: family,
-        conventions_tried: input
-            .config
-            .conventions
-            .iter()
-            .map(|c| c.name.clone())
-            .collect(),
+        conventions_tried: input.config.conventions.clone(),
         notes: hardened.notes,
     })
 }

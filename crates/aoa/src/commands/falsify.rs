@@ -24,7 +24,9 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use aoa_falsify::{ConventionFamily, FalsifyError, FalsifyInput, FalsifyReport, Verdict};
+use aoa_falsify::{
+    ConventionFamily, FalsifyError, FalsifyInput, FalsifyReport, ScoringConvention, Verdict,
+};
 
 use crate::cli::FalsifyArgs;
 use crate::commands::fsutil::{read_to_string_capped, MAX_JSON_BYTES};
@@ -89,8 +91,10 @@ struct FalsificationOutput {
     /// precondition blocked the gate before scoring.
     #[serde(skip_serializing_if = "Option::is_none")]
     convention_family: Option<ConventionFamily>,
+    /// The conventions evaluated, with full parameters (names alone cannot show
+    /// a tampered set — see `FalsifyReport::conventions_tried`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    conventions_tried: Vec<String>,
+    conventions_tried: Vec<ScoringConvention>,
     notes: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     bias_warnings: Vec<BiasWarning>,

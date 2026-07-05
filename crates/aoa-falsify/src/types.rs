@@ -125,6 +125,10 @@ pub struct FalsifyConfig {
     /// and no significant verdict may be returned.
     pub min_effect_size: f64,
     /// The admissible scoring conventions the verdict must be invariant across.
+    /// Must structurally equal the pre-registered set for the input's family
+    /// ([`ScoringConvention::admissible_edit`] or
+    /// [`ScoringConvention::admissible_answer`]); the gate hard-errors on any
+    /// other set so hand-edited parameters cannot hide behind the names.
     pub conventions: Vec<ScoringConvention>,
 }
 
