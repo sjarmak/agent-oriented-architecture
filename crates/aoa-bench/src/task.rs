@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use aoa_gap::HeldOutProvenance;
 
+use crate::oracle::OracleChainFacts;
 use crate::provenance::classify_provenance;
 
 /// One independently-mined backend's accepted answer, with its identity.
@@ -45,6 +46,10 @@ pub struct CodeprobeTask {
     /// One entry per independently-mined backend that agreed in consensus mining.
     /// Two or more distinct backend identities make the task `NativeComposed`.
     pub accepted_solutions: Vec<AcceptedSolution>,
+    /// The raw oracle-chain references for answer-shaped comprehension tasks
+    /// (file-list answer, consensus files, defining file, symbol). Empty/default
+    /// for edit-shaped tasks; see [`OracleChainFacts::resolve`].
+    pub oracle_chain: OracleChainFacts,
 }
 
 impl CodeprobeTask {

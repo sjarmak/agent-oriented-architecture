@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::error::BenchError;
+use crate::oracle::OracleChainFacts;
 use crate::task::{AcceptedSolution, CodeprobeTask};
 
 /// Load a codeprobe task directory into AOA task inputs.
@@ -39,6 +40,7 @@ pub fn load_task(dir: impl AsRef<Path>) -> Result<CodeprobeTask, BenchError> {
         oracle_files: gt.oracle_files,
         ground_truth_commit: manifest.ground_truth_commit.or(gt.commit),
         accepted_solutions: gt.accepted_solutions,
+        oracle_chain: gt.oracle_chain,
     })
 }
 
@@ -144,6 +146,30 @@ struct GroundTruthFile {
     /// where the org-scale `metadata.json` block is absent.
     #[serde(default)]
     commit: Option<String>,
+    /// comprehension-v1 answer payload (file list, boolean, text or count).
+    #[serde(default)]
+    answer: serde_json::Value,
+    /// comprehension-v1 answer type; `"file_list"` marks `answer` as file paths.
+    #[serde(default)]
+    answer_type: Option<String>,
+}
+
+impl GroundTruthFile {
+    /// The comprehension-v1 answer files: `answer` entries when the recorded
+    /// `answer_type` is `file_list`. Any other answer type carries no file
+    /// references, and non-string entries are ignored rather than guessed at.
+    fn answer_files(&self) -> BTreeSet<String> {
+        if self.answer_type.as_deref() != Some("file_list") {
+            return BTreeSet::new();
+        }
+        self.answer
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str())
+            .map(str::to_owned)
+            .collect()
+    }
 }
 
 /// The oracle facts resolved from a task's ground-truth files.
@@ -152,6 +178,8 @@ struct GroundTruth {
     accepted_solutions: Vec<AcceptedSolution>,
     /// History commit recorded alongside the file-list oracle, if any.
     commit: Option<String>,
+    /// Answer-task oracle-chain references (comprehension-v1 + consensus.v1).
+    oracle_chain: OracleChainFacts,
 }
 
 /// Resolve the oracle file set, the per-backend accepted solutions, and the
@@ -174,12 +202,22 @@ fn read_ground_truth(dir: &Path, manifest: &Manifest) -> Result<GroundTruth, Ben
     };
     let commit = meaningful_commit(canonical.as_ref().and_then(|gt| gt.commit.clone()));
 
-    let accepted_solutions = read_accepted_backends(dir)?;
+    let divergence = read_divergence(dir)?;
+    let oracle_chain = OracleChainFacts {
+        answer_files: canonical
+            .as_ref()
+            .map(GroundTruthFile::answer_files)
+            .unwrap_or_default(),
+        consensus_files: divergence.consensus_files,
+        defining_file: divergence.defining_file,
+        symbol: divergence.symbol,
+    };
 
     Ok(GroundTruth {
         oracle_files,
-        accepted_solutions,
+        accepted_solutions: divergence.accepted_solutions,
         commit,
+        oracle_chain,
     })
 }
 
@@ -196,6 +234,16 @@ struct DivergenceReport {
     decision: String,
     #[serde(default)]
     backend_results: Vec<BackendResult>,
+    /// The symbol the question is about (module pair, file-qualified symbol,
+    /// or dotted member) — an answer-task oracle-chain reference.
+    #[serde(default)]
+    symbol: Option<String>,
+    /// The file defining the symbol, when the miner recorded one.
+    #[serde(default)]
+    defining_file: Option<String>,
+    /// The agreed consensus file set.
+    #[serde(default)]
+    consensus_files: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -210,7 +258,19 @@ struct BackendResult {
     error: Option<String>,
 }
 
-/// Read the per-backend accepted solutions from `divergence_report.json`.
+/// The divergence-report facts the loader consumes: the per-backend accepted
+/// solutions plus the answer-task oracle-chain references. Default (empty) for
+/// an absent or quarantined report — a task the consensus gate did not ship
+/// carries neither native accepted solutions nor a usable oracle chain.
+#[derive(Default)]
+struct DivergenceFacts {
+    accepted_solutions: Vec<AcceptedSolution>,
+    consensus_files: BTreeSet<String>,
+    defining_file: Option<String>,
+    symbol: Option<String>,
+}
+
+/// Read `divergence_report.json` into the facts the loader consumes.
 ///
 /// This is codeprobe's authoritative record of independent multi-backend mining
 /// (schema `consensus.v1`): each backend's own file-set, plus the `decision`
@@ -223,11 +283,13 @@ struct BackendResult {
 /// Note: each backend's own `files` are used (the spread edit-locality needs),
 /// NOT the report's `consensus_files` (the agreed intersection). `G_t` comes
 /// separately from `ground_truth.json`; in a real codeprobe task both derive from
-/// one `ConsensusDecision`, so they agree by construction at mine time.
-fn read_accepted_backends(dir: &Path) -> Result<Vec<AcceptedSolution>, BenchError> {
+/// one `ConsensusDecision`, so they agree by construction at mine time. The
+/// `consensus_files`/`defining_file`/`symbol` fields feed the answer-task
+/// oracle chain instead (`OracleChainFacts`).
+fn read_divergence(dir: &Path) -> Result<DivergenceFacts, BenchError> {
     let path = dir.join("divergence_report.json");
     if !path.exists() {
-        return Ok(Vec::new());
+        return Ok(DivergenceFacts::default());
     }
     let raw = read_file(&path)?;
     let report: DivergenceReport =
@@ -237,7 +299,7 @@ fn read_accepted_backends(dir: &Path) -> Result<Vec<AcceptedSolution>, BenchErro
         })?;
 
     if report.decision != "shipped" {
-        return Ok(Vec::new());
+        return Ok(DivergenceFacts::default());
     }
 
     // Keep every usable backend identity — available, errored-free, named. File
@@ -246,7 +308,7 @@ fn read_accepted_backends(dir: &Path) -> Result<Vec<AcceptedSolution>, BenchErro
     // empty file-set would let AOA silently demote a shipped consensus to None.
     // Empty solutions are dropped downstream by `accepted_solution_files`, where
     // edit-locality (which needs a real spread) actually cares.
-    let solutions = report
+    let accepted_solutions = report
         .backend_results
         .into_iter()
         .filter(|b| b.available && b.error.is_none() && !b.backend.is_empty())
@@ -255,7 +317,12 @@ fn read_accepted_backends(dir: &Path) -> Result<Vec<AcceptedSolution>, BenchErro
             files: b.files.into_iter().collect(),
         })
         .collect();
-    Ok(solutions)
+    Ok(DivergenceFacts {
+        accepted_solutions,
+        consensus_files: report.consensus_files.into_iter().collect(),
+        defining_file: report.defining_file.filter(|f| !f.trim().is_empty()),
+        symbol: report.symbol.filter(|s| !s.trim().is_empty()),
+    })
 }
 
 /// Keep a `ground_truth_commit` only if it anchors the oracle to a real mined
@@ -415,8 +482,12 @@ mod tests {
         )
         .unwrap();
 
-        let solutions = read_accepted_backends(&dir).unwrap();
-        let backends: Vec<&str> = solutions.iter().map(|s| s.backend.as_str()).collect();
+        let facts = read_divergence(&dir).unwrap();
+        let backends: Vec<&str> = facts
+            .accepted_solutions
+            .iter()
+            .map(|s| s.backend.as_str())
+            .collect();
         // The two agreeing backends are kept (identical files and all); the
         // unavailable/errored one is dropped.
         assert_eq!(backends, vec!["ast", "treesitter"]);
@@ -521,6 +592,25 @@ mod tests {
             task.held_out_provenance(),
             HeldOutProvenance::NativeComposed
         );
+        // The answer-task oracle-chain references are lifted from the same
+        // artifacts: the file_list answer, the consensus files, the defining
+        // file, and the symbol.
+        assert!(task
+            .oracle_chain
+            .answer_files
+            .contains("tests/test_decorators.py"));
+        assert!(task
+            .oracle_chain
+            .consensus_files
+            .contains("tests/test_schema.py"));
+        assert_eq!(
+            task.oracle_chain.defining_file.as_deref(),
+            Some("tests/base.py")
+        );
+        assert_eq!(
+            task.oracle_chain.symbol.as_deref(),
+            Some("tests.base.validate")
+        );
 
         fs::remove_dir_all(&dir).ok();
     }
@@ -530,17 +620,20 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("aoa-bench-quar-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         // Absent report → empty.
-        assert!(read_accepted_backends(&dir).unwrap().is_empty());
-        // Quarantined report (backends disagreed) → empty, regardless of count.
+        assert!(read_divergence(&dir).unwrap().accepted_solutions.is_empty());
+        // Quarantined report (backends disagreed) → empty facts across the
+        // board: no accepted solutions AND no oracle-chain references.
         fs::write(
             dir.join("divergence_report.json"),
-            r#"{"decision": "quarantined", "backend_results": [
+            r#"{"decision": "quarantined", "symbol": "pkg.mod", "backend_results": [
                 {"backend": "ast", "available": true, "files": ["a.py"], "error": null},
                 {"backend": "treesitter", "available": true, "files": ["z.py"], "error": null}
             ]}"#,
         )
         .unwrap();
-        assert!(read_accepted_backends(&dir).unwrap().is_empty());
+        let facts = read_divergence(&dir).unwrap();
+        assert!(facts.accepted_solutions.is_empty());
+        assert_eq!(facts.symbol, None);
 
         fs::remove_dir_all(&dir).ok();
     }

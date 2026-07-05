@@ -20,10 +20,12 @@
 mod bridge;
 mod error;
 mod loader;
+mod oracle;
 mod provenance;
 mod task;
 
 pub use bridge::EditLocalityAnchors;
 pub use error::BenchError;
 pub use loader::load_task;
+pub use oracle::OracleChainFacts;
 pub use task::{AcceptedSolution, CodeprobeTask};

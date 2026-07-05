@@ -57,6 +57,7 @@ mod tests {
             oracle_files: oracle.iter().map(|f| f.to_string()).collect(),
             ground_truth_commit: commit.map(str::to_string),
             accepted_solutions: accepted,
+            oracle_chain: Default::default(),
         }
     }
 
