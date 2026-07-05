@@ -98,6 +98,11 @@ struct RepoManifest {
     /// Vendored SCIP JSON index for this repo (the `aoa eval run --scip-index`
     /// form), resolved relative to the manifest. Required for `answer` shape;
     /// rejected otherwise (it would silently do nothing).
+    ///
+    /// Pinned to the BASELINE-arm (pre-migration) repo state: one shared
+    /// universe measures both arms symmetrically, and migration-added files are
+    /// intentionally out-of-universe for both arms — see `docs/r0_runbook.md`
+    /// § "Which SCIP index (pinned)".
     #[serde(default)]
     scip_index: Option<PathBuf>,
     runs: Vec<RunManifest>,

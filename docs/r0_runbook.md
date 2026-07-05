@@ -140,7 +140,7 @@ the manifest file.
       "confidence": "high",     // operator assertion: SCIP-grade index. REQUIRED — no default.
       "calibrated": true,       // operator assertion: scoring calibrated. REQUIRED — no default.
       "task_shape": "answer",   // comprehension tasks; REQUIRES scip_index. Default: "edit".
-      "scip_index": "../org-widget/index.aoa.json",  // vendored SCIP JSON, relative to the manifest
+      "scip_index": "../org-widget/index.aoa.json",  // vendored SCIP JSON of the BASELINE repo state (pinned; see the convention-set section)
       "runs": [
         { "seed": 1, "repo_arm": "seed1/aoa_migrated", "harness_arm": "seed1/harness_swap" },
         { "seed": 2, "repo_arm": "seed2/aoa_migrated", "harness_arm": "seed2/harness_swap" },
@@ -201,6 +201,15 @@ analogues are defined from what a comprehension trial actually produces:
   (module pairs `a->b`, file-qualified `path::member`, dotted names) — resolved
   against the same universe (`aoa_bench::OracleChainFacts::resolve`);
 
+**Which SCIP index (pinned): always the baseline-arm index.** The manifest's
+single `scip_index` per repo supplies the file universe and symbol graph for
+BOTH arms' measurements, and it is the index of the **baseline (pre-migration)
+repo state** — never the migrated checkout's. Rationale: `|T ∩ O| / |T|` and
+reach are only comparable across arms when both footprints and the oracle chain
+resolve against one shared universe (symmetric measurement), and files *added*
+by the migration are intentionally out-of-universe for both arms — a migration
+must not enlarge the universe its own arm is scored on.
+
 the two convention inputs are:
 
 1. **trace-locality** `= |T ∩ O| / |T|` ∈ `[0, 1]`. `1.0` = every file the
@@ -230,6 +239,18 @@ pair participates under a convention only when the repo-arm and harness-arm
 trials each satisfy it (anything else would let one arm's thrashing be scored
 under a focused-navigation convention).
 
+**Which conventions can bind.** `trace_locality_floor` (≥ 0.0) and
+`trace_locality_ceiling` (≤ 1.0) are the structural bounds of the `[0, 1]`
+locality space: no pair can ever fail them, so they can never exclude anything.
+They are kept for structural symmetry with the edit-family set (whose locality
+extremes at 0.0/1.0 are equally tautological), not as live exclusion knobs. The
+conventions that can actually change admission or votes are
+`trace_reach_depth_k` (excludes pairs whose oracle chain sits more than 3
+undirected hops from either arm's footprint, including the `u32::MAX`
+saturation) and `alternative_metric_weights` (re-weights votes against the repo
+arm). No new thresholds may be invented post hoc: the gate rejects any
+convention set that is not structurally identical to the pre-registered one.
+
 **Honest semantics, fixed a priori:**
 
 - The builder computes these inputs per pair (`task_shape: "answer"` +
@@ -239,7 +260,12 @@ under a focused-navigation convention).
   report; it is never given sentinel inputs. `convention_inputs_degraded` is
   false exactly when every admitted pair carries real inputs.
 - Mixed task shapes in one manifest, or conventions whose family does not match
-  the tasks' inputs, are hard errors — never a silent zero-admission tally.
+  the tasks' inputs, are hard errors. The configured conventions must equal the
+  pre-registered admissible set exactly — `aoa falsify` hard-errors on any
+  other set (no override flag) — and `falsification.json` emits every
+  convention's full parameters, not just names, so a tampered threshold cannot
+  hide. A convention that admits zero pairs downgrades the verdict to a real
+  R0' abstention naming the convention — never a vacuous invariance pass.
 - Known under-approximation, symmetric by protocol but noted: `T` sees only
   instrumented tool calls. Navigation done through non-test `Bash` commands
   (grep/sed) is outside the 8-span vocabulary and invisible to the footprint;
