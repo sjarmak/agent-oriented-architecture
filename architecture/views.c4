@@ -1,0 +1,119 @@
+// Views over the aoa model. Evolving (#evolving) elements are colored amber
+// and risk-tagged (#risk) elements are called out explicitly, so "what's
+// trusted vs what's still earning trust" is readable at a glance.
+
+views {
+
+  // Landscape — the whole system in context.
+  view index {
+    title 'AOA Toolkit — system landscape'
+    include *
+
+    style element.tag == #evolving {
+      color amber
+    }
+  }
+
+  // The aoa system, decomposed into its containers.
+  view aoaSystem of aoa {
+    title 'AOA Toolkit — containers (read-only vs write-gated)'
+    include *
+
+    style element.tag == #evolving {
+      color amber
+    }
+  }
+
+  // The trace + symbol-graph substrate.
+  view substrateContainer of aoa.substrate {
+    title 'Trace + symbol-graph substrate — components'
+    include *
+  }
+
+  // The read-only measurement half.
+  view measureContainer of aoa.measure {
+    title 'Read-only measurement — components'
+    include *
+  }
+
+  // The trust gates.
+  view gatesContainer of aoa.gates {
+    title 'Trust gates (R0 / R5 / R7) — components'
+    include *
+  }
+
+  // Risks & open questions — the elements that carry a #risk flag, with the
+  // open question stated in each box's description.
+  view risks {
+    title 'Risks & open questions'
+    include
+      aoa,
+      element.tag == #risk,
+      aoa.substrate,
+      aoa.gates,
+      aoa.migrate
+
+    style * {
+      opacity 30%
+    }
+    style element.tag == #risk {
+      opacity 100%
+      color red
+    }
+  }
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Walkthrough flows (dynamic views) — the narrative spine of a review.
+  // ───────────────────────────────────────────────────────────────────────
+
+  // Flow 1 — instrumenting a repo and reading a read-only audit.
+  dynamic view auditFlow {
+    title 'Walkthrough — observe + audit (zero-write)'
+    description 'aoa observe installs telemetry; nothing beyond an ignored .aoa/ dir is visible to the agent. aoa audit is the read-only report.'
+
+    agentUnderTest -> repoUnderTest 'runs a real task'
+    aoa.substrate.observeShim -> repoUnderTest 'reads .aoa/traces written during the run'
+    aoa.substrate.observeShim -> aoa.substrate.trace 'normalizes into the native 8-span trace'
+    aoa.substrate.scipGraph -> repoUnderTest 'indexes the repo (SCIP, else AST / line-scan)'
+    aoa.substrate.metrics -> aoa.substrate.trace 'reads the trace'
+    aoa.substrate.metrics -> aoa.substrate.scipGraph 'reads the symbol graph'
+    aoa.measure.audit -> aoa.substrate.metrics 'ranks a tiered punch-list, cost per item'
+    aoa.measure.audit -> operator 'aoa audit [--fail-on tier1]'
+  }
+
+  // Flow 2 — scoring a recorded agent run against a codeprobe task.
+  dynamic view evalFlow {
+    title 'Walkthrough — eval run against a codeprobe-mined task'
+    description 'aoa eval run --codeprobe-run <path> --tasks <path> turns a recorded transcript into per-task metrics.'
+
+    aoa.measure.bench -> codeprobe 'loads a mined task directory'
+    aoa.substrate.codeprobeShim -> codeprobe 'parses the claude -p stream-json transcript'
+    aoa.substrate.codeprobeShim -> aoa.substrate.trace 'normalizes into the native trace'
+    aoa.substrate.metrics -> aoa.substrate.trace 'scores retrieval / edit locality, invariant discoverability, mutation surface'
+    aoa.measure.gap -> aoa.substrate.metrics 'checks for reward-hacking and construct-validity failure'
+    aoa.measure.recommend -> aoa.measure.gap 'joins construct-validity mode into the recommendation'
+  }
+
+  // Flow 3 — the falsification gate deciding whether migrate can be trusted.
+  dynamic view falsifyFlow {
+    title 'Walkthrough — falsify: the deciding experiment'
+    description 'Before migrate is trusted on a given repo: does migrating it beat simply swapping the harness, across at least five held-out repos? A tie defaults to pivot.'
+
+    operator -> aoa.gates.falsify 'aoa falsify --repos <5+ repos>'
+    aoa.gates.falsify -> aoa.substrate.metrics 'reads held-out success deltas per repo, per harness'
+    aoa.gates.falsify -> aoa.migrate.migrator 'verdict: proceed / pivot / inconclusive'
+    aoa.gates.falsify -> operator 'reports the verdict and the per-repo evidence behind it'
+  }
+
+  // Flow 4 — a migration, once falsify has cleared the repo.
+  dynamic view migrateFlow {
+    title 'Walkthrough — a gated migration'
+    description 'migrate stays dry-run by default; --apply only runs once the operator, informed by falsify, decides to trust it on this repo.'
+
+    aoa.measure.recommend -> aoa.migrate.migrator 'per-finding: is a migration available'
+    aoa.gates.enforce -> repoUnderTest 'confirms the failure reproduces before any mutation'
+    operator -> aoa.migrate.migrator 'aoa migrate --apply'
+    aoa.migrate.migrator -> repoUnderTest 'reversible, one-commit-per-fix change'
+    operator -> aoa.migrate.migrator 'aoa migrate --rollback, if needed'
+  }
+}

@@ -1,0 +1,206 @@
+// The AOA Toolkit — measures whether a repository works for AI coding agents
+// by running an agent against tasks mined from the repository's own git
+// history and scoring what it did, rather than checking for the presence of
+// files like AGENTS.md.
+//
+// 16 Rust workspace crates split across four halves: a trace + symbol-graph
+// substrate, read-only measurement, trust gates (R0/R5/R7), and a single
+// repository-mutating migration path kept behind the falsification gate.
+// Planned and research work is tagged so it renders distinctly from what is
+// already built (see spec.c4 for the tag legend).
+//
+// Elements carry `link`s to their source crate and, where a design decision
+// is documented, to prd_aoa_toolkit.md / premortem_aoa_toolkit.md / report.md,
+// so a reviewer can jump from any box to the code and the rationale behind it.
+
+model {
+
+  operator = actor 'Operator' {
+    description 'Runs the aoa CLI against a repository and decides, informed by falsify, whether to trust migrate'
+  }
+
+  agentUnderTest = actor 'Coding agent under test' {
+    description 'Claude Code, Copilot, Codex, or similar — runs real tasks against the instrumented repository'
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // External systems — the repository being measured, its task corpus, and
+  // the forge that hosts CI/hook enforcement.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  repoUnderTest = externalSystem 'Repository under test' {
+    description 'The codebase being measured — source of the task corpus (git history) and the target of observe/migrate'
+  }
+
+  codeprobe = externalSystem 'CodeProbe' {
+    description 'Mines evaluation tasks from a repository’s own merged PRs and records agent transcripts against them — the contamination-resistant task corpus AOA scores against'
+    link https://github.com/sjarmak/codeprobe 'sjarmak/codeprobe'
+  }
+
+  forge = externalSystem 'Forge (GitHub)' {
+    description 'Hosts CI and pre-commit hooks where compiled policy planes and the reproduction-before-mutation gate run'
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // The AOA system.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  aoa = system 'AOA Toolkit' {
+    description 'Runs an agent against real tasks mined from a repository, then scores retrieval locality, edit locality, invariant discoverability, and mutation surface'
+    link ../README.md 'README — quickstart'
+    link ../prd_aoa_toolkit.md 'PRD'
+    link ../premortem_aoa_toolkit.md 'Premortem — risk registry'
+    link ../report.md 'Evidence-audited report'
+
+    cli = container 'aoa CLI' {
+      #built
+      description 'Single Rust binary wiring every subcommand to its library crate: observe, audit, lint-context, eval, gap, recommend, report, falsify, policy, enforce, migrate, init. Human + JSON dual output'
+      technology 'Rust'
+      link ../crates/aoa/src/cli.rs 'crates/aoa/src/cli.rs'
+      link ../crates/aoa/src/main.rs 'crates/aoa/src/main.rs'
+    }
+
+    // ── Trace + symbol-graph substrate ──────────────────────────────────────
+    substrate = container 'Trace + symbol-graph substrate' {
+      description 'Normalizes every run, live or recorded, into one 8-span trace schema, and indexes the repository into a confidence-tiered symbol graph'
+
+      trace = component 'aoa-trace' {
+        #built
+        description 'OTel-style 8-span trace-event schema — the native format every other crate reads'
+        link ../crates/aoa-trace 'crates/aoa-trace/'
+      }
+      codeprobeShim = component 'aoa-codeprobe-shim' {
+        #built
+        description 'Parses a codeprobe `claude -p --output-format stream-json` transcript into a native trace'
+        link ../crates/aoa-codeprobe-shim 'crates/aoa-codeprobe-shim/'
+      }
+      observeShim = component 'aoa-observe-shim' {
+        #built
+        description 'Parses live `.aoa/traces` session logs (written by `aoa observe`) into a native trace'
+        link ../crates/aoa-observe-shim 'crates/aoa-observe-shim/'
+      }
+      scipGraph = component 'aoa-scip-graph' {
+        #built
+        #risk
+        description 'Indexes a repository into a SymbolGraph: SCIP when available (high-confidence), AST/line-scan otherwise (low-confidence), R15 confidence tiering. RISK: a degraded or empty index lowers a record’s weight, never raises the mutation-surface score, and disqualifies that repository from the falsify vote — the tiering is load-bearing, not cosmetic'
+        link ../crates/aoa-scip-graph 'crates/aoa-scip-graph/'
+      }
+      metrics = component 'aoa-metrics' {
+        #built
+        description 'Computes retrieval locality, edit locality, invariant discoverability, and mutation surface from a trace plus the symbol graph'
+        link ../crates/aoa-metrics/src/lib.rs 'crates/aoa-metrics/src/lib.rs'
+      }
+    }
+
+    // ── Read-only measurement (the shippable half) ──────────────────────────
+    measure = container 'Read-only measurement' {
+      description 'observe / audit / lint-context / eval — zero-write against the repository under test'
+
+      bench = component 'aoa-bench' {
+        #built
+        description 'Loads codeprobe-mined task directories as a contamination-free held-out task substrate'
+        link ../crates/aoa-bench 'crates/aoa-bench/'
+      }
+      audit = component 'aoa-audit' {
+        #built
+        description 'Zero-write telemetry install (`observe`) plus a read-only tiered audit punch-list (`audit`), fail-loud on `--fail-on tier1`'
+        link ../crates/aoa-audit 'crates/aoa-audit/'
+      }
+      budget = component 'aoa-budget' {
+        #built
+        description 'Context-budget gate: transitive closure of context files, dual tokenizer, ceiling enforcement (`lint-context`)'
+        link ../crates/aoa-budget 'crates/aoa-budget/'
+      }
+      lint = component 'aoa-lint' {
+        #built
+        description 'Config-file smell detectors mapped to the arXiv 2606.15828 taxonomy, composed with the budget closure'
+        link ../crates/aoa-lint 'crates/aoa-lint/'
+      }
+      gap = component 'aoa-gap' {
+        #built
+        description 'Reward-hacking gap (R9), held-out integrity canary (R0b), construct-validity gating (R9c) — guards against a metric that games itself'
+        link ../crates/aoa-gap 'crates/aoa-gap/'
+      }
+      recommend = component 'aoa-recommend' {
+        #built
+        description 'Joins audit findings, construct-validity mode, and migration availability into per-finding recommendations'
+        link ../crates/aoa-recommend 'crates/aoa-recommend/'
+      }
+    }
+
+    // ── Trust gates ──────────────────────────────────────────────────────────
+    gates = container 'Trust gates (R0 / R5 / R7)' {
+      description 'The gates that decide whether migrate is worth trusting on a given repository, and whether a mutation may proceed at all'
+
+      falsify = component 'aoa-falsify' {
+        #built
+        #risk
+        description 'R0 falsification gate: across at least five held-out repositories, proceeds to migrate only if repo-delta beats harness-delta on held-out success for a majority; a tie defaults to pivot. RISK: premortem’s six independent, mutually blind reviews each broke this gate a different way and five of six scored the failure 12/12 — hardened into R0′ with a robust / abstaining / monitored verdict rather than a one-shot boolean'
+        link ../crates/aoa-falsify 'crates/aoa-falsify/'
+        link ../premortem_aoa_toolkit.md 'Premortem — R0 risk registry'
+      }
+      policy = component 'aoa-policy' {
+        #built
+        description 'Compiles a single aoa-policy.yaml into three enforcement planes (CI check, pre-commit hook, lint) — R5'
+        link ../crates/aoa-policy 'crates/aoa-policy/'
+      }
+      enforce = component 'aoa-enforce' {
+        #built
+        description 'Reproduction-before-mutation gate primitives — R7'
+        link ../crates/aoa-enforce 'crates/aoa-enforce/'
+      }
+    }
+
+    // ── Repository-mutating migration ───────────────────────────────────────
+    migrate = container 'Repository-mutating migration' {
+      #evolving
+      #risk
+      description 'The only write-gated half. Dry-run by default; applies reversible, one-commit-per-fix code-layer cleanups. RISK: trustworthy only where falsify has cleared the repository — the whole point of the gate is that this container earns trust per-repo, not once, globally'
+      link ../crates/aoa-migrate 'crates/aoa-migrate/'
+
+      migrator = component 'aoa-migrate' {
+        #evolving
+        description 'Dead-import removal and similar structural fixes, one commit per fix, rollback on demand'
+        link ../crates/aoa-migrate 'crates/aoa-migrate/'
+      }
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Relationships.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  operator -> aoa.cli 'aoa observe / audit / lint-context / eval / falsify / migrate'
+  agentUnderTest -> repoUnderTest 'runs a real task; every turn logged as an 8-span trace'
+
+  // Substrate — normalize whatever produced the run, index the repo.
+  aoa.substrate.observeShim -> repoUnderTest 'reads live .aoa/traces session logs'
+  aoa.substrate.codeprobeShim -> codeprobe 'parses recorded claude -p stream-json transcripts'
+  aoa.substrate.scipGraph -> repoUnderTest 'indexes via SCIP, or AST / line-scan when SCIP is unavailable'
+  aoa.substrate.observeShim -> aoa.substrate.trace 'normalizes into the native trace schema'
+  aoa.substrate.codeprobeShim -> aoa.substrate.trace 'normalizes into the native trace schema'
+  aoa.substrate.metrics -> aoa.substrate.trace 'reads the 8-span trace'
+  aoa.substrate.metrics -> aoa.substrate.scipGraph 'reads the symbol graph for mutation-surface scoring'
+
+  // Measurement.
+  aoa.measure.bench -> codeprobe 'loads mined task directories'
+  aoa.measure.audit -> aoa.substrate.metrics 'ranks a tiered punch-list from scored metrics'
+  aoa.measure.audit -> repoUnderTest 'installs zero-write telemetry (observe)'
+  aoa.measure.lint -> aoa.measure.budget 'composes config-smell detection with the context-budget closure'
+  aoa.measure.budget -> repoUnderTest 'reads the transitive closure of context files'
+  aoa.measure.gap -> aoa.substrate.metrics 'checks for reward-hacking and construct-validity failures in the scored metrics'
+  aoa.measure.recommend -> aoa.measure.audit 'joins audit findings'
+  aoa.measure.recommend -> aoa.measure.gap 'joins construct-validity mode'
+  aoa.measure.recommend -> aoa.migrate.migrator 'joins migration availability per finding'
+
+  // Trust gates.
+  aoa.gates.falsify -> aoa.substrate.metrics 'reads held-out success deltas across at least five repositories'
+  aoa.gates.falsify -> aoa.migrate 'gates trust: proceed / pivot / inconclusive'
+  aoa.gates.policy -> forge 'compiles aoa-policy.yaml into CI / hook / lint enforcement planes'
+  aoa.gates.enforce -> repoUnderTest 'blocks a mutation that has not first reproduced the failure it claims to fix'
+
+  // Migration — the only half that writes to the repository under test.
+  aoa.migrate.migrator -> repoUnderTest 'applies reversible, one-commit-per-fix changes (dry-run by default)' {
+    #evolving
+  }
+}

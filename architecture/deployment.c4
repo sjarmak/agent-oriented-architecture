@@ -1,0 +1,48 @@
+// Deployment model — where each piece runs at review time.
+//
+// aoa is a single local (or CI) Rust binary run directly against a repository
+// checkout; it does not host the agent under test and does not run as a
+// server. This is the "what runs where / what's the process & data boundary"
+// view a design review always asks for.
+
+deployment {
+
+  devHost = host 'Developer / CI host' {
+    description 'Where aoa and the agent under test both run, against the same repository checkout'
+
+    aoaProc = proc 'aoa CLI (Rust binary)' {
+      instanceOf aoa.cli
+    }
+    agentProc = proc 'Coding agent under test' {
+      instanceOf agentUnderTest
+    }
+    repoCheckout = proc 'Repository checkout under test' {
+      description 'Git working copy; .aoa/traces is the only artifact observe writes, and it is agent-invisible beyond that ignored dir'
+      instanceOf repoUnderTest
+    }
+  }
+
+  codeprobeHost = host 'CodeProbe eval host' {
+    description 'Where codeprobe-mined task directories and recorded agent transcripts are produced — read-only to aoa'
+    instanceOf codeprobe
+  }
+
+  forgeHost = host 'Forge (GitHub)' {
+    description 'CI runner + pre-commit hooks — where compiled policy planes and the enforce gate execute'
+    instanceOf forge
+  }
+
+  // Runtime data & control flow between processes/hosts.
+  agentProc -> repoCheckout 'edits during a task'
+  aoaProc -> repoCheckout 'reads .aoa/traces, indexes via SCIP / AST, applies migrate (dry-run by default)'
+  aoaProc -> codeprobeHost 'loads mined task dirs; parses recorded transcripts'
+  aoaProc -> forgeHost 'compiled policy runs as a CI check; enforce blocks unreproduced mutations'
+}
+
+views {
+
+  deployment view deployment {
+    title 'Deployment — where each piece runs'
+    include *
+  }
+}
