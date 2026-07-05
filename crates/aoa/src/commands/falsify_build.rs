@@ -20,12 +20,18 @@
 //!   `calibrated` are operator assertions, REQUIRED per repo in the manifest —
 //!   no default toward eligible. `native_span` is derived from the mined task
 //!   oracle (held-out provenance), never declared.
-//! - **Convention inputs degrade to abstention, never to admitting defaults.**
-//!   A task's `edit_locality`/`mutation_depth` need a per-repo symbol graph this
-//!   builder does not construct (deferred to the live-scale work). Rather than
-//!   emit the midpoint values that every admissible convention silently admits —
-//!   which would let the R0' convention-invariance check *pass* on no evidence —
-//!   the builder flags `convention_inputs_degraded` so `aoa falsify` abstains.
+//! - **Convention inputs are real or the gate abstains.** For answer-shaped
+//!   repos (`task_shape: "answer"` + `scip_index`) the builder computes real
+//!   per-task trace-locality/trace-reach inputs by joining each pair's two
+//!   trial traces, the task's oracle chain, and the SCIP symbol graph (module
+//!   [`answer`]); a pair whose inputs cannot be computed is excluded with the
+//!   reason. For edit-shaped repos no symbol-graph edit pipeline exists yet, so
+//!   the builder emits sentinels and flags `convention_inputs_degraded` —
+//!   rather than emit the midpoint values every admissible convention silently
+//!   admits, which would let the R0' convention-invariance check *pass* on no
+//!   evidence — and `aoa falsify` abstains.
+
+mod answer;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -33,10 +39,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
+use answer::AnswerContext;
 use aoa_bench::load_task;
 use aoa_falsify::{
-    is_eligible, Eligibility, FalsifyConfig, FalsifyInput, PairTask, RepoResult, RepoRun,
-    ScoringConvention,
+    is_eligible, ConventionInputs, Eligibility, FalsifyConfig, FalsifyInput, PairTask, RepoResult,
+    RepoRun, ScoringConvention,
 };
 use aoa_gap::HeldOutProvenance;
 use aoa_metrics::Confidence;
@@ -46,10 +53,10 @@ use crate::commands::codeprobe::{aggregate_provenance, discover_tasks, DualScori
 use crate::commands::fsutil::{read_to_string_capped, MAX_JSON_BYTES};
 use crate::output::{print_human, print_json};
 
-/// Sentinel convention inputs emitted while a per-repo symbol graph is not
-/// constructed. They are NOT the admitting midpoint: the builder pairs them with
-/// `convention_inputs_degraded` so the gate abstains rather than reads them as
-/// real evidence.
+/// Sentinel convention inputs emitted for edit-shaped repos while a per-repo
+/// symbol-graph edit pipeline is not constructed. They are NOT the admitting
+/// midpoint: the builder pairs them with `convention_inputs_degraded` so the
+/// gate abstains rather than reads them as real evidence.
 const DEGRADED_EDIT_LOCALITY: f64 = 0.0;
 const DEGRADED_MUTATION_DEPTH: u32 = 0;
 
@@ -82,7 +89,27 @@ struct RepoManifest {
     confidence: ConfidenceDecl,
     /// Operator assertion that the repo's scoring is calibrated. REQUIRED.
     calibrated: bool,
+    /// The task shape this repo's trials carry. `answer` (comprehension tasks)
+    /// computes real trace-locality/trace-reach convention inputs and REQUIRES
+    /// `scip_index`; `edit` (the default) emits degraded sentinels until an
+    /// edit-task pipeline exists.
+    #[serde(default)]
+    task_shape: TaskShape,
+    /// Vendored SCIP JSON index for this repo (the `aoa eval run --scip-index`
+    /// form), resolved relative to the manifest. Required for `answer` shape;
+    /// rejected otherwise (it would silently do nothing).
+    #[serde(default)]
+    scip_index: Option<PathBuf>,
     runs: Vec<RunManifest>,
+}
+
+/// Declared task shape of a repo's trials. Spelled lowercase in the manifest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum TaskShape {
+    #[default]
+    Edit,
+    Answer,
 }
 
 /// One fixed-seed replication: the two arm run dirs over the same mined tasks.
@@ -148,9 +175,25 @@ pub(crate) struct BuildReport {
     out_path: String,
     repo_count: usize,
     total_identical_pairs: usize,
+    /// The (uniform) task shape of the manifest's repos, as data.
+    task_shape: TaskShape,
     convention_inputs_degraded: bool,
     repos: Vec<RepoBuild>,
+    /// Repos that contributed no identical pairs and were dropped from the
+    /// input — kept here so their per-task exclusion reasons stay inspectable.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    dropped_repos: Vec<DroppedRepo>,
     notes: Vec<String>,
+}
+
+/// A repo dropped from the input (no identical pairs in some run), with the
+/// per-task exclusion reasons that explain the drop. Eligibility facts are
+/// deliberately absent: they are meaningless for a repo that supplies no
+/// evidence.
+#[derive(Debug, Serialize)]
+struct DroppedRepo {
+    repo_id: String,
+    excluded_tasks: Vec<ExcludedTask>,
 }
 
 // ---------------------------------------------------------------------------
@@ -201,14 +244,23 @@ fn read_arm(run_dir: &Path) -> Result<ArmOutcomes> {
     Ok(ArmOutcomes { held_out, excluded })
 }
 
+/// One repo's build outcome: included in the input, or dropped (no identical
+/// pairs) with its per-task exclusion reasons preserved.
+enum RepoOutcome {
+    Included(Box<(RepoResult, RepoBuild)>),
+    Dropped(DroppedRepo),
+}
+
 /// Assemble one repo's `RepoResult` over its fixed-seed runs, collecting the
-/// per-repo build provenance.
+/// per-repo build provenance. `answer_ctx` is present exactly for answer-shaped
+/// repos and computes each pair's real convention inputs.
 fn build_repo(
     repo: &RepoManifest,
     tasks_dir: &Path,
     base_dir: &Path,
     k_runs: u32,
-) -> Result<Option<(RepoResult, RepoBuild)>> {
+    mut answer_ctx: Option<AnswerContext>,
+) -> Result<RepoOutcome> {
     if (repo.runs.len() as u32) < k_runs {
         bail!(
             "repo {}: manifest supplies {} run(s) but k_runs is {}; each repo needs \
@@ -230,8 +282,10 @@ fn build_repo(
     for (run_index, run) in repo.runs.iter().enumerate() {
         // Arm paths in the manifest are resolved relative to the manifest file's
         // directory (an absolute path passes through `join` unchanged).
-        let repo_arm = read_arm(&base_dir.join(&run.repo_arm))?;
-        let harness_arm = read_arm(&base_dir.join(&run.harness_arm))?;
+        let repo_arm_dir = base_dir.join(&run.repo_arm);
+        let harness_arm_dir = base_dir.join(&run.harness_arm);
+        let repo_arm = read_arm(&repo_arm_dir)?;
+        let harness_arm = read_arm(&harness_arm_dir)?;
 
         // Identical-pair candidates: present in BOTH arms.
         let in_both: BTreeSet<&String> = repo_arm
@@ -266,24 +320,43 @@ fn build_repo(
         let mut ids: Vec<String> = in_both.into_iter().cloned().collect();
         ids.sort();
 
-        let tasks: Vec<PairTask> = ids
-            .iter()
-            .enumerate()
-            .map(|(idx, id)| PairTask {
+        let mut tasks: Vec<PairTask> = Vec::with_capacity(ids.len());
+        let mut admitted_ids: Vec<String> = Vec::with_capacity(ids.len());
+        for id in ids {
+            // Answer shape: real per-pair inputs from both arms' trial traces;
+            // a pair whose inputs cannot be computed is excluded with the
+            // reason (a pair the conventions cannot score is not evidence).
+            // Edit shape: degraded sentinels, flagged for abstention.
+            let convention_inputs = match answer_ctx.as_mut() {
+                Some(ctx) => match ctx.pair_inputs(&id, &repo_arm_dir, &harness_arm_dir) {
+                    Ok(inputs) => inputs,
+                    Err(e) => {
+                        excluded
+                            .entry(id)
+                            .or_insert_with(|| format!("seed {seed}: {e:#}"));
+                        continue;
+                    }
+                },
+                None => ConventionInputs::Edit {
+                    edit_locality: DEGRADED_EDIT_LOCALITY,
+                    mutation_depth: DEGRADED_MUTATION_DEPTH,
+                },
+            };
+            tasks.push(PairTask {
                 // The crate treats task_id as an opaque label; a stable per-repo
                 // enumeration keeps it deterministic and inspectable.
-                task_id: idx as u64,
+                task_id: tasks.len() as u64,
                 is_identical_pair: true,
-                repo_held_out_success: repo_arm.held_out[id],
-                harness_held_out_success: harness_arm.held_out[id],
-                edit_locality: DEGRADED_EDIT_LOCALITY,
-                mutation_depth: DEGRADED_MUTATION_DEPTH,
-            })
-            .collect();
+                repo_held_out_success: repo_arm.held_out[&id],
+                harness_held_out_success: harness_arm.held_out[&id],
+                convention_inputs,
+            });
+            admitted_ids.push(id);
+        }
 
         pair_counts.push(tasks.len());
         if run_index == 0 {
-            representative_ids = ids;
+            representative_ids = admitted_ids;
         }
         runs.push(RepoRun {
             seed: run.seed,
@@ -295,10 +368,16 @@ fn build_repo(
     let max_pairs = pair_counts.iter().copied().max().unwrap_or(0);
 
     // A repo with no identical pairs in some run cannot supply consistent
-    // evidence; drop it (loudly noted) rather than emit empty runs that score as
-    // zero-delta.
+    // evidence; drop it (loudly noted, per-task reasons preserved) rather than
+    // emit empty runs that score as zero-delta.
     if min_pairs == 0 || representative_ids.is_empty() {
-        return Ok(None);
+        return Ok(RepoOutcome::Dropped(DroppedRepo {
+            repo_id: repo.repo_id.clone(),
+            excluded_tasks: excluded
+                .into_iter()
+                .map(|(task_id, reason)| ExcludedTask { task_id, reason })
+                .collect(),
+        }));
     }
 
     let mut repo_notes = Vec::new();
@@ -357,7 +436,37 @@ fn build_repo(
         runs,
         holdout_size,
     };
-    Ok(Some((result, build)))
+    Ok(RepoOutcome::Included(Box::new((result, build))))
+}
+
+/// Validate the manifest's task-shape declarations: one uniform shape per
+/// manifest (the gate scores one convention family), `scip_index` required for
+/// `answer` and rejected for `edit` (where it would silently do nothing).
+fn validated_shape(manifest: &Manifest) -> Result<TaskShape> {
+    let shape = manifest.repos[0].task_shape;
+    for repo in &manifest.repos {
+        if repo.task_shape != shape {
+            bail!(
+                "manifest mixes task shapes ({:?} and {:?}); one experiment scores one task shape",
+                shape,
+                repo.task_shape
+            );
+        }
+        match (repo.task_shape, &repo.scip_index) {
+            (TaskShape::Answer, None) => bail!(
+                "repo {}: task_shape \"answer\" requires scip_index (the vendored SCIP JSON \
+                 index the trace-locality/trace-reach inputs are derived from)",
+                repo.repo_id
+            ),
+            (TaskShape::Edit, Some(_)) => bail!(
+                "repo {}: scip_index is only read for task_shape \"answer\"; declare the shape \
+                 or drop the index",
+                repo.repo_id
+            ),
+            _ => {}
+        }
+    }
+    Ok(shape)
 }
 
 /// Build the `FalsifyInput` and the build report from the manifest.
@@ -369,46 +478,80 @@ fn build(
     if manifest.repos.is_empty() {
         bail!("manifest declares no repos");
     }
+    let shape = validated_shape(manifest)?;
 
     let mut repos = Vec::new();
     let mut repo_builds = Vec::new();
+    let mut dropped_repos = Vec::new();
     let mut notes = Vec::new();
 
     for repo in &manifest.repos {
-        match build_repo(repo, tasks_dir, base_dir, manifest.k_runs)? {
-            Some((result, build)) => {
+        let answer_ctx = match &repo.scip_index {
+            // validated_shape guarantees: Some(index) <=> answer shape.
+            Some(index) => Some(AnswerContext::load(
+                &repo.repo_id,
+                &base_dir.join(index),
+                tasks_dir,
+            )?),
+            None => None,
+        };
+        match build_repo(repo, tasks_dir, base_dir, manifest.k_runs, answer_ctx)? {
+            RepoOutcome::Included(included) => {
+                let (result, build) = *included;
                 repos.push(result);
                 repo_builds.push(build);
             }
-            None => notes.push(format!(
-                "repo {}: no identical-pair tasks across both arms; excluded from the input",
-                repo.repo_id
-            )),
+            RepoOutcome::Dropped(dropped) => {
+                notes.push(format!(
+                    "repo {}: no identical-pair tasks across both arms; excluded from the input \
+                     (per-task reasons under dropped_repos)",
+                    dropped.repo_id
+                ));
+                dropped_repos.push(dropped);
+            }
         }
     }
 
     let total_identical_pairs = repo_builds.iter().map(|r| r.identical_pairs).sum();
-    notes.push(
-        "convention inputs (edit_locality, mutation_depth) are degraded: this builder does not \
-         construct a per-repo symbol graph, so the R0' convention-invariance check cannot be \
-         exercised and `aoa falsify` will abstain (inconclusive). Wiring real per-task convention \
-         inputs is the live-scale follow-up."
-            .to_string(),
-    );
+    let (conventions, convention_inputs_degraded) = match shape {
+        TaskShape::Edit => {
+            notes.push(
+                "convention inputs (edit_locality, mutation_depth) are degraded: no edit-task \
+                 symbol-graph pipeline exists, so the R0' convention-invariance check cannot be \
+                 exercised and `aoa falsify` will abstain (inconclusive). Answer-shaped repos \
+                 (task_shape \"answer\" + scip_index) carry real inputs."
+                    .to_string(),
+            );
+            (ScoringConvention::admissible_edit(), true)
+        }
+        TaskShape::Answer => {
+            notes.push(
+                "answer-task convention inputs (trace_locality, trace_reach_depth) computed per \
+                 pair from both arms' trial traces, the task oracle chain, and the declared \
+                 scip_index; every admitted pair carries real inputs and pairs lacking them were \
+                 excluded with reason (pre-registered 2026-07-04, aoa-dhk.1; see \
+                 docs/r0_runbook.md)."
+                    .to_string(),
+            );
+            (ScoringConvention::admissible_answer(), false)
+        }
+    };
 
     let config = FalsifyConfig {
         k_runs: manifest.k_runs,
         min_holdout_size: manifest.min_holdout_size,
         min_effect_size: manifest.min_effect_size,
-        conventions: ScoringConvention::admissible_default(),
+        conventions,
     };
     let input = FalsifyInput { repos, config };
     let report = BuildReport {
         out_path: String::new(), // filled by the caller once the path is known
         repo_count: repo_builds.len(),
         total_identical_pairs,
-        convention_inputs_degraded: true,
+        task_shape: shape,
+        convention_inputs_degraded,
         repos: repo_builds,
+        dropped_repos,
         notes,
     };
     Ok((input, report))
@@ -474,6 +617,21 @@ fn render_human(report: &BuildReport, report_path: &Path) -> String {
             let _ = writeln!(out, "      note: {note}");
         }
         for ex in &r.excluded_tasks {
+            let _ = writeln!(
+                out,
+                "      excluded {}: {}",
+                ex.task_id.escape_debug(),
+                ex.reason
+            );
+        }
+    }
+    for d in &report.dropped_repos {
+        let _ = writeln!(
+            out,
+            "  {:<24} DROPPED: no identical pairs",
+            d.repo_id.escape_debug()
+        );
+        for ex in &d.excluded_tasks {
             let _ = writeln!(
                 out,
                 "      excluded {}: {}",

@@ -931,6 +931,134 @@ fn experiment_pipeline_smoke_emits_verdict_and_surfaces_bias() {
     assert_eq!(out["bias_gate_invalidating"], true);
 }
 
+// Answer-task conventions (pre-registered 2026-07-04, aoa-dhk.1): an
+// answer-shaped repo (task_shape "answer" + scip_index) gets REAL per-pair
+// trace-locality/trace-reach inputs joined from both arms' trial traces, the
+// task oracle chain, and the SCIP graph. The pair whose trials carry no
+// instrumented file access is excluded with the reason; the surviving pair's
+// inputs are exact; convention_inputs_degraded is an honest computed false and
+// the config carries the answer-family convention set.
+#[test]
+fn experiment_answer_shape_computes_real_convention_inputs() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("falsify_input.json");
+    let build_meta = dir.path().join("falsify_input.build.json");
+    let falsification = dir.path().join("falsification.json");
+
+    aoa()
+        .args(["eval", "experiment", "--manifest"])
+        .arg(fixture("experiment_answer/manifest.json"))
+        .arg("--tasks")
+        .arg(fixture("answer_tasks"))
+        .arg("--out")
+        .arg(&input)
+        .assert()
+        .success();
+
+    let build: Value =
+        serde_json::from_str(&std::fs::read_to_string(&build_meta).expect("build report written"))
+            .expect("valid build json");
+    assert_eq!(build["task_shape"], "answer");
+    assert_eq!(
+        build["convention_inputs_degraded"], false,
+        "every admitted pair carries real inputs, so the flag is computed false"
+    );
+    assert_eq!(build["repos"][0]["identical_pairs"], 1);
+    let excluded = build["repos"][0]["excluded_tasks"]
+        .as_array()
+        .expect("excluded array");
+    let noreads = excluded
+        .iter()
+        .find(|e| e["task_id"] == "comprehension-noreads-001")
+        .expect("prose-only-transcript pair is excluded");
+    assert!(
+        noreads["reason"]
+            .as_str()
+            .unwrap()
+            .contains("trace footprint is empty"),
+        "exclusion carries the computed reason, got {noreads:?}"
+    );
+
+    // The built input carries the exact per-arm inputs: repo arm read exactly
+    // the two oracle-chain files (locality 1.0, depth 0); harness arm read one
+    // chain file and one off-chain file (locality 0.5) whose reach to the
+    // remaining chain file is one undirected hop (depth 1).
+    let parsed: Value =
+        serde_json::from_str(&std::fs::read_to_string(&input).expect("input written"))
+            .expect("valid input json");
+    let task = &parsed["repos"][0]["runs"][0]["tasks"][0];
+    let inputs = &task["convention_inputs"];
+    assert_eq!(inputs["family"], "answer");
+    assert_eq!(inputs["repo_trace_locality"], 1.0);
+    assert_eq!(inputs["harness_trace_locality"], 0.5);
+    assert_eq!(inputs["repo_trace_reach_depth"], 0);
+    assert_eq!(inputs["harness_trace_reach_depth"], 1);
+    let conventions = parsed["config"]["conventions"]
+        .as_array()
+        .expect("conventions");
+    assert!(conventions
+        .iter()
+        .any(|c| c["name"] == "trace_locality_floor" && c["family"] == "answer"));
+
+    // The gate still abstains on too_few_repos (1 repo), but WITHOUT any
+    // convention-degradation marker: that blocker is genuinely cleared.
+    aoa()
+        .args(["falsify", "--repos"])
+        .arg(&input)
+        .arg("--build-meta")
+        .arg(&build_meta)
+        .arg("--out")
+        .arg(&falsification)
+        .assert()
+        .failure();
+    let out: Value =
+        serde_json::from_str(&std::fs::read_to_string(&falsification).expect("falsification"))
+            .expect("valid json");
+    assert_eq!(out["precondition_unmet"], "too_few_repos");
+    let notes = out["notes"].as_array().unwrap();
+    assert!(
+        !notes
+            .iter()
+            .any(|n| n.as_str().unwrap_or_default().contains("degraded")),
+        "no degraded-convention note may appear for an answer-shape build, got {notes:?}"
+    );
+}
+
+// A manifest declaring answer shape without the index it needs fails loud —
+// the builder never silently degrades an operator-declared answer repo.
+#[test]
+fn experiment_answer_shape_without_index_fails_loud() {
+    let dir = TempDir::new().expect("tempdir");
+    let manifest = dir.path().join("manifest.json");
+    std::fs::write(
+        &manifest,
+        r#"{
+          "k_runs": 3, "min_holdout_size": 1,
+          "repos": [{
+            "repo_id": "sample/answers", "confidence": "high", "calibrated": true,
+            "task_shape": "answer",
+            "runs": [
+              { "seed": 1, "repo_arm": "seed1/repo_arm", "harness_arm": "seed1/harness_arm" },
+              { "seed": 2, "repo_arm": "seed2/repo_arm", "harness_arm": "seed2/harness_arm" },
+              { "seed": 3, "repo_arm": "seed3/repo_arm", "harness_arm": "seed3/harness_arm" }
+            ]
+          }]
+        }"#,
+    )
+    .expect("manifest written");
+
+    aoa()
+        .args(["eval", "experiment", "--manifest"])
+        .arg(&manifest)
+        .arg("--tasks")
+        .arg(fixture("answer_tasks"))
+        .arg("--out")
+        .arg(dir.path().join("falsify_input.json"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("requires scip_index"));
+}
+
 // H2/AC4: given a real >=5-repo input but a build report flagging degraded
 // convention inputs, the gate abstains to `inconclusive` with the
 // `convention_inputs_degraded` precondition rather than asserting a verdict the

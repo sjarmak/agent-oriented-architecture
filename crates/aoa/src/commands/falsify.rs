@@ -24,7 +24,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use aoa_falsify::{FalsifyError, FalsifyInput, FalsifyReport, Verdict};
+use aoa_falsify::{ConventionFamily, FalsifyError, FalsifyInput, FalsifyReport, Verdict};
 
 use crate::cli::FalsifyArgs;
 use crate::commands::fsutil::{read_to_string_capped, MAX_JSON_BYTES};
@@ -85,6 +85,10 @@ struct FalsificationOutput {
     eligible_repos: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     excluded_repos: Vec<String>,
+    /// The task-shape family the gate scored (`edit` | `answer`); absent when a
+    /// precondition blocked the gate before scoring.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    convention_family: Option<ConventionFamily>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     conventions_tried: Vec<String>,
     notes: Vec<String>,
@@ -106,6 +110,7 @@ impl FalsificationOutput {
             harness_delta: Some(report.harness_delta),
             eligible_repos: report.eligible_repos,
             excluded_repos: report.excluded_repos,
+            convention_family: Some(report.convention_family),
             conventions_tried: report.conventions_tried,
             notes: report.notes,
             bias_warnings: Vec::new(),
@@ -122,6 +127,7 @@ impl FalsificationOutput {
             harness_delta: None,
             eligible_repos: Vec::new(),
             excluded_repos: Vec::new(),
+            convention_family: None,
             conventions_tried: Vec::new(),
             notes: vec![note],
             bias_warnings: Vec::new(),
