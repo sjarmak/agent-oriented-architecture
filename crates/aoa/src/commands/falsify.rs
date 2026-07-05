@@ -13,7 +13,11 @@
 //! 2. **Convention-degradation abstention.** When the build report
 //!    (`--build-meta`) flags degraded convention inputs, the R0' convention-
 //!    invariance check cannot be exercised, so the verdict abstains rather than
-//!    asserting a `proceed`/`pivot` the hardening cannot back.
+//!    asserting a `proceed`/`pivot` the hardening cannot back. The default is
+//!    abstain-safe: NO `--build-meta` means the convention inputs' provenance is
+//!    unknown and they are treated as degraded, and a build report that omits
+//!    the `convention_inputs_degraded` field parses as degraded — omission can
+//!    never silently read as "not degraded".
 //! 3. **codeprobe bias surfacing.** `--bias-warnings reports/aggregate.json`
 //!    attaches codeprobe's measurement-bias warnings ALONGSIDE the AOA verdict —
 //!    never mutating it. A `no_independent_baseline` warning is flagged as
@@ -61,10 +65,18 @@ struct AggregateFile {
 }
 
 /// The slice of `aoa eval experiment`'s build report this command reads.
+///
+/// A report that omits `convention_inputs_degraded` parses as degraded: the
+/// builder always writes the field, so its absence means a hand-edited or
+/// foreign file, and the abstain-safe reading is the only honest one.
 #[derive(Debug, Deserialize)]
 struct BuildMeta {
-    #[serde(default)]
+    #[serde(default = "degraded_default")]
     convention_inputs_degraded: bool,
+}
+
+fn degraded_default() -> bool {
+    true
 }
 
 /// The `falsification.json` payload.
@@ -150,9 +162,18 @@ pub fn run(args: &FalsifyArgs) -> Result<i32> {
     let input: FalsifyInput = serde_json::from_str(&raw)
         .with_context(|| format!("failed to parse falsify input {}", args.repos.display()))?;
 
-    let degraded = match &args.build_meta {
-        Some(path) => load_build_meta(path)?.convention_inputs_degraded,
-        None => false,
+    // Abstain-safe: convention inputs count as degraded unless a build report
+    // positively says otherwise. `None` carries the reason for the report.
+    let degraded_reason = match &args.build_meta {
+        Some(path) => load_build_meta(path)?
+            .convention_inputs_degraded
+            .then(|| "build report flags degraded convention inputs".to_string()),
+        None => Some(
+            "no --build-meta supplied, so convention-input provenance is unknown and treated \
+             as degraded (abstain-safe default); pass the build report from `aoa eval \
+             experiment` to clear this"
+                .to_string(),
+        ),
     };
 
     let (mut output, mut exit) = match aoa_falsify::falsify(&input) {
@@ -175,23 +196,24 @@ pub fn run(args: &FalsifyArgs) -> Result<i32> {
     // Degraded convention inputs => the convention-invariance precondition cannot
     // be exercised, so abstain regardless of what the base tally computed. Keep
     // the gate's deltas/repos for transparency but override the headline verdict.
-    if degraded && output.precondition_unmet.is_none() {
-        output.verdict = Verdict::Inconclusive;
-        output.precondition_unmet = Some("convention_inputs_degraded".to_string());
-        output.notes.push(
-            "convention inputs degraded (no per-repo symbol graph): R0' convention-invariance \
-             not exercisable; verdict abstains to inconclusive"
-                .to_string(),
-        );
-        exit = 1;
-    } else if degraded {
-        // A different precondition already drove the verdict (e.g. too_few_repos).
-        // Still record that convention inputs were degraded so falsification.json
-        // is self-contained — the operator should not have to read the build
-        // report to learn the second blocker also held.
-        output
-            .notes
-            .push("convention inputs were also degraded (see build report)".to_string());
+    if let Some(reason) = degraded_reason {
+        if output.precondition_unmet.is_none() {
+            output.verdict = Verdict::Inconclusive;
+            output.precondition_unmet = Some("convention_inputs_degraded".to_string());
+            output.notes.push(format!(
+                "{reason}: R0' convention-invariance not exercisable; verdict abstains to \
+                 inconclusive"
+            ));
+            exit = 1;
+        } else {
+            // A different precondition already drove the verdict (e.g.
+            // too_few_repos). Still record the degradation so falsification.json
+            // is self-contained — the operator should not have to read the build
+            // report to learn the second blocker also held.
+            output
+                .notes
+                .push(format!("convention inputs were also degraded: {reason}"));
+        }
     }
 
     if let Some(path) = &args.bias_warnings {
@@ -299,6 +321,18 @@ fn render_human(output: &FalsificationOutput, out_path: &Path) -> String {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// A build report that omits `convention_inputs_degraded` parses as
+    /// degraded, never as clean — omission is not evidence of real inputs.
+    #[test]
+    fn build_meta_missing_degraded_field_parses_as_degraded() {
+        let meta: BuildMeta = serde_json::from_str("{}").unwrap();
+        assert!(meta.convention_inputs_degraded);
+
+        let meta: BuildMeta =
+            serde_json::from_str(r#"{"convention_inputs_degraded": false}"#).unwrap();
+        assert!(!meta.convention_inputs_degraded);
+    }
 
     /// Write an oversized JSON file (one byte past the cap) and return its path.
     fn oversized_file(dir: &Path, name: &str) -> PathBuf {

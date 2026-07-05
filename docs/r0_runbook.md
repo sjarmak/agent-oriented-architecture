@@ -132,7 +132,7 @@ the manifest file.
 ```json
 {
   "k_runs": 3,
-  "min_holdout_size": 20,
+  "min_holdout_size": 7,
   "min_effect_size": 0.0,
   "repos": [
     {
@@ -158,6 +158,18 @@ for a real SCIP index). `native_span` is **derived** from each task's mined
 oracle (held-out provenance) — never declared. A repo that is not
 high-confidence **and** native-composed **and** calibrated is reported as
 *excluded* and casts no vote (R-silent).
+
+**Pre-registered gate parameters** (the values the campaign runs with):
+
+- `k_runs: 3` — the K≥3 determinism floor. The gate hard-errors below 3; the
+  campaign uses exactly 3.
+- `min_holdout_size: 7` — the campaign expectation is **≥7** admitted pairs per
+  repo (the marshmallow consensus re-mine ships 7 tasks). Excluded-with-reason
+  pairs that shrink a repo below this trip the power precondition — that
+  cascade is intended.
+- `min_effect_size: 0.0` — stays `0.0` as pre-registered: the effect-size floor
+  is disabled, and power is carried by the holdout floor plus the K≥3
+  determinism check.
 
 ## Answer-task convention set (pre-registered 2026-07-04)
 
@@ -266,7 +278,12 @@ scripts/r0_experiment.sh \
     rather than assert a verdict the hardening cannot back. Answer-shaped
     builds (`task_shape: "answer"` + `scip_index`) compute real per-pair
     trace-locality/trace-reach inputs and clear this blocker — see
-    "Answer-task convention set (pre-registered 2026-07-04)".
+    "Answer-task convention set (pre-registered 2026-07-04)". The default is
+    **abstain-safe**: running `aoa falsify` *without* `--build-meta` treats the
+    convention inputs as degraded (their provenance is unknown), and a build
+    report that omits the `convention_inputs_degraded` field parses as
+    degraded — omission can never read as "not degraded". Always pass the
+    build report `aoa eval experiment` emits.
 - **`repo_delta` / `harness_delta`**: mean held-out success on each arm over
   eligible repos. Emitted even when abstaining, for transparency.
 - **`bias_warnings`**: codeprobe's measurement-bias warnings, surfaced

@@ -793,6 +793,8 @@ fn falsify_writes_verdict_file() {
     aoa()
         .args(["falsify", "--repos"])
         .arg(fixture("falsify_input.json"))
+        .arg("--build-meta")
+        .arg(fixture("build_meta_ok.json"))
         .arg("--out")
         .arg(&out)
         .assert()
@@ -801,6 +803,36 @@ fn falsify_writes_verdict_file() {
     let written = std::fs::read_to_string(&out).expect("falsification.json written");
     let parsed: Value = serde_json::from_str(&written).expect("valid json");
     assert!(parsed.get("verdict").is_some(), "missing verdict field");
+}
+
+// Abstain-safe default: WITHOUT --build-meta the convention inputs' provenance
+// is unknown, so the gate treats them as degraded and abstains — omitting the
+// build report can never silently read as "not degraded".
+#[test]
+fn falsify_without_build_meta_abstains_as_degraded() {
+    let dir = TempDir::new().expect("tempdir");
+    let out = dir.path().join("falsification.json");
+
+    aoa()
+        .args(["falsify", "--repos"])
+        .arg(fixture("falsify_input.json"))
+        .arg("--out")
+        .arg(&out)
+        .assert()
+        .failure();
+
+    let parsed: Value =
+        serde_json::from_str(&std::fs::read_to_string(&out).expect("written")).expect("json");
+    assert_eq!(parsed["verdict"], "inconclusive");
+    assert_eq!(parsed["precondition_unmet"], "convention_inputs_degraded");
+    let notes = parsed["notes"].as_array().unwrap();
+    assert!(
+        notes.iter().any(|n| n
+            .as_str()
+            .unwrap_or_default()
+            .contains("abstain-safe default")),
+        "the report must say the degradation is the missing build-meta default, got {notes:?}"
+    );
 }
 
 // Criterion 8 (R-silent): an unsupported forge fails loudly, never a silent no-op.
@@ -1104,6 +1136,8 @@ fn falsify_real_verdict_has_no_precondition_marker() {
     aoa()
         .args(["falsify", "--repos"])
         .arg(fixture("falsify_input.json"))
+        .arg("--build-meta")
+        .arg(fixture("build_meta_ok.json"))
         .arg("--out")
         .arg(&out)
         .assert()
@@ -1129,6 +1163,8 @@ fn falsify_escapes_untrusted_bias_warning_text() {
     let assert = aoa()
         .args(["falsify", "--repos"])
         .arg(fixture("falsify_input.json"))
+        .arg("--build-meta")
+        .arg(fixture("build_meta_ok.json"))
         .arg("--bias-warnings")
         .arg(fixture("bias_warnings_malicious.json"))
         .arg("--out")
