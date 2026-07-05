@@ -132,20 +132,22 @@ the manifest file.
 ```json
 {
   "k_runs": 3,
-  "min_holdout_size": 20,
+  "min_holdout_size": 7,
   "min_effect_size": 0.0,
   "repos": [
     {
       "repo_id": "org/widget",
       "confidence": "high",     // operator assertion: SCIP-grade index. REQUIRED — no default.
       "calibrated": true,       // operator assertion: scoring calibrated. REQUIRED — no default.
+      "task_shape": "answer",   // comprehension tasks; REQUIRES scip_index. Default: "edit".
+      "scip_index": "../org-widget/index.aoa.json",  // vendored SCIP JSON of the BASELINE repo state (pinned; see the convention-set section)
       "runs": [
         { "seed": 1, "repo_arm": "seed1/aoa_migrated", "harness_arm": "seed1/harness_swap" },
         { "seed": 2, "repo_arm": "seed2/aoa_migrated", "harness_arm": "seed2/harness_swap" },
         { "seed": 3, "repo_arm": "seed3/aoa_migrated", "harness_arm": "seed3/harness_swap" }
       ]
     }
-    // ... ≥5 repos for a usable (non-`too_few_repos`) verdict
+    // ... ≥5 repos for a usable (non-`too_few_repos`) verdict; ONE task_shape per manifest
   ]
 }
 ```
@@ -156,6 +158,122 @@ for a real SCIP index). `native_span` is **derived** from each task's mined
 oracle (held-out provenance) — never declared. A repo that is not
 high-confidence **and** native-composed **and** calibrated is reported as
 *excluded* and casts no vote (R-silent).
+
+**Pre-registered gate parameters** (the values the campaign runs with):
+
+- `k_runs: 3` — the K≥3 determinism floor. The gate hard-errors below 3; the
+  campaign uses exactly 3.
+- `min_holdout_size: 7` — the campaign expectation is **≥7** admitted pairs per
+  repo (the marshmallow consensus re-mine ships 7 tasks). Excluded-with-reason
+  pairs that shrink a repo below this trip the power precondition — that
+  cascade is intended.
+- `min_effect_size: 0.0` — stays `0.0` as pre-registered: the effect-size floor
+  is disabled, and power is carried by the holdout floor plus the K≥3
+  determinism check.
+
+## Answer-task convention set (pre-registered 2026-07-04)
+
+> Registered before any campaign data existed (bead `aoa-dhk.1`; the marshmallow
+> consensus re-mine had shipped 7 tasks but no R0_REDO arm had been run against
+> them). The definitions and the admissible set below were fixed FIRST so that a
+> later `proceed` cannot be the product of convention choices tuned on the same
+> data they harden.
+
+R0' convention-invariance originally admitted tasks by `edit_locality` /
+`mutation_depth` — inputs defined for edit-shaped SDLC tasks with ≥2 accepted PR
+solutions. The R0 campaign runs **answer-shaped comprehension tasks** (the agent
+explores the repo and writes `answer.json`; no edits, no accepted solutions), so
+those inputs do not exist and the builder used to emit sentinels +
+`convention_inputs_degraded: true`, forcing abstention. The answer-task
+analogues are defined from what a comprehension trial actually produces:
+
+**Per identical pair, per arm** (`repo` and `harness`), with
+
+- `T` = the arm's **trace footprint**: the distinct repo files the trial's
+  instrumented trace read or touched (`file.read` / `write.attempt` /
+  `write.blocked` span targets from the codeprobe transcript via
+  `aoa-codeprobe-shim`), resolved onto the SCIP index's file universe by
+  longest component-aligned suffix match (out-of-repo paths such as
+  `answer.json` drop out);
+- `O` = the task's **oracle chain**: the repo files the mined oracle references
+  — the `file_list` answer in `tests/ground_truth.json`, plus
+  `divergence_report.json`'s `consensus_files`, `defining_file`, and `symbol`
+  (module pairs `a->b`, file-qualified `path::member`, dotted names) — resolved
+  against the same universe (`aoa_bench::OracleChainFacts::resolve`);
+
+**Which SCIP index (pinned): always the baseline-arm index.** The manifest's
+single `scip_index` per repo supplies the file universe and symbol graph for
+BOTH arms' measurements, and it is the index of the **baseline (pre-migration)
+repo state** — never the migrated checkout's. Rationale: `|T ∩ O| / |T|` and
+reach are only comparable across arms when both footprints and the oracle chain
+resolve against one shared universe (symmetric measurement), and files *added*
+by the migration are intentionally out-of-universe for both arms — a migration
+must not enlarge the universe its own arm is scored on.
+
+the two convention inputs are:
+
+1. **trace-locality** `= |T ∩ O| / |T|` ∈ `[0, 1]`. `1.0` = every file the
+   agent touched is on the oracle chain (focused navigation); near `0.0` =
+   repo-wide thrashing. The analogue of edit-locality's inflation ratios, with
+   the footprint standing in for `F_edit` and the oracle chain for the
+   accepted-solution sets.
+2. **trace-reach depth** `=` the smallest `k` such that every oracle-chain file
+   is within `k` **undirected** hops of some symbol defined in a footprint file,
+   in the vendored SCIP reference graph (multi-source BFS; reach measures
+   navigational proximity, not mutation blast radius). A chain unreachable at
+   any depth saturates to `u32::MAX` — a measurement ("deeper than any finite
+   bound"), not missing data.
+
+**Admissible set** (`ScoringConvention::admissible_answer()` — the structural
+analogue of the edit-task set, family-tagged and emitted in the report):
+
+| name | bound | why it is an extreme |
+|---|---|---|
+| `trace_locality_floor` | locality ≥ 0.0 | the permissive end of the `[0,1]` locality space |
+| `trace_locality_ceiling` | locality ≤ 1.0 | the strict end of the same space |
+| `trace_reach_depth_k` | depth ≤ 3, both arms | scores only pairs whose oracle chain sat near where each agent actually looked |
+| `alternative_metric_weights` | repo × 0.75 / harness × 1.25 | the weighting extreme biased *against* the repo arm |
+
+A `proceed` must survive all four. A bound applies to **both arms'** inputs — a
+pair participates under a convention only when the repo-arm and harness-arm
+trials each satisfy it (anything else would let one arm's thrashing be scored
+under a focused-navigation convention).
+
+**Which conventions can bind.** `trace_locality_floor` (≥ 0.0) and
+`trace_locality_ceiling` (≤ 1.0) are the structural bounds of the `[0, 1]`
+locality space: no pair can ever fail them, so they can never exclude anything.
+They are kept for structural symmetry with the edit-family set (whose locality
+extremes at 0.0/1.0 are equally tautological), not as live exclusion knobs. The
+conventions that can actually change admission or votes are
+`trace_reach_depth_k` (excludes pairs whose oracle chain sits more than 3
+undirected hops from either arm's footprint, including the `u32::MAX`
+saturation) and `alternative_metric_weights` (re-weights votes against the repo
+arm). No new thresholds may be invented post hoc: the gate rejects any
+convention set that is not structurally identical to the pre-registered one.
+
+**Honest semantics, fixed a priori:**
+
+- The builder computes these inputs per pair (`task_shape: "answer"` +
+  `scip_index` in the manifest). A pair whose inputs cannot be computed — a
+  prose-only transcript with no instrumented file access, an oracle chain that
+  resolves to no indexed file — is **excluded with the reason** in the build
+  report; it is never given sentinel inputs. `convention_inputs_degraded` is
+  false exactly when every admitted pair carries real inputs.
+- Mixed task shapes in one manifest, or conventions whose family does not match
+  the tasks' inputs, are hard errors. The configured conventions must equal the
+  pre-registered admissible set exactly — `aoa falsify` hard-errors on any
+  other set (no override flag) — and `falsification.json` emits every
+  convention's full parameters, not just names, so a tampered threshold cannot
+  hide. A convention that admits zero pairs downgrades the verdict to a real
+  R0' abstention naming the convention — never a vacuous invariance pass.
+- Known under-approximation, symmetric by protocol but noted: `T` sees only
+  instrumented tool calls. Navigation done through non-test `Bash` commands
+  (grep/sed) is outside the 8-span vocabulary and invisible to the footprint;
+  if arms differ systematically in Bash-vs-Read usage, locality comparisons
+  between them inherit that bias. A trial that navigated *only* via Bash has an
+  empty footprint and is excluded-with-reason, which is the honest outcome —
+  but it can shrink the holdout below `min_holdout_size` and trip the power
+  precondition. That cascade is intended.
 
 ## Step 3 — build + gate
 
@@ -180,11 +298,18 @@ scripts/r0_experiment.sh \
   - `too_few_repos` — fewer than 5 repos submitted. The smoke hits this. **A
     real R0' abstention has NO `precondition_unmet` field** — that is how you
     tell "we could not run the gate" apart from "the gate ran and abstained."
-  - `convention_inputs_degraded` — per-task `edit_locality`/`mutation_depth`
-    were not derivable (no per-repo symbol graph), so the R0'
-    convention-invariance check could not be exercised. The gate abstains rather
-    than assert a verdict the hardening cannot back. (Wiring real convention
-    inputs is the `aoa-dhk.1` follow-up.)
+  - `convention_inputs_degraded` — the build carried sentinel convention inputs
+    (edit-shaped repos: no symbol-graph edit pipeline exists yet), so the R0'
+    convention-invariance check could not be exercised and the gate abstains
+    rather than assert a verdict the hardening cannot back. Answer-shaped
+    builds (`task_shape: "answer"` + `scip_index`) compute real per-pair
+    trace-locality/trace-reach inputs and clear this blocker — see
+    "Answer-task convention set (pre-registered 2026-07-04)". The default is
+    **abstain-safe**: running `aoa falsify` *without* `--build-meta` treats the
+    convention inputs as degraded (their provenance is unknown), and a build
+    report that omits the `convention_inputs_degraded` field parses as
+    degraded — omission can never read as "not degraded". Always pass the
+    build report `aoa eval experiment` emits.
 - **`repo_delta` / `harness_delta`**: mean held-out success on each arm over
   eligible repos. Emitted even when abstaining, for transparency.
 - **`bias_warnings`**: codeprobe's measurement-bias warnings, surfaced

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use aoa_gap::HeldOutProvenance;
 use aoa_metrics::Confidence;
 
-use crate::convention::ScoringConvention;
+use crate::convention::{ConventionFamily, ScoringConvention};
 
 /// The three independent facts that decide whether a repo may vote in R0.
 ///
@@ -19,6 +19,50 @@ pub struct Eligibility {
     pub native_span: HeldOutProvenance,
     /// Whether the repo's scoring is calibrated against external outcomes.
     pub calibrated: bool,
+}
+
+/// Trace-reach depth recorded when the oracle chain is unreachable from the
+/// agent's trace footprint in the symbol graph: "deeper than any finite bound".
+/// Any finite `max_depth` convention excludes a task carrying this value.
+pub const UNREACHABLE_TRACE_REACH_DEPTH: u32 = u32::MAX;
+
+/// The per-task scoring inputs an admissible convention may bound, tagged by
+/// task shape so the two families can never be silently conflated.
+///
+/// - `Edit`: edit-shaped SDLC task. `edit_locality` (in `[0.0, 1.0]`) and
+///   `mutation_depth` derive from >=2 accepted PR solutions and the mutation
+///   surface (see `aoa-metrics`).
+/// - `Answer`: answer-shaped comprehension task (pre-registered 2026-07-04,
+///   bead aoa-dhk.1; see `docs/r0_runbook.md`). Per arm trial:
+///   *trace-locality* = `|T ∩ O| / |T|` where `T` is the set of repo files the
+///   agent's instrumented trace read or touched and `O` is the task's oracle
+///   chain files, in `[0.0, 1.0]` (1.0 = every touched file was on the oracle
+///   chain); *trace-reach depth* = the smallest `k` such that every oracle
+///   chain file is within `k` undirected hops of the trace footprint in the
+///   SCIP symbol graph ([`UNREACHABLE_TRACE_REACH_DEPTH`] when disconnected).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "family", rename_all = "snake_case")]
+pub enum ConventionInputs {
+    Edit {
+        edit_locality: f64,
+        mutation_depth: u32,
+    },
+    Answer {
+        repo_trace_locality: f64,
+        harness_trace_locality: f64,
+        repo_trace_reach_depth: u32,
+        harness_trace_reach_depth: u32,
+    },
+}
+
+impl ConventionInputs {
+    /// The task shape these inputs belong to.
+    pub fn family(&self) -> ConventionFamily {
+        match self {
+            ConventionInputs::Edit { .. } => ConventionFamily::Edit,
+            ConventionInputs::Answer { .. } => ConventionFamily::Answer,
+        }
+    }
 }
 
 /// One identical-pair task with both held-out success bits and the scoring
@@ -38,12 +82,9 @@ pub struct PairTask {
     pub repo_held_out_success: bool,
     /// Held-out success on the harness arm (swapped harness, fixed repo).
     pub harness_held_out_success: bool,
-    /// Edit-locality of the task's accepted solution, in `[0.0, 1.0]`. Used by
-    /// floor/ceiling conventions to admit or reject the task's contribution.
-    pub edit_locality: f64,
-    /// Mutation-surface reachability depth of the task. Used by depth-k
-    /// conventions to admit or reject the task's contribution.
-    pub mutation_depth: u32,
+    /// The task-shape-tagged inputs the floor/ceiling and depth-k conventions
+    /// admit or reject the task's contribution by.
+    pub convention_inputs: ConventionInputs,
 }
 
 /// One fixed-seed replication of a repo's identical-pair tasks.
@@ -84,6 +125,10 @@ pub struct FalsifyConfig {
     /// and no significant verdict may be returned.
     pub min_effect_size: f64,
     /// The admissible scoring conventions the verdict must be invariant across.
+    /// Must structurally equal the pre-registered set for the input's family
+    /// ([`ScoringConvention::admissible_edit`] or
+    /// [`ScoringConvention::admissible_answer`]); the gate hard-errors on any
+    /// other set so hand-edited parameters cannot hide behind the names.
     pub conventions: Vec<ScoringConvention>,
 }
 
@@ -93,7 +138,7 @@ impl Default for FalsifyConfig {
             k_runs: 3,
             min_holdout_size: 20,
             min_effect_size: 0.0,
-            conventions: ScoringConvention::admissible_default(),
+            conventions: ScoringConvention::admissible_edit(),
         }
     }
 }

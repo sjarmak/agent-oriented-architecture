@@ -80,6 +80,7 @@ mod tests {
             oracle_files: BTreeSet::from(["g.py".to_string()]),
             ground_truth_commit: None,
             accepted_solutions: accepted,
+            oracle_chain: Default::default(),
         }
     }
 

@@ -2,8 +2,8 @@ use aoa_gap::HeldOutProvenance;
 use aoa_metrics::Confidence;
 
 use aoa_falsify::{
-    falsify, Eligibility, FalsifyConfig, FalsifyError, FalsifyInput, PairTask, RepoResult, RepoRun,
-    Verdict,
+    falsify, ConventionInputs, Eligibility, FalsifyConfig, FalsifyError, FalsifyInput, PairTask,
+    RepoResult, RepoRun, ScoringConvention, Verdict,
 };
 
 /// An eligible repo: high-confidence, native-composed, calibrated.
@@ -23,8 +23,27 @@ fn pair(task_id: u64, repo_ok: bool, harness_ok: bool) -> PairTask {
         is_identical_pair: true,
         repo_held_out_success: repo_ok,
         harness_held_out_success: harness_ok,
-        edit_locality: 0.5,
-        mutation_depth: 1,
+        convention_inputs: ConventionInputs::Edit {
+            edit_locality: 0.5,
+            mutation_depth: 1,
+        },
+    }
+}
+
+/// The answer-task analogue of [`pair`]: focused traces (locality 1.0) at depth
+/// 0 in both arms, admitted by every pre-registered answer convention.
+fn answer_pair(task_id: u64, repo_ok: bool, harness_ok: bool) -> PairTask {
+    PairTask {
+        task_id,
+        is_identical_pair: true,
+        repo_held_out_success: repo_ok,
+        harness_held_out_success: harness_ok,
+        convention_inputs: ConventionInputs::Answer {
+            repo_trace_locality: 1.0,
+            harness_trace_locality: 1.0,
+            repo_trace_reach_depth: 0,
+            harness_trace_reach_depth: 0,
+        },
     }
 }
 
@@ -238,7 +257,8 @@ fn convention_invariance_flip_downgrades_to_inconclusive() {
     // Conventions are emitted as data.
     assert!(report
         .conventions_tried
-        .contains(&"alternative_metric_weights".to_string()));
+        .iter()
+        .any(|c| c.name == "alternative_metric_weights"));
 }
 
 /// Criterion 6: ineligible repos (low-confidence / reconstructed) do not vote.
@@ -371,4 +391,273 @@ fn too_few_repos_is_error() {
         .collect();
     let err = falsify(&input(repos)).unwrap_err();
     assert_eq!(err, FalsifyError::TooFewRepos(4));
+}
+
+// --- answer-task convention family (pre-registered 2026-07-04, aoa-dhk.1) ----
+
+/// A repo of answer-shaped pairs, stable across `k_runs` and eligible.
+fn answer_repo(id: &str, tasks: Vec<PairTask>) -> RepoResult {
+    RepoResult {
+        repo_id: id.to_string(),
+        eligibility: eligible(),
+        runs: stable_runs(3, tasks),
+        holdout_size: 40,
+    }
+}
+
+fn answer_input(repos: Vec<RepoResult>) -> FalsifyInput {
+    FalsifyInput {
+        repos,
+        config: FalsifyConfig {
+            conventions: ScoringConvention::admissible_answer(),
+            ..FalsifyConfig::default()
+        },
+    }
+}
+
+/// Answer-shaped inputs score end to end under the answer convention set, and
+/// the report names the family and the trace-convention names as data.
+#[test]
+fn answer_family_scores_and_reports_family_as_data() {
+    let repos: Vec<RepoResult> = (0..5)
+        .map(|i| answer_repo(&format!("r{i}"), vec![answer_pair(1, true, false)]))
+        .collect();
+
+    let report = falsify(&answer_input(repos)).expect("falsify runs");
+    assert_eq!(report.verdict, Verdict::Proceed);
+
+    let value: serde_json::Value = serde_json::from_str(&report.to_json().unwrap()).unwrap();
+    assert_eq!(value["convention_family"], "answer");
+    assert!(report
+        .conventions_tried
+        .iter()
+        .any(|c| c.name == "trace_locality_floor"));
+    assert!(report
+        .conventions_tried
+        .iter()
+        .any(|c| c.name == "trace_reach_depth_k"));
+}
+
+/// falsification.json emits every convention's FULL parameters, not just names:
+/// a reader can verify the thresholds, depths, and weights actually applied.
+#[test]
+fn report_emits_full_convention_parameters() {
+    let repos: Vec<RepoResult> = (0..5)
+        .map(|i| answer_repo(&format!("r{i}"), vec![answer_pair(1, true, false)]))
+        .collect();
+
+    let report = falsify(&answer_input(repos)).expect("falsify runs");
+    let value: serde_json::Value = serde_json::from_str(&report.to_json().unwrap()).unwrap();
+    let conventions = value["conventions_tried"].as_array().expect("array");
+    assert_eq!(conventions.len(), 4);
+
+    let depth_k = conventions
+        .iter()
+        .find(|c| c["name"] == "trace_reach_depth_k")
+        .expect("depth-k present");
+    assert_eq!(depth_k["max_depth"], 3);
+    assert_eq!(depth_k["locality_threshold"], 0.0);
+
+    let weights = conventions
+        .iter()
+        .find(|c| c["name"] == "alternative_metric_weights")
+        .expect("weights present");
+    assert_eq!(weights["repo_weight"], 0.75);
+    assert_eq!(weights["harness_weight"], 1.25);
+}
+
+/// A hand-edited convention set — tampered threshold/depth behind unchanged
+/// names, or a dropped entry — is a structural error. The pre-registered
+/// admissible set is the only set the gate accepts; there is no override.
+#[test]
+fn tampered_convention_set_is_a_structural_error() {
+    let repos: Vec<RepoResult> = (0..5)
+        .map(|i| answer_repo(&format!("r{i}"), vec![answer_pair(1, true, false)]))
+        .collect();
+
+    // The demonstrated tamper: strengthen the floor and zero the depth bound.
+    let mut tampered = ScoringConvention::admissible_answer();
+    tampered[0].locality_threshold = 0.9;
+    tampered[2].max_depth = 0;
+    let err = falsify(&FalsifyInput {
+        repos: repos.clone(),
+        config: FalsifyConfig {
+            conventions: tampered,
+            ..FalsifyConfig::default()
+        },
+    })
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        FalsifyError::ConventionSetNotPreRegistered { .. }
+    ));
+
+    // A subset (dropped convention) is equally inadmissible.
+    let mut subset = ScoringConvention::admissible_answer();
+    subset.pop();
+    let err = falsify(&FalsifyInput {
+        repos,
+        config: FalsifyConfig {
+            conventions: subset,
+            ..FalsifyConfig::default()
+        },
+    })
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        FalsifyError::ConventionSetNotPreRegistered { .. }
+    ));
+}
+
+/// TOTAL exclusion is a failed precondition, not vacuous invariance: when a
+/// configured convention admits ZERO pairs (every repo's harness trace-reach
+/// saturates beyond depth-k), the gate must abstain naming the convention.
+/// Regression: the zero-admission deltas used to compare `0.0 >= 0.0`, so every
+/// repo "voted proceed" under the all-excluding convention and the invariance
+/// check passed on no evidence.
+#[test]
+fn answer_total_exclusion_under_depth_k_is_inconclusive_not_proceed() {
+    let saturated = PairTask {
+        convention_inputs: ConventionInputs::Answer {
+            repo_trace_locality: 1.0,
+            harness_trace_locality: 1.0,
+            repo_trace_reach_depth: 0,
+            harness_trace_reach_depth: aoa_falsify::UNREACHABLE_TRACE_REACH_DEPTH,
+        },
+        ..answer_pair(1, true, false)
+    };
+    let repos: Vec<RepoResult> = (0..5)
+        .map(|i| answer_repo(&format!("r{i}"), vec![saturated]))
+        .collect();
+
+    let report = falsify(&answer_input(repos)).expect("falsify runs");
+    assert_eq!(report.verdict, Verdict::Inconclusive);
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n.contains("trace_reach_depth_k") && n.contains("zero")),
+        "abstention must name the all-excluding convention, got {:?}",
+        report.notes
+    );
+}
+
+/// The edit family closes the same hole: pairs all deeper than the
+/// mutation-surface depth-k bound leave that convention with zero admissions,
+/// and the verdict abstains instead of proceeding.
+#[test]
+fn edit_total_exclusion_under_depth_k_is_inconclusive_not_proceed() {
+    let deep = PairTask {
+        convention_inputs: ConventionInputs::Edit {
+            edit_locality: 0.5,
+            mutation_depth: 10,
+        },
+        ..pair(1, true, false)
+    };
+    let repos: Vec<RepoResult> = (0..5)
+        .map(|i| RepoResult {
+            repo_id: format!("r{i}"),
+            eligibility: eligible(),
+            runs: stable_runs(3, vec![deep]),
+            holdout_size: 40,
+        })
+        .collect();
+
+    let report = falsify(&input(repos)).expect("falsify runs");
+    assert_eq!(report.verdict, Verdict::Inconclusive);
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n.contains("mutation_surface_depth_k") && n.contains("zero")),
+        "abstention must name the all-excluding convention, got {:?}",
+        report.notes
+    );
+}
+
+/// A repo whose runs carry no identical-pair tasks casts no vote even under the
+/// canonical convention: the base tally abstains rather than counting the empty
+/// repo as a proceed vote.
+#[test]
+fn repo_with_zero_identical_pairs_cannot_vote() {
+    let mut non_paired = pair(1, true, false);
+    non_paired.is_identical_pair = false;
+
+    let mut repos: Vec<RepoResult> = (0..4)
+        .map(|i| repo(&format!("r{i}"), true, false))
+        .collect();
+    repos.push(RepoResult {
+        repo_id: "empty".to_string(),
+        eligibility: eligible(),
+        runs: stable_runs(3, vec![non_paired]),
+        holdout_size: 40,
+    });
+
+    let report = falsify(&input(repos)).expect("falsify runs");
+    assert_eq!(report.verdict, Verdict::Inconclusive);
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n.contains("empty") && n.contains("canonical")),
+        "abstention must name the evidence-free repo, got {:?}",
+        report.notes
+    );
+}
+
+/// A deep (or unreachable) trace-reach in EITHER arm drops the task under the
+/// depth-k convention; a proceed that depends on such tasks flips and the
+/// verdict downgrades to inconclusive.
+#[test]
+fn answer_depth_flip_downgrades_to_inconclusive() {
+    // Per repo: a repo-arm win whose harness-arm trace never reaches the oracle
+    // chain (unreachable depth), plus a shallow harness-arm win. Canonical: 0.5
+    // vs 0.5, tie => every repo votes proceed. Under trace_reach_depth_k only
+    // the shallow harness win is admitted => the vote flips => inconclusive.
+    let deep_repo_win = PairTask {
+        convention_inputs: ConventionInputs::Answer {
+            repo_trace_locality: 1.0,
+            harness_trace_locality: 1.0,
+            repo_trace_reach_depth: 0,
+            harness_trace_reach_depth: aoa_falsify::UNREACHABLE_TRACE_REACH_DEPTH,
+        },
+        ..answer_pair(1, true, false)
+    };
+    let shallow_harness_win = answer_pair(2, false, true);
+    let repos: Vec<RepoResult> = (0..5)
+        .map(|i| answer_repo(&format!("r{i}"), vec![deep_repo_win, shallow_harness_win]))
+        .collect();
+
+    let report = falsify(&answer_input(repos)).expect("falsify runs");
+    assert_eq!(report.verdict, Verdict::Inconclusive);
+    assert!(report
+        .notes
+        .iter()
+        .any(|n| n.contains("trace_reach_depth_k")));
+}
+
+/// Tasks carrying convention inputs of both families in one input are a
+/// structural error — never scored under a single convention set.
+#[test]
+fn mixed_input_families_are_an_error() {
+    let mut repos: Vec<RepoResult> = (0..4)
+        .map(|i| repo(&format!("r{i}"), true, false))
+        .collect();
+    repos.push(answer_repo("r4", vec![answer_pair(1, true, false)]));
+
+    let err = falsify(&input(repos)).unwrap_err();
+    assert_eq!(err, FalsifyError::MixedInputFamilies);
+}
+
+/// A convention set whose family does not match the tasks' inputs is a
+/// structural error — otherwise every convention would silently admit nothing.
+#[test]
+fn convention_family_mismatch_is_an_error() {
+    // Edit-family default conventions over answer-shaped tasks.
+    let repos: Vec<RepoResult> = (0..5)
+        .map(|i| answer_repo(&format!("r{i}"), vec![answer_pair(1, true, false)]))
+        .collect();
+
+    let err = falsify(&input(repos)).unwrap_err();
+    assert!(matches!(err, FalsifyError::ConventionFamilyMismatch { .. }));
 }

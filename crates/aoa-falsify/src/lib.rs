@@ -12,8 +12,11 @@
 //!
 //! - DETERMINISM: stable across K >= 3 fixed-seed runs, else `inconclusive`.
 //! - CONVENTION-INVARIANCE: invariant across all admissible scoring conventions
-//!   (edit-locality floor and ceiling, mutation-surface depth-k, alternative
-//!   metric weights), else `inconclusive`. The conventions are data, not hidden.
+//!   for the input's task shape — edit tasks: edit-locality floor/ceiling,
+//!   mutation-surface depth-k, alternative metric weights; answer tasks:
+//!   trace-locality floor/ceiling, trace-reach depth-k, alternative metric
+//!   weights (pre-registered 2026-07-04, bead aoa-dhk.1) — else `inconclusive`.
+//!   The conventions are data, not hidden.
 //! - ELIGIBILITY: only high-confidence (SCIP-grade) AND native-span AND
 //!   calibrated repos vote; ineligible repos are excluded (R-silent).
 //! - POWER: a held-out size and effect-size precondition gates whether a
@@ -31,10 +34,13 @@ mod report;
 mod types;
 mod verdict;
 
-pub use convention::{LocalityBound, ScoringConvention};
+pub use convention::{ConventionFamily, LocalityBound, ScoringConvention};
 pub use delta::{repo_deltas, repo_votes_for_proceed, RepoDeltas};
 pub use eligibility::is_eligible;
 pub use error::FalsifyError;
 pub use report::{falsify, FalsifyReport};
-pub use types::{Eligibility, FalsifyConfig, FalsifyInput, PairTask, RepoResult, RepoRun};
+pub use types::{
+    ConventionInputs, Eligibility, FalsifyConfig, FalsifyInput, PairTask, RepoResult, RepoRun,
+    UNREACHABLE_TRACE_REACH_DEPTH,
+};
 pub use verdict::Verdict;

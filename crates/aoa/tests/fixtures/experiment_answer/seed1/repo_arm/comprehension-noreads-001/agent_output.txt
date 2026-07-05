@@ -1,0 +1,1 @@
+The answer is true; pkg.core imports pkg.util directly.

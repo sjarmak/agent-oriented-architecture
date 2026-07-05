@@ -1,0 +1,24 @@
+{
+  "documents": [
+    {
+      "relative_path": "src/pkg/app.py",
+      "occurrences": [
+        { "symbol": "pkg/app#app().", "roles": ["definition"] },
+        { "symbol": "pkg/core#core().", "roles": ["reference"], "enclosing": "pkg/app#app()." }
+      ]
+    },
+    {
+      "relative_path": "src/pkg/core.py",
+      "occurrences": [
+        { "symbol": "pkg/core#core().", "roles": ["definition"] }
+      ]
+    },
+    {
+      "relative_path": "src/pkg/util.py",
+      "occurrences": [
+        { "symbol": "pkg/util#util().", "roles": ["definition"] }
+      ]
+    }
+  ],
+  "writable": ["pkg/app#app().", "pkg/core#core().", "pkg/util#util()."]
+}

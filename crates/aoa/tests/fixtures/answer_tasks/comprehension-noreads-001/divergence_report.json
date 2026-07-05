@@ -1,0 +1,20 @@
+{
+  "schema_version": "consensus.v1",
+  "task_id": "comprehension-noreads-001",
+  "template": "transitive_dependency",
+  "symbol": "pkg.core->pkg.util",
+  "defining_file": "",
+  "answer_type": "boolean",
+  "threshold": 1.0,
+  "mode": "exact_answer",
+  "decision": "shipped",
+  "backend_results": [
+    { "backend": "regex_import_graph", "available": true, "n_files": 0, "files": [], "error": null, "answer": true },
+    { "backend": "python_ast_graph", "available": true, "n_files": 0, "files": [], "error": null, "answer": true }
+  ],
+  "pair_metrics": [
+    { "backend_a": "regex_import_graph", "backend_b": "python_ast_graph", "exact_match": true }
+  ],
+  "consensus_files": [],
+  "consensus_answer": true
+}
