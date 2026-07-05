@@ -489,8 +489,5 @@ fn convention_family_mismatch_is_an_error() {
         .collect();
 
     let err = falsify(&input(repos)).unwrap_err();
-    assert!(matches!(
-        err,
-        FalsifyError::ConventionFamilyMismatch { .. }
-    ));
+    assert!(matches!(err, FalsifyError::ConventionFamilyMismatch { .. }));
 }
