@@ -87,13 +87,38 @@ pub fn match_repo_relative(raw: &str, universe: &BTreeSet<String>) -> Option<Str
         .cloned()
 }
 
+/// The trace footprint `T` plus the span paths whose resolution is ambiguous.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TraceFootprint {
+    /// The distinct repo files the trace touched, resolved onto the universe.
+    pub files: BTreeSet<String>,
+    /// Relative span paths that failed resolution but are a component-aligned
+    /// SUFFIX of some universe file (e.g. `base.py` where the universe has
+    /// `src/base.py`): the documented precondition — absolute worktree paths or
+    /// repo-relative paths — was violated. Callers must surface these
+    /// (excluded-with-reason), never treat the trial's footprint as clean.
+    pub ambiguous_relative: BTreeSet<String>,
+}
+
 /// The trace footprint `T`: the distinct repo files the agent's instrumented
 /// trace read or touched (`file.read`, `write.attempt`, `write.blocked` span
 /// `path` targets), resolved onto the repo universe. Paths that resolve to no
 /// universe file are dropped — they are workspace/protocol artifacts, not repo
 /// navigation.
-pub fn trace_footprint(trace: &Trace, universe: &BTreeSet<String>) -> BTreeSet<String> {
-    trace
+///
+/// Resolution is deliberately ASYMMETRIC to the oracle-chain resolver
+/// (`aoa_bench`'s `resolve_repo_file`). Oracle references are miner-authored
+/// names of files known to live in the repo, so resolving a reference that is
+/// SHORTER than the universe entry (missing a `src/`-layout prefix) is safe
+/// there. A trace path carries no such guarantee: a workspace scratch file
+/// named like a repo file (a stray `base.py` beside `answer.json`) would be
+/// resolved INTO the universe and fabricate footprint, inflating locality.
+/// Instead of guessing, such paths are returned in
+/// [`TraceFootprint::ambiguous_relative`] so the trial is excluded with the
+/// reason rather than silently mismeasured — or silently dropped.
+pub fn trace_footprint(trace: &Trace, universe: &BTreeSet<String>) -> TraceFootprint {
+    let mut footprint = TraceFootprint::default();
+    let paths = trace
         .spans
         .iter()
         .filter(|s| {
@@ -102,9 +127,19 @@ pub fn trace_footprint(trace: &Trace, universe: &BTreeSet<String>) -> BTreeSet<S
                 SpanType::FileRead | SpanType::WriteAttempt | SpanType::WriteBlocked
             )
         })
-        .filter_map(|s| s.attributes.get("path").and_then(|v| v.as_str()))
-        .filter_map(|p| match_repo_relative(p, universe))
-        .collect()
+        .filter_map(|s| s.attributes.get("path").and_then(|v| v.as_str()));
+    for path in paths {
+        if let Some(resolved) = match_repo_relative(path, universe) {
+            footprint.files.insert(resolved);
+        } else if !path.starts_with('/')
+            && universe.iter().any(|u| u.ends_with(&format!("/{path}")))
+        {
+            footprint.ambiguous_relative.insert(path.to_string());
+        }
+        // Everything else is a workspace/protocol artifact (answer.json,
+        // out-of-repo absolute reads): not repo navigation, dropped.
+    }
+    footprint
 }
 
 /// Compute both answer-task convention inputs for one trial.
@@ -275,10 +310,29 @@ mod tests {
                 span(SpanType::RetrievalSearch, "src/app.py"), // query, not a file touch
             ],
         };
-        assert_eq!(
-            trace_footprint(&trace, &u),
-            universe(&["src/app.py", "src/core.py"])
-        );
+        let footprint = trace_footprint(&trace, &u);
+        assert_eq!(footprint.files, universe(&["src/app.py", "src/core.py"]));
+        assert!(footprint.ambiguous_relative.is_empty());
+    }
+
+    /// The asymmetry guard: a relative span path SHORTER than its universe entry
+    /// (missing the `src/`-layout prefix the oracle resolver would supply) is
+    /// surfaced as ambiguous, never silently dropped and never guessed into the
+    /// universe; genuinely out-of-universe paths still drop.
+    #[test]
+    fn trace_footprint_surfaces_sub_repo_relative_paths_as_ambiguous() {
+        let u = universe(&["src/base.py", "src/core.py"]);
+        let trace = Trace {
+            spans: vec![
+                span(SpanType::FileRead, "base.py"),     // suffix of src/base.py
+                span(SpanType::FileRead, "src/core.py"), // exact: resolved
+                span(SpanType::WriteAttempt, "answer.json"), // matches nothing: dropped
+                span(SpanType::FileRead, "/tmp/base.py"), // absolute out-of-repo: dropped
+            ],
+        };
+        let footprint = trace_footprint(&trace, &u);
+        assert_eq!(footprint.files, universe(&["src/core.py"]));
+        assert_eq!(footprint.ambiguous_relative, universe(&["base.py"]));
     }
 
     #[test]

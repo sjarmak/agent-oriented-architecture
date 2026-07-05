@@ -100,7 +100,23 @@ impl AnswerContext {
             )
         })?;
         let footprint = trace_footprint(&shim.trace, &self.universe);
-        let inputs = compute_trace_convention_inputs(&self.graph, &footprint, oracle)
+        // A relative span path that only resolves as a sub-repo suffix of a
+        // universe file (missing e.g. its `src/` prefix) makes the footprint
+        // ambiguous — excluded with the reason, never silently dropped (see
+        // `trace_footprint`'s asymmetry rationale).
+        if !footprint.ambiguous_relative.is_empty() {
+            bail!(
+                "{arm} arm: trace path(s) [{}] are ambiguous sub-repo-relative suffixes of \
+                 universe files; the trial's footprint cannot be measured",
+                footprint
+                    .ambiguous_relative
+                    .iter()
+                    .map(|p| p.escape_debug().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        let inputs = compute_trace_convention_inputs(&self.graph, &footprint.files, oracle)
             .map_err(|e| anyhow!("{arm} arm: {e}"))?;
         let depth = match inputs.trace_reach {
             TraceReach::Depth(d) => d,
@@ -127,5 +143,48 @@ impl AnswerContext {
         }
         self.oracle_cache.insert(task_id.to_string(), chain.clone());
         Ok(chain)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A relative trace path that is only a sub-repo suffix of a universe file
+    /// (missing its `src/` prefix) excludes the trial with the reason instead
+    /// of silently shrinking the footprint (the pre-fix behavior).
+    #[test]
+    fn ambiguous_relative_trace_path_is_excluded_with_reason() {
+        let dir = std::env::temp_dir().join(format!("aoa-answer-ambiguous-{}", std::process::id()));
+        let trial = dir.join("task-1");
+        std::fs::create_dir_all(&trial).unwrap();
+
+        let index = dir.join("index.aoa.json");
+        std::fs::write(
+            &index,
+            r#"{"documents": [{"relative_path": "src/pkg/app.py",
+                "occurrences": [{"symbol": "pkg/app#app().", "roles": ["definition"]}]}],
+                "writable": []}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            trial.join("agent_output.txt"),
+            concat!(
+                r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","#,
+                r#""name":"Read","input":{"file_path":"pkg/app.py"}}]}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+
+        let ctx = AnswerContext::load("sample/repo", &index, &dir).unwrap();
+        let oracle: BTreeSet<String> = ["src/pkg/app.py".to_string()].into();
+        let err = ctx.arm_inputs(&dir, "task-1", &oracle, "repo").unwrap_err();
+        assert!(
+            format!("{err:#}").contains("ambiguous") && format!("{err:#}").contains("pkg/app.py"),
+            "exclusion must carry the ambiguity reason and path, got: {err:#}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

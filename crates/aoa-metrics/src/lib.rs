@@ -35,5 +35,5 @@ pub use scoped::{compute_subtree_metrics, SubtreeMetrics};
 pub use subtree::{discover_partition, SubtreeError, SubtreePartition, WorkspaceSource};
 pub use trace_locality::{
     compute_trace_convention_inputs, match_repo_relative, trace_footprint, TraceConventionInputs,
-    TraceInputError, TraceReach,
+    TraceFootprint, TraceInputError, TraceReach,
 };
