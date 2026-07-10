@@ -632,6 +632,65 @@ mod tests {
     }
 
     #[test]
+    fn boolean_absence_measure_can_gate_once_clean_repos_supply_a_zero_anchor() {
+        // aoa-3a7: with aoa-audit's structure_measurements a clean repo now
+        // contributes a real 0, so a boolean absence measure varies (0s and 1s)
+        // and can reach Gating on a confirming corpus. Before the fix the corpus
+        // only ever saw the 1s (clean repos were dropped), pinning it Advisory
+        // regardless of the real relation. A binary predictor needs enough repos
+        // to beat the tie-degenerate permutation p-value: 4-vs-4 clean separation
+        // gives p = 2·(4!·4!)/8! ≈ 0.029 <= 0.05.
+        let repo = |id: &str, absence: u64, reverted: usize| Repo {
+            repo_id: id.into(),
+            structure_counts: std::collections::BTreeMap::from([(
+                "build_determinism_absence".to_string(),
+                absence,
+            )]),
+            mined_commits: (0..10)
+                .map(|i| MinedCommit {
+                    sha: format!("{id}-{i}"),
+                    reverted: i < reverted,
+                    churn: 0,
+                })
+                .collect(),
+            checkbox_baseline: None,
+        };
+        // Pinned builds (0) revert rarely; unpinned (1) revert often — a
+        // confirming positive tie for the LowerIsBetter measure vs the RevertRate
+        // harm, with clean separation between the two groups.
+        let c = Corpus {
+            repos: vec![
+                repo("r0", 0, 0),
+                repo("r1", 0, 1),
+                repo("r2", 0, 2),
+                repo("r3", 0, 3),
+                repo("r4", 1, 7),
+                repo("r5", 1, 8),
+                repo("r6", 1, 9),
+                repo("r7", 1, 10),
+            ],
+        };
+        let report = build_report_from_corpus(
+            "test: confirming boolean-absence corpus",
+            &c,
+            &GatingThresholds::default(),
+        )
+        .expect("well-defined corpus");
+        let m = report
+            .construct
+            .metrics
+            .iter()
+            .find(|m| m.metric == "build_determinism_absence")
+            .expect("candidate present");
+        assert_eq!(
+            m.mode,
+            MetricMode::Gating,
+            "a confirming boolean-absence corpus must gate; correlation={:?}",
+            m.correlations.first()
+        );
+    }
+
+    #[test]
     fn confirming_artifact_round_trips_through_serde() {
         let c = corpus(CONFIRMING);
         let report = build_report_from_corpus("fixture", &c, &GatingThresholds::default())

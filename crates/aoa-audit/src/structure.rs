@@ -33,6 +33,7 @@
 //! | Task discovery | **Probe**: [`task_discovery_item`] — issue-template / in-repo-tracker surface existence ([`TASK_DISCOVERY_SURFACES`]). |
 //! | Product / experimentation | **Excluded**: analytics/experimentation instrumentation is a product-layer semantic property with no fixed-filename convention and no plausible path from its presence to structural facts in coding-agent traces. |
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use aoa_metrics::SubtreePartition;
@@ -322,6 +323,90 @@ pub(crate) fn structure_items(
     Ok(items)
 }
 
+/// A structure measure's outcome over a repo.
+///
+/// The punch-list `Option<PunchItem>` encoding is lossy for correlation work: a
+/// probe emits nothing both when it *measured zero* (the repo is clean) and when
+/// it *could not measure* (e.g. too few files to form a median). Collapsing those
+/// to "absent" suits a to-do list but silently stops a measure from ever varying
+/// in an external-outcome corpus (aoa-3a7): a clean repo would never supply the
+/// `(0, y)` anchor a correlation needs. `StructureMeasure` keeps the two apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StructureMeasure {
+    /// The probe ran and counted `n` occurrences of the bad thing (`0` = clean).
+    Measured(u64),
+    /// The probe could not assess this repo, so there is no observation.
+    Unmeasurable,
+}
+
+/// Measure the code-structure family over `repo` as counts, distinguishing a
+/// measured zero from an inability to measure — the external-outcome-corpus view
+/// of the same probes [`structure_items`] renders as a punch list (see
+/// [`StructureMeasure`]). `size_outlier_k` is the audit's module-size multiplier.
+///
+/// Only the measures that back an external-outcome gating candidate are reported;
+/// `verification_reachability` and `invariant_discoverability` are punch-list-only
+/// (no corpus metric) and are deliberately omitted.
+pub fn structure_measurements(
+    repo: &Path,
+    size_outlier_k: f64,
+) -> Result<BTreeMap<FindingKind, StructureMeasure>, AuditError> {
+    use StructureMeasure::{Measured, Unmeasurable};
+
+    let mut m = BTreeMap::new();
+    m.insert(
+        FindingKind::BuildDeterminism,
+        Measured(absence_count(repo, BUILD_DETERMINISM_MARKERS)),
+    );
+    m.insert(
+        FindingKind::DevEnvironmentDeclaration,
+        Measured(absence_count(repo, DEV_ENVIRONMENT_MARKERS)),
+    );
+    m.insert(
+        FindingKind::TaskDiscoverySurface,
+        Measured(absence_count(repo, TASK_DISCOVERY_SURFACES)),
+    );
+    m.insert(
+        FindingKind::GeneratedArtifactProtection,
+        Measured(u64::from(!declares_linguist_generated(repo)?)),
+    );
+    m.insert(
+        FindingKind::WriteSafetyZone,
+        Measured(write_boundary_absent_count(repo)),
+    );
+    m.insert(
+        FindingKind::NavigabilityAnchor,
+        Measured(navigability_sites(repo)?.len() as u64),
+    );
+    m.insert(
+        FindingKind::ModuleSizeOutlier,
+        module_size_outliers(repo, size_outlier_k)?
+            .map_or(Unmeasurable, |outliers| Measured(outliers.len() as u64)),
+    );
+    m.insert(FindingKind::UnusedImportProxy, unused_import_measure(repo)?);
+    Ok(m)
+}
+
+/// The unused-import proxy count, or [`StructureMeasure::Unmeasurable`] on a repo
+/// with no Rust sources — the proxy is Rust-only, so its absence is "no data", not
+/// "zero unused imports". A repo that has Rust sources with every import used is a
+/// real `Measured(0)`.
+fn unused_import_measure(repo: &Path) -> Result<StructureMeasure, AuditError> {
+    let mut sources: Vec<(PathBuf, u64)> = Vec::new();
+    collect_source_line_counts(repo, &mut sources)?;
+    let has_rust = sources
+        .iter()
+        .any(|(p, _)| p.extension().and_then(|e| e.to_str()) == Some("rs"));
+    if !has_rust {
+        return Ok(StructureMeasure::Unmeasurable);
+    }
+    let mut unused: Vec<(PathBuf, u64)> = Vec::new();
+    collect_unused_imports(repo, &mut unused)?;
+    Ok(StructureMeasure::Measured(
+        unused.iter().map(|(_, n)| n).sum(),
+    ))
+}
+
 /// Whether the repo declares deterministic build inputs: any well-known
 /// dependency lockfile ([`BUILD_DETERMINISM_MARKERS`]) at the repo root. The
 /// measure is the count of this single marker family that is ABSENT (0 when any
@@ -384,7 +469,7 @@ fn absence_item(
     kind: FindingKind,
     unit: &str,
 ) -> Option<PunchItem> {
-    if markers.iter().any(|rel| repo.join(rel).exists()) {
+    if absence_count(repo, markers) == 0 {
         return None;
     }
 
@@ -396,6 +481,15 @@ fn absence_item(
         plane: None,
         subtree: None,
     })
+}
+
+/// The measured absence of a fixed-path marker family: `0` when any marker in the
+/// family exists (the good thing is declared), `1` when none does. This is the
+/// value [`absence_item`] emits (as a punch item only when it is `1`) and the
+/// value [`structure_measurements`] reports (including the `0` the punch list
+/// drops).
+fn absence_count(repo: &Path, markers: &[&str]) -> u64 {
+    u64::from(!markers.iter().any(|rel| repo.join(rel).exists()))
 }
 
 /// The one workspace subtree every path in `paths` attributes to, or `None`.
@@ -872,31 +966,9 @@ fn module_size_outlier_item(
     k: f64,
     partition: &SubtreePartition,
 ) -> Result<Option<PunchItem>, AuditError> {
-    let mut files: Vec<(PathBuf, u64)> = Vec::new();
-    collect_source_line_counts(repo, &mut files)?;
-
-    if files.len() < MIN_FILES_FOR_MEDIAN {
+    let Some(outliers) = module_size_outliers(repo, k)? else {
         return Ok(None);
-    }
-
-    let mut line_counts: Vec<u64> = files.iter().map(|(_, n)| *n).collect();
-    line_counts.sort_unstable();
-    let median = median(&line_counts);
-    // A zero median (a repo of empty source files) has no scale to compare
-    // against — abstain rather than divide a threshold into nothing.
-    if median == 0 {
-        return Ok(None);
-    }
-
-    // Line counts are capped by MAX_SOURCE_BYTES (~8M lines max), far below
-    // f64's 2^53 exact-integer range, so these casts lose no precision; `k` is
-    // fractional, so the comparison must be in f64.
-    let threshold = median as f64 * k;
-    let outliers: Vec<&PathBuf> = files
-        .iter()
-        .filter(|(_, n)| *n as f64 > threshold)
-        .map(|(path, _)| path)
-        .collect();
+    };
     if outliers.is_empty() {
         return Ok(None);
     }
@@ -907,8 +979,42 @@ fn module_size_outlier_item(
         tier: Tier::Tier3,
         measured_cost: MeasuredCost::new(outliers.len() as u64, "outlier files"),
         plane: None,
-        subtree: common_subtree(partition, outliers.into_iter()),
+        subtree: common_subtree(partition, outliers.iter()),
     }))
+}
+
+/// The source files in `repo` exceeding `k`× the repo's own median source-file
+/// line count, or `None` when the measure cannot run: fewer than
+/// [`MIN_FILES_FOR_MEDIAN`] source files, or a zero median (a repo of empty
+/// source files) with no scale to compare against. `Some(vec![])` is a real
+/// *measured zero* — files exist and none is an outlier — the distinction from
+/// unmeasurable that [`structure_measurements`] needs and the punch list (which
+/// drops both) cannot express.
+fn module_size_outliers(repo: &Path, k: f64) -> Result<Option<Vec<PathBuf>>, AuditError> {
+    let mut files: Vec<(PathBuf, u64)> = Vec::new();
+    collect_source_line_counts(repo, &mut files)?;
+
+    if files.len() < MIN_FILES_FOR_MEDIAN {
+        return Ok(None);
+    }
+
+    let mut line_counts: Vec<u64> = files.iter().map(|(_, n)| *n).collect();
+    line_counts.sort_unstable();
+    let median = median(&line_counts);
+    if median == 0 {
+        return Ok(None);
+    }
+
+    // Line counts are capped by MAX_SOURCE_BYTES (~8M lines max), far below
+    // f64's 2^53 exact-integer range, so these casts lose no precision; `k` is
+    // fractional, so the comparison must be in f64.
+    let threshold = median as f64 * k;
+    let outliers = files
+        .into_iter()
+        .filter(|(_, n)| *n as f64 > threshold)
+        .map(|(path, _)| path)
+        .collect();
+    Ok(Some(outliers))
 }
 
 /// Count likely-unused imports across the Rust sources under `repo`, by a cheap
@@ -1019,10 +1125,7 @@ fn declares_linguist_generated(repo: &Path) -> Result<bool, AuditError> {
 /// only when every known surface is present. Born [`Tier::Tier3`]; infallible —
 /// every check is a fixed-path existence probe, so no IO error can arise.
 fn write_safety_zone_item(repo: &Path) -> Option<PunchItem> {
-    let absent = WRITE_BOUNDARY_SURFACES
-        .iter()
-        .filter(|candidates| !candidates.iter().any(|rel| repo.join(rel).exists()))
-        .count();
+    let absent = write_boundary_absent_count(repo);
     if absent == 0 {
         return None;
     }
@@ -1032,10 +1135,21 @@ fn write_safety_zone_item(repo: &Path) -> Option<PunchItem> {
             .to_string(),
         kind: FindingKind::WriteSafetyZone,
         tier: Tier::Tier3,
-        measured_cost: MeasuredCost::new(absent as u64, "write-boundary surfaces absent"),
+        measured_cost: MeasuredCost::new(absent, "write-boundary surfaces absent"),
         plane: None,
         subtree: None,
     })
+}
+
+/// The measured count of write-boundary declaration families absent from `repo`
+/// (0..=[`WRITE_BOUNDARY_SURFACES`]`.len()`). The value [`write_safety_zone_item`]
+/// emits (as a punch item only when non-zero) and [`structure_measurements`]
+/// reports (including `0`).
+fn write_boundary_absent_count(repo: &Path) -> u64 {
+    WRITE_BOUNDARY_SURFACES
+        .iter()
+        .filter(|candidates| !candidates.iter().any(|rel| repo.join(rel).exists()))
+        .count() as u64
 }
 
 /// Recursively collect the per-file likely-unused import counts over `.rs`
@@ -1384,6 +1498,58 @@ mod tests {
     /// attribution is gated off, so items carry `subtree: None`.
     fn implicit(dir: &Path) -> SubtreePartition {
         SubtreePartition::implicit_root(dir)
+    }
+
+    #[test]
+    fn structure_measurements_records_a_measured_zero_for_a_clean_repo() {
+        let dir = tmp("measure-clean");
+        // A pinned build (Cargo.lock present) is a real measured 0 — the (0, y)
+        // corpus anchor the punch list drops (aoa-3a7).
+        fs::write(dir.join("Cargo.lock"), "").unwrap();
+        let m = structure_measurements(&dir, 4.0).unwrap();
+        assert_eq!(
+            m[&FindingKind::BuildDeterminism],
+            StructureMeasure::Measured(0)
+        );
+        // The punch-list behavior is preserved: no item for a clean measure.
+        assert!(build_determinism_item(&dir).is_none());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn structure_measurements_records_one_for_an_absent_marker() {
+        let dir = tmp("measure-absent");
+        fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap(); // no lockfile
+        let m = structure_measurements(&dir, 4.0).unwrap();
+        assert_eq!(
+            m[&FindingKind::BuildDeterminism],
+            StructureMeasure::Measured(1)
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn structure_measurements_marks_module_size_unmeasurable_below_the_median_floor() {
+        let dir = tmp("measure-tiny");
+        fs::write(dir.join("a.py"), "x = 1\n").unwrap(); // 1 file < MIN_FILES_FOR_MEDIAN
+        let m = structure_measurements(&dir, 4.0).unwrap();
+        assert_eq!(
+            m[&FindingKind::ModuleSizeOutlier],
+            StructureMeasure::Unmeasurable
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn structure_measurements_marks_unused_imports_unmeasurable_on_a_non_rust_repo() {
+        let dir = tmp("measure-nonrust");
+        fs::write(dir.join("app.py"), "import os\n").unwrap();
+        let m = structure_measurements(&dir, 4.0).unwrap();
+        assert_eq!(
+            m[&FindingKind::UnusedImportProxy],
+            StructureMeasure::Unmeasurable
+        );
+        fs::remove_dir_all(&dir).ok();
     }
 
     /// A two-member Cargo-workspace fixture (`crates/foo`, `crates/bar`) whose
