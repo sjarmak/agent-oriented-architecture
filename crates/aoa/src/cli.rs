@@ -346,6 +346,30 @@ pub enum GapCommand {
     /// the checkbox-baseline feature column (R0 study baseline, repo-scope only;
     /// per-app monorepo scoring is out of scope).
     CheckboxBaseline(CheckboxBaselineArgs),
+
+    /// Mine a live external-outcome corpus from codeprobe tasks + operator-
+    /// supplied clones, and emit the R9c construct-validity CorrelationReport
+    /// (aoa-x0a.4). Cloning is an operator step; this reads only local clones.
+    MineCorpus(MineCorpusArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct MineCorpusArgs {
+    /// Directory tree of codeprobe task dirs (each carrying `metadata.json` or
+    /// `task.toml`). Scanned recursively; the distinct `(repo, ground_truth_
+    /// commit)` pairs are the corpus's mined commits.
+    #[arg(long, value_name = "DIR")]
+    pub tasks: PathBuf,
+
+    /// Directory holding one full-history clone per repo at `<clones>/<repo>`.
+    /// OPERATOR-RUN: clone each source repo (full history, not `--depth`) before
+    /// mining — this command shells only *local* git against these clones.
+    #[arg(long, value_name = "DIR")]
+    pub clones: PathBuf,
+
+    /// Path to write the reproducible CorrelationReport artifact (pretty JSON).
+    #[arg(long, value_name = "FILE")]
+    pub out: PathBuf,
 }
 
 #[derive(Debug, Args)]
