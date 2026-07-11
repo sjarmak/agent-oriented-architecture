@@ -231,28 +231,26 @@ fn mode_for(determination: &ConstructValidityReport, metric: &str) -> Option<Met
 /// migration mechanically pins a build, declares an environment, or adopts a
 /// tracker, so they can promote past advisory only via their metric.
 fn join(kind: FindingKind) -> (Option<&'static str>, Option<&'static str>) {
-    match kind {
-        FindingKind::ContextBudget => (Some("budget_adherence"), None),
-        FindingKind::MutationSurface => (Some("mutation_surface"), None),
-        FindingKind::MissingPlane => (None, None),
-        FindingKind::NavigabilityAnchor => (
-            Some("navigability_anchor_absence"),
-            Some("navigability-anchor"),
-        ),
-        FindingKind::ModuleSizeOutlier => (Some("module_size_outliers"), None),
-        FindingKind::UnusedImportProxy => (Some("unused_import_proxy"), Some("dead-imports")),
-        FindingKind::VerificationReachability => (None, None),
-        FindingKind::InvariantDiscoverability => (None, None),
-        FindingKind::BuildDeterminism => (Some("build_determinism_absence"), None),
-        FindingKind::DevEnvironmentDeclaration => {
-            (Some("dev_environment_declaration_absence"), None)
-        }
-        FindingKind::TaskDiscoverySurface => (Some("task_discovery_surface_absence"), None),
-        FindingKind::GeneratedArtifactProtection => {
-            (Some("generated_artifact_protection_absence"), None)
-        }
-        FindingKind::WriteSafetyZone => (Some("write_safety_zone_absence"), None),
-    }
+    // The metric column is the canonical `FindingKind::metric_name` map — one
+    // source of truth for the names, shared with `aoa`'s corpus reducer. The fix
+    // column is recommend's own policy and stays an exhaustive match here, so a
+    // new variant is a compile error until its fix association is declared.
+    let fix = match kind {
+        FindingKind::NavigabilityAnchor => Some("navigability-anchor"),
+        FindingKind::UnusedImportProxy => Some("dead-imports"),
+        FindingKind::ContextBudget
+        | FindingKind::MutationSurface
+        | FindingKind::MissingPlane
+        | FindingKind::ModuleSizeOutlier
+        | FindingKind::VerificationReachability
+        | FindingKind::InvariantDiscoverability
+        | FindingKind::BuildDeterminism
+        | FindingKind::DevEnvironmentDeclaration
+        | FindingKind::TaskDiscoverySurface
+        | FindingKind::GeneratedArtifactProtection
+        | FindingKind::WriteSafetyZone => None,
+    };
+    (kind.metric_name(), fix)
 }
 
 impl RecommendationReport {

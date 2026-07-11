@@ -70,6 +70,44 @@ impl FindingKind {
         FindingKind::GeneratedArtifactProtection,
         FindingKind::WriteSafetyZone,
     ];
+
+    /// The canonical construct-validity metric name this finding kind informs,
+    /// if any. `None` for a kind that maps to no gating-candidate metric (a
+    /// missing enforcement plane, verification-reachability, or invariant-
+    /// discoverability — pure presence facts with no metric).
+    ///
+    /// This is the single source of truth for the `FindingKind → metric-name`
+    /// association: `aoa_recommend`'s join reads its metric column from here, and
+    /// `aoa`'s corpus reducer reads names from here under its own orientation
+    /// include/exclude policy, so a rename lands in one place. The names
+    /// themselves are `aoa_gap::GATING_CANDIDATES` entries — asserted by
+    /// [`tests::every_metric_name_is_a_gating_candidate`], the drift guard across
+    /// the crate boundary (`aoa-gap` sits below `aoa-audit` and cannot key on
+    /// `FindingKind`, so the check runs from here).
+    ///
+    /// The match is exhaustive: a new variant forces its metric association to
+    /// be declared (compile error) rather than silently defaulting.
+    #[must_use]
+    pub fn metric_name(self) -> Option<&'static str> {
+        match self {
+            FindingKind::ContextBudget => Some("budget_adherence"),
+            FindingKind::MutationSurface => Some("mutation_surface"),
+            FindingKind::NavigabilityAnchor => Some("navigability_anchor_absence"),
+            FindingKind::ModuleSizeOutlier => Some("module_size_outliers"),
+            FindingKind::UnusedImportProxy => Some("unused_import_proxy"),
+            FindingKind::BuildDeterminism => Some("build_determinism_absence"),
+            FindingKind::DevEnvironmentDeclaration => Some("dev_environment_declaration_absence"),
+            FindingKind::TaskDiscoverySurface => Some("task_discovery_surface_absence"),
+            FindingKind::GeneratedArtifactProtection => {
+                Some("generated_artifact_protection_absence")
+            }
+            FindingKind::WriteSafetyZone => Some("write_safety_zone_absence"),
+            // Pure presence facts with no construct-validity metric.
+            FindingKind::MissingPlane
+            | FindingKind::VerificationReachability
+            | FindingKind::InvariantDiscoverability => None,
+        }
+    }
 }
 
 /// A real, measured cost attached to a punch-list item — never a guess.
@@ -154,6 +192,26 @@ mod tests {
             }
         }
         assert_eq!(FindingKind::ALL.len(), 13);
+    }
+
+    #[test]
+    fn every_metric_name_is_a_gating_candidate() {
+        // The canonical FindingKind -> metric-name map must only ever name
+        // registered `aoa_gap::GATING_CANDIDATES`. A name here absent from that
+        // registry would be silently dropped by the downstream reducers,
+        // producing an empty column with no error — fail loudly instead. This is
+        // the cross-crate drift guard, co-located with the map it protects
+        // (aoa-gap sits below aoa-audit and cannot key on FindingKind).
+        for kind in FindingKind::ALL {
+            if let Some(name) = kind.metric_name() {
+                assert!(
+                    aoa_gap::GATING_CANDIDATES
+                        .iter()
+                        .any(|(candidate, _)| *candidate == name),
+                    "{kind:?} maps to {name:?}, which is not a registered gating candidate"
+                );
+            }
+        }
     }
 
     #[test]
