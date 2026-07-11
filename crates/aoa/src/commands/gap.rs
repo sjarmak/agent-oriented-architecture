@@ -14,6 +14,7 @@ use crate::output::{print_human, print_json};
 pub fn run(args: &GapArgs) -> Result<i32> {
     match &args.command {
         Some(GapCommand::CheckboxBaseline(a)) => checkbox_baseline(a, args.json),
+        Some(GapCommand::MineCorpus(a)) => super::corpus::mine_corpus(a, args.json),
         None => determination(args.json),
     }
 }

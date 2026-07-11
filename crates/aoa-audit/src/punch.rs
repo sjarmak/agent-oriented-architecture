@@ -11,7 +11,7 @@ use crate::tier::{EnforcementPlane, Tier};
 /// [`PunchItem`]) — so a new finding can never ship without a kind. The
 /// `recommend` layer's join exhaustively matches these, so a new variant there is
 /// a compile error until its metric/fix association is declared.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FindingKind {
     /// The context-document token closure exceeds the budget ceiling.

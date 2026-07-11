@@ -1,5 +1,6 @@
 mod audit;
 mod codeprobe;
+mod corpus;
 mod enforce;
 mod eval;
 mod eval_run;
