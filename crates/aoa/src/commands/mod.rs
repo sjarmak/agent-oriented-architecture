@@ -9,6 +9,7 @@ mod falsify_build;
 mod fsutil;
 mod gap;
 mod generated;
+mod git;
 mod init;
 mod lint;
 mod migrate;

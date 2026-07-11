@@ -25,13 +25,14 @@ use std::process::Command;
 use anyhow::{anyhow, bail, Context, Result};
 
 use aoa_audit::{structure_measurements, AuditConfig, AuditError, FindingKind, StructureMeasure};
-use aoa_bench::load_task;
+use aoa_bench::{is_task_dir, load_task};
 use aoa_gap::{
     build_report_from_corpus, mine_reverts, Corpus, GatingThresholds, GitRunner, MinedCommit, Repo,
 };
 
 use crate::cli::MineCorpusArgs;
 use crate::commands::fsutil::MAX_TASK_DIRS;
+use crate::commands::git;
 use crate::output::{print_human, print_json};
 
 /// The audit structure measures that are orientation-safe corpus inputs.
@@ -54,20 +55,25 @@ use crate::output::{print_human, print_json};
 ///   metrics come from the trace, not a static repo audit, so they are excluded
 ///   here rather than fed in backwards.
 ///
-/// The match is exhaustive: adding a `FindingKind` forces a decision here
-/// (compile error) instead of silently dropping or mis-signing a new measure.
-/// Every `Some` name is asserted to be a registered gating candidate by
+/// The match stays exhaustive: adding a `FindingKind` forces the orientation
+/// decision here (compile error) instead of silently dropping or mis-signing a
+/// new measure. The metric *name* itself is not retyped — it is sourced from
+/// the canonical [`FindingKind::metric_name`] map, so a rename lands in one
+/// place. This function contributes only the corpus-specific include/exclude
+/// *policy* on top of that map. Every `Some` name is asserted to be a
+/// registered gating candidate by
 /// [`tests::every_structure_metric_is_a_gating_candidate`].
 fn structure_metric(kind: FindingKind) -> Option<&'static str> {
     match kind {
-        FindingKind::NavigabilityAnchor => Some("navigability_anchor_absence"),
-        FindingKind::ModuleSizeOutlier => Some("module_size_outliers"),
-        FindingKind::UnusedImportProxy => Some("unused_import_proxy"),
-        FindingKind::BuildDeterminism => Some("build_determinism_absence"),
-        FindingKind::DevEnvironmentDeclaration => Some("dev_environment_declaration_absence"),
-        FindingKind::TaskDiscoverySurface => Some("task_discovery_surface_absence"),
-        FindingKind::GeneratedArtifactProtection => Some("generated_artifact_protection_absence"),
-        FindingKind::WriteSafetyZone => Some("write_safety_zone_absence"),
+        // Orientation-safe structure measures: the canonical metric name.
+        FindingKind::NavigabilityAnchor
+        | FindingKind::ModuleSizeOutlier
+        | FindingKind::UnusedImportProxy
+        | FindingKind::BuildDeterminism
+        | FindingKind::DevEnvironmentDeclaration
+        | FindingKind::TaskDiscoverySurface
+        | FindingKind::GeneratedArtifactProtection
+        | FindingKind::WriteSafetyZone => kind.metric_name(),
         // Orientation-unsafe or non-structure — see the doc comment.
         FindingKind::ContextBudget
         | FindingKind::MutationSurface
@@ -118,18 +124,12 @@ fn run_git(cmd: &[String]) -> std::result::Result<String, String> {
     let (prog, args) = cmd
         .split_first()
         .ok_or_else(|| "empty git command".to_string())?;
-    let output = Command::new(prog)
-        .args(args)
-        .output()
-        .map_err(|e| format!("failed to run `{prog}`: {e} (is git installed?)"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "`{}` failed: {}",
-            cmd.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    String::from_utf8(output.stdout).map_err(|e| format!("git output was not UTF-8: {e}"))
+    let mut command = Command::new(prog);
+    command.args(args);
+    // Strict decode: git output here (revert logs, OIDs) must be valid UTF-8;
+    // garbage is a real error, not something to paper over lossily.
+    let stdout = git::checked(command, &cmd.join(" "))?;
+    String::from_utf8(stdout).map_err(|e| format!("git output was not UTF-8: {e}"))
 }
 
 /// Resolve `sha` to the canonical full 40-hex OID of a commit in `clone`,
@@ -144,17 +144,19 @@ fn run_git(cmd: &[String]) -> std::result::Result<String, String> {
 /// form. `--verify … ^{commit}` also fails loud on a shallow/stale clone that
 /// lacks the commit, so the operator re-clones with full history.
 fn resolve_commit(clone: &Path, sha: &str) -> Result<String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(clone)
-        .args([
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            &format!("{sha}^{{commit}}"),
-        ])
-        .output()
-        .with_context(|| format!("running git rev-parse in {}", clone.display()))?;
+    let mut command = Command::new("git");
+    command.arg("-C").arg(clone).args([
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        &format!("{sha}^{{commit}}"),
+    ]);
+    // `spawn`, not `checked`: `--verify --quiet` exits non-zero with EMPTY
+    // stderr when the ref is absent, so a generic stderr-folding error would be
+    // blank. Here that non-zero exit is a domain signal — the commit is not in
+    // the clone — with its own operator guidance below.
+    let output = git::spawn(command, &format!("git rev-parse in {}", clone.display()))
+        .map_err(|e| anyhow!(e))?;
     if !output.status.success() {
         bail!(
             "ground_truth_commit {sha} is not present in clone {} — clone with full \
@@ -204,7 +206,9 @@ fn discover_task_dirs(root: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn discover_into(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    if dir.join("metadata.json").exists() || dir.join("task.toml").exists() {
+    // Same leaf test `load_task` guards on — shared so discovery and loading
+    // cannot drift on what counts as a task dir.
+    if is_task_dir(dir) {
         if out.len() >= MAX_TASK_DIRS {
             bail!("task tree exceeds the {MAX_TASK_DIRS} task-dir cap");
         }
