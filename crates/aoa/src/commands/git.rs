@@ -26,7 +26,7 @@ use std::process::{Command, Output};
 /// Run a prepared git `command`, mapping only a spawn failure. The exit status
 /// is left for the caller to inspect. `label` names the invocation for the
 /// error message.
-pub fn spawn(mut command: Command, label: &str) -> Result<Output, String> {
+pub(crate) fn spawn(mut command: Command, label: &str) -> Result<Output, String> {
     command
         .output()
         .map_err(|e| format!("failed to run `{label}`: {e} (is git installed?)"))
@@ -36,7 +36,7 @@ pub fn spawn(mut command: Command, label: &str) -> Result<Output, String> {
 /// spawn failure or a non-zero exit both surface as an error string with stderr
 /// folded in; `label` (a human-readable command description carrying the repo /
 /// path context) names the invocation. Callers decode the bytes themselves.
-pub fn checked(command: Command, label: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn checked(command: Command, label: &str) -> Result<Vec<u8>, String> {
     let output = spawn(command, label)?;
     if !output.status.success() {
         return Err(format!(
@@ -67,7 +67,11 @@ mod tests {
         let mut cmd = Command::new("git");
         // A subcommand that always fails with a message on stderr, without
         // needing a repo.
-        cmd.args(["rev-parse", "--resolve-git-dir", "/definitely/not/a/git/dir"]);
+        cmd.args([
+            "rev-parse",
+            "--resolve-git-dir",
+            "/definitely/not/a/git/dir",
+        ]);
         let err = checked(cmd, "git rev-parse probe").expect_err("must fail");
         assert!(
             err.starts_with("`git rev-parse probe` failed:"),

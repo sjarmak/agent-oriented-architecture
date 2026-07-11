@@ -233,7 +233,10 @@ fn render_infer_owners_human(view: &InferOwnersView) -> String {
 /// counts) and would include staged-but-uncommitted files HEAD cannot blame.
 fn head_blob_paths(repo: &Path) -> Result<Vec<String>> {
     let mut command = Command::new("git");
-    command.arg("-C").arg(repo).args(["ls-tree", "-r", "-z", "HEAD"]);
+    command
+        .arg("-C")
+        .arg(repo)
+        .args(["ls-tree", "-r", "-z", "HEAD"]);
     let stdout = git::checked(command, &format!("git ls-tree in {}", repo.display()))
         .map_err(|e| anyhow!(e))?;
     // Strict decode: tree paths must be valid UTF-8 — a garbage path fed back
