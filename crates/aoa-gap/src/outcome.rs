@@ -380,6 +380,20 @@ pub fn parse_reverted_shas(git_log: &str) -> Vec<String> {
 /// the canonical `This reverts commit <sha>` line lives there and is all
 /// [`parse_reverted_shas`] reads.
 ///
+/// **Ref scope: `--all`, deliberately, not HEAD.** A bare `git log` walks only
+/// HEAD-reachable history, but a mined `ground_truth_commit` need not live on
+/// HEAD: the live driver validates each SHA with `git rev-parse --verify
+/// <sha>^{commit}`, which resolves against the *entire* object database, so a
+/// commit on an unmerged branch enters the corpus. Scanning reverts from HEAD
+/// only would then miss a revert that lives on that same (or any other) unmerged
+/// branch, silently counting a genuinely-reverted commit as kept and biasing the
+/// revert rate *down* with no error. `--all` makes the revert scan span every ref
+/// — symmetric with the full-object-DB reach of commit resolution — so a revert
+/// anywhere in the ref graph is seen. The cost of the broader scope (a revert on
+/// an abandoned topic branch counts) is the correct direction: a revert anywhere
+/// is evidence the change was backed out, and the alternative is a silent, non-
+/// obvious undercount. Enforced by [`tests::revert_log_command_shape_is_stable`].
+///
 /// Errs with [`GapError::RevertMiner`] when `dir` is not valid UTF-8: git's `-C`
 /// argument is a string, and silently lossy-converting the path would point the
 /// miner at the wrong directory.
@@ -392,6 +406,8 @@ pub fn revert_log_command(dir: &Path) -> Result<Vec<String>, GapError> {
         "-C".into(),
         dir.into(),
         "log".into(),
+        // Span every ref, not just HEAD — see the ref-scope note above.
+        "--all".into(),
         "--grep=This reverts commit".into(),
         "--format=%b".into(),
     ])
@@ -1079,6 +1095,13 @@ prose: this reverts commit nothing in particular
         assert_eq!(cmd[1], "-C");
         assert_eq!(cmd[2], "/scratch/clone");
         assert!(cmd.iter().any(|a| a.contains("This reverts commit")));
+        // Ref scope is `--all`, not HEAD: a revert on an unmerged branch must be
+        // seen (symmetric with the full-object-DB reach of commit resolution),
+        // else the revert rate is silently undercounted.
+        assert!(
+            cmd.iter().any(|a| a == "--all"),
+            "revert scan must span every ref (--all), got {cmd:?}"
+        );
     }
 
     #[cfg(unix)]

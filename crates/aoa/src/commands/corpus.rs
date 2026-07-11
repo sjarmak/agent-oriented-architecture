@@ -234,6 +234,17 @@ fn discover_into(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
 /// a clone. Each mined commit is flagged `reverted` when a later commit in the
 /// clone reverts it; churn is carried as `0` — this pass correlates the revert
 /// rate only (churn is a secondary, non-gating proxy the report never reads).
+///
+/// **Sequential by design.** The repos are independent (one `mine_reverts` git
+/// subprocess plus one filesystem-only `structure_counts` audit each) and could
+/// run concurrently, but this stays sequential deliberately: a corpus is a
+/// handful of operator-supplied local clones, and the per-repo cost is a single
+/// `git log` over one clone plus one audit pass — well under the tens-of-seconds
+/// total where parallelism would pay for its complexity. Parallelizing would
+/// require a `Send + Sync` bound on [`GitRunner`] (today `dyn Fn(..) + 'a`, so
+/// the closure that captures a `Command` builder is neither) and a threaded
+/// assembler; that is the exact lever to pull if a future corpus grows large
+/// enough to measure a real wall-clock win. Until then, YAGNI.
 fn build_corpus(inputs: &[RepoInput], run: &GitRunner<'_>) -> Result<Corpus> {
     let mut repos = Vec::with_capacity(inputs.len());
     for input in inputs {
