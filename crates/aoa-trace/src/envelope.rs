@@ -112,11 +112,6 @@ mod tests {
     }
 
     #[test]
-    fn current_version_passes_check() {
-        assert!(envelope(TRACE_FORMAT_VERSION).into_trace().is_ok());
-    }
-
-    #[test]
     fn mismatched_version_is_rejected() {
         let err = envelope(TRACE_FORMAT_VERSION + 1).into_trace().unwrap_err();
         match err {
@@ -148,16 +143,6 @@ mod tests {
             serde_json::from_str(r#"{"spans":[]}"#).expect("deserialize unversioned");
         assert_eq!(parsed.version, TRACE_FORMAT_VERSION);
         assert!(parsed.into_trace().is_ok());
-    }
-
-    #[test]
-    fn explicit_future_version_fails_on_unwrap() {
-        let parsed: TraceEnvelope =
-            serde_json::from_str(r#"{"version":999,"spans":[]}"#).expect("deserialize");
-        assert!(matches!(
-            parsed.into_trace(),
-            Err(TraceError::UnsupportedVersion { .. })
-        ));
     }
 
     #[test]
