@@ -5,12 +5,14 @@
 //! entrypoint that checks ordering and reports per-type span counts. Every
 //! other crate in the workspace depends on these types.
 
+mod envelope;
 mod error;
 mod model;
 mod report;
 mod span_type;
 mod validate;
 
+pub use envelope::{to_envelope_json_pretty, TraceEnvelope, TRACE_FORMAT_VERSION};
 pub use error::TraceError;
 pub use model::{Span, Trace};
 pub use report::TraceReport;
@@ -32,5 +34,18 @@ mod tests {
             serde_json::from_str(TRACE_SCHEMA).expect("schema is valid JSON");
         assert!(schema.get("$schema").is_some());
         assert!(schema["properties"]["spans"].is_object());
+    }
+
+    #[test]
+    fn embedded_schema_declares_optional_version() {
+        let schema: serde_json::Value =
+            serde_json::from_str(TRACE_SCHEMA).expect("schema is valid JSON");
+        // The envelope's version must be described so external validators accept
+        // versioned files (top-level additionalProperties is false).
+        assert!(schema["properties"]["version"].is_object());
+        assert_eq!(schema["properties"]["version"]["type"], "integer");
+        // Version stays optional so legacy unversioned files remain schema-valid.
+        let required = schema["required"].as_array().expect("required array");
+        assert!(!required.iter().any(|r| r == "version"));
     }
 }

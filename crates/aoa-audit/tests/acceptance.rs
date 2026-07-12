@@ -127,6 +127,14 @@ fn observe_path_produces_valid_trace() {
     // Re-validate via the public aoa-trace entrypoint to prove the file on disk
     // is independently valid.
     aoa_trace::validate_trace(&path).expect("trace file validates standalone");
+
+    // The written file must literally carry the wire-format version — a symmetric
+    // round-trip would pass even if both ends silently omitted it.
+    let on_disk = std::fs::read_to_string(&path).expect("read written trace");
+    assert!(
+        on_disk.contains(&format!("\"version\": {}", aoa_trace::TRACE_FORMAT_VERSION)),
+        "write_trace must stamp the wire-format version: {on_disk}"
+    );
 }
 
 // Criterion 3: audit writes nothing to tracked files.

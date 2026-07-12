@@ -23,6 +23,15 @@ pub enum TraceError {
         source: serde_json::Error,
     },
 
+    /// The trace envelope declared a wire-format version this build cannot
+    /// parse. Fails fast so a producer-side format change surfaces loudly
+    /// instead of silently mis-parsing into the current span shape.
+    #[error(
+        "trace declares unsupported wire-format version {found} \
+         (this build reads version {supported})"
+    )]
+    UnsupportedVersion { found: u32, supported: u32 },
+
     /// Spans were not in monotonically non-decreasing `seq` order.
     #[error("trace spans are out of order at index {index}: seq {seq} < previous seq {previous}")]
     OutOfOrder {

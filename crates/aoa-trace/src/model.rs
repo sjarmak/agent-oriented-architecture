@@ -21,8 +21,15 @@ pub struct Span {
     pub attributes: Map<String, Value>,
 }
 
-/// A trace file: an ordered collection of spans.
+/// A trace: an ordered collection of spans, in memory.
+///
+/// This is the domain model, deliberately free of any wire-format version — the
+/// version lives on the on-disk [`crate::TraceEnvelope`] instead. `deny_unknown_fields`
+/// closes the escape hatch where a versioned envelope read *directly* into a
+/// `Trace` (bypassing the envelope) would silently drop the `version` key: such
+/// a read now fails loudly, forcing callers through the version-checked path.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Trace {
     pub spans: Vec<Span>,
 }

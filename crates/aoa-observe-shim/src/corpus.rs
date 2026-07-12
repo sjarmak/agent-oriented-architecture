@@ -7,6 +7,12 @@
 //! - `<name>.json` — whole validated traces landed via
 //!   `aoa_audit::write_trace` (the instrumented-harness path).
 //!
+//! Only the `.json` shape carries the versioned trace envelope, and the
+//! wire-format version is checked here on ingest. The `.jsonl` live-log lane has
+//! no enclosing envelope to stamp (each line is a bare span) and is AOA-owned
+//! rather than codeprobe-produced, so it is intentionally outside the
+//! wire-version guard.
+//!
 //! [`load_corpus`] turns both into one stream of validated
 //! [`ObservedSession`]s. A session counts as one held-out behavioral
 //! observation only when it carries held-out ground truth — at least one
@@ -154,10 +160,21 @@ fn ingest(
             })?
             .trace
     } else {
-        serde_json::from_str(&raw).map_err(|source| ObserveShimError::Schema {
-            path: path.to_path_buf(),
-            source,
-        })?
+        // Whole-trace `.json` files carry a versioned envelope. Parse it (a
+        // malformed file stays a Schema error, as before), then `into_trace`
+        // version-checks before unwrapping the spans — this is the codeprobe
+        // ingest path, so the guard must fire here, not only in `validate_trace`.
+        let envelope: aoa_trace::TraceEnvelope =
+            serde_json::from_str(&raw).map_err(|source| ObserveShimError::Schema {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        envelope
+            .into_trace()
+            .map_err(|source| ObserveShimError::InvalidTrace {
+                path: path.to_path_buf(),
+                source,
+            })?
     };
     validate_trace_value(&trace).map_err(|source| ObserveShimError::InvalidTrace {
         path: path.to_path_buf(),

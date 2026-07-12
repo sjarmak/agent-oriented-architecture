@@ -173,3 +173,21 @@ fn malformed_json_trace_file_fails_schema() {
         "expected Schema, got {err:?}"
     );
 }
+
+#[test]
+fn json_trace_with_unsupported_version_is_rejected() {
+    // The corpus ingest path — not `validate_trace` — is where codeprobe-produced
+    // `.json` traces actually enter, so the wire-version guard must fire here.
+    let repo = TempDir::new().expect("tempdir");
+    let trace_json = format!(r#"{{"version":999,"spans":[{SPAN_TEST_RUN}]}}"#);
+    std::fs::write(traces_dir(repo.path()).join("run.json"), trace_json).expect("write trace");
+
+    let err = load_corpus(repo.path()).expect_err("version mismatch is loud");
+    match err {
+        ObserveShimError::InvalidTrace { source, .. } => assert!(
+            matches!(source, aoa_trace::TraceError::UnsupportedVersion { .. }),
+            "expected UnsupportedVersion, got {source:?}"
+        ),
+        other => panic!("expected InvalidTrace, got {other:?}"),
+    }
+}
