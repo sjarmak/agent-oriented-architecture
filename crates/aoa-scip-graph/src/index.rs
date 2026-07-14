@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use aoa_metrics::{IndexQuality, SymbolGraph};
+use aoa_trace::{IndexQuality, SymbolGraph};
 
 use crate::best_effort::index_best_effort;
 use crate::scip::index_with_scip;

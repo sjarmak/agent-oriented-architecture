@@ -6,12 +6,16 @@
 //! other crate in the workspace depends on these types.
 
 mod error;
+mod metric_input;
 mod model;
 mod report;
 mod span_type;
 mod validate;
 
 pub use error::TraceError;
+pub use metric_input::{
+    Confidence, IndexQuality, MetricInput, MetricInputRef, SymbolGraph, TransformMap,
+};
 pub use model::{Span, Trace};
 pub use report::TraceReport;
 pub use span_type::{SpanSource, SpanType};

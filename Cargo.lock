@@ -157,7 +157,7 @@ name = "aoa-falsify"
 version = "0.1.0"
 dependencies = [
  "aoa-gap",
- "aoa-metrics",
+ "aoa-trace",
  "serde",
  "serde_json",
  "thiserror",

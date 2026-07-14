@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use aoa_gap::HeldOutProvenance;
-use aoa_metrics::Confidence;
+use aoa_trace::Confidence;
 
 use crate::convention::{ConventionFamily, ScoringConvention};
 

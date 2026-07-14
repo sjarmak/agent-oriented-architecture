@@ -3,7 +3,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use aoa_metrics::{IndexQuality, SymbolGraph};
+use aoa_trace::{IndexQuality, SymbolGraph};
 
 use crate::bounded::{read_capped, MAX_SCIP_BYTES};
 use crate::error::ScipGraphError;
