@@ -1,5 +1,5 @@
 use aoa_gap::HeldOutProvenance;
-use aoa_metrics::Confidence;
+use aoa_trace::Confidence;
 
 use aoa_falsify::{
     falsify, ConventionInputs, Eligibility, FalsifyConfig, FalsifyError, FalsifyInput, PairTask,

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use aoa_metrics::{IndexQuality, SymbolGraph};
+use aoa_trace::{IndexQuality, SymbolGraph};
 
 use crate::bounded::{read_capped, MAX_SOURCE_BYTES};
 use crate::error::ScipGraphError;

@@ -1,5 +1,5 @@
 //! End-to-end tiering tests: a real fixture repo and a vendored SCIP index are
-//! indexed into `aoa_metrics::SymbolGraph` artifacts, and each of the three R15
+//! indexed into `aoa_trace::SymbolGraph` artifacts, and each of the three R15
 //! quality tiers (Scip / BestEffort / Degraded) is exercised and fed through the
 //! `aoa-metrics` extractors. No network service is used — everything reads
 //! committed fixtures.
@@ -7,11 +7,13 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use aoa_metrics::{compute_metrics, Confidence, IndexQuality, MetricInput, TransformMap};
+use aoa_metrics::compute_metrics;
 use aoa_scip_graph::{
     build_symbol_graph, degraded, index_best_effort, index_with_scip, IndexSource,
 };
-use aoa_trace::{Span, SpanSource, SpanType, Trace};
+use aoa_trace::{
+    Confidence, IndexQuality, MetricInput, Span, SpanSource, SpanType, Trace, TransformMap,
+};
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
