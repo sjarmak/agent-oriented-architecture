@@ -7,10 +7,13 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-aoa-metrics = { path = "../aoa-metrics" }
+aoa-trace = { path = "../aoa-trace" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-aoa-trace = { path = "../aoa-trace" }
+# Only tests/tiers.rs needs this, for compute_metrics; production code (this
+# crate produces a SymbolGraph, it doesn't score one) depends on aoa-trace
+# alone (aoa-00f).
+aoa-metrics = { path = "../aoa-metrics" }

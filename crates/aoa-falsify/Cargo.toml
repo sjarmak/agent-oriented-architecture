@@ -8,7 +8,7 @@ license.workspace = true
 
 [dependencies]
 aoa-gap = { path = "../aoa-gap" }
-aoa-metrics = { path = "../aoa-metrics" }
+aoa-trace = { path = "../aoa-trace" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
