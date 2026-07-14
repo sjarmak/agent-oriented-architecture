@@ -10,7 +10,7 @@ use crate::scip::index_with_scip;
 ///
 /// The [`SymbolGraph`] carries nodes, edges, the writable subset, and the R15
 /// [`IndexQuality`]. `gold_set` is `G_t` and `invariant_set` is `I_t`, both as
-/// base-repo symbol names (anchor them with an `aoa_metrics::TransformMap`).
+/// base-repo symbol names (anchor them with an `aoa_trace::TransformMap`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexedRepo {
     pub graph: SymbolGraph,
