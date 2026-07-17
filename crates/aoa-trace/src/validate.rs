@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
 
+use crate::envelope::TraceEnvelope;
 use crate::error::TraceError;
 use crate::model::Trace;
 use crate::report::TraceReport;
@@ -43,7 +44,10 @@ fn read_capped(path: &Path, max: u64) -> Result<String, TraceError> {
 /// Load and validate a trace file at `path`.
 ///
 /// Validation enforces:
-/// - the file is schema-valid JSON (a `spans` array of well-typed spans), and
+/// - the file is schema-valid JSON (a versioned envelope wrapping a `spans`
+///   array of well-typed spans),
+/// - the declared wire-format version is one this build supports (missing is
+///   treated as the current version), and
 /// - spans are in monotonically non-decreasing `seq` order.
 ///
 /// On success returns a [`TraceReport`] with per-span-type counts and a
@@ -51,10 +55,15 @@ fn read_capped(path: &Path, max: u64) -> Result<String, TraceError> {
 pub fn validate_trace(path: &Path) -> Result<TraceReport, TraceError> {
     let raw = read_capped(path, MAX_TRACE_BYTES)?;
 
-    let trace: Trace = serde_json::from_str(&raw).map_err(|source| TraceError::Schema {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let envelope: TraceEnvelope =
+        serde_json::from_str(&raw).map_err(|source| TraceError::Schema {
+            path: path.to_path_buf(),
+            source,
+        })?;
+
+    // Version-check the envelope before trusting the spans: a mismatch means a
+    // producer-side format change, so fail fast rather than mis-parse.
+    let trace = envelope.into_trace()?;
 
     validate_trace_value(&trace)
 }

@@ -59,7 +59,9 @@ pub fn write_trace(
     trace: &Trace,
 ) -> Result<(PathBuf, TraceReport), AuditError> {
     let path = outcome.trace_path(name);
-    let json = serde_json::to_string_pretty(trace).map_err(|source| AuditError::Io {
+    // Write through the versioned envelope so the file carries the wire-format
+    // version and survives the read-side version check below.
+    let json = aoa_trace::to_envelope_json_pretty(trace).map_err(|source| AuditError::Io {
         path: path.clone(),
         source: std::io::Error::new(std::io::ErrorKind::InvalidData, source),
     })?;

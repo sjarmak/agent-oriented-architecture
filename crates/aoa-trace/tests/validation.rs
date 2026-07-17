@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use aoa_trace::{validate_trace, Span, SpanSource, SpanType, Trace, TraceError};
+use aoa_trace::{
+    to_envelope_json_pretty, validate_trace, Span, SpanSource, SpanType, Trace, TraceError,
+    TRACE_FORMAT_VERSION,
+};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -79,6 +82,85 @@ fn missing_file_returns_read_error() {
         matches!(err, TraceError::Read { .. }),
         "expected Read error, got {err:?}"
     );
+}
+
+/// The write-side envelope stamps a version, and a reader accepts what it wrote:
+/// a full round-trip through the versioned wire format.
+#[test]
+fn versioned_trace_round_trips_through_disk() {
+    let trace = Trace {
+        spans: vec![
+            Span {
+                span_type: SpanType::RetrievalSearch,
+                source: SpanSource::Native,
+                seq: 0,
+                attributes: serde_json::Map::new(),
+            },
+            Span {
+                span_type: SpanType::TestRun,
+                source: SpanSource::Native,
+                seq: 1,
+                attributes: serde_json::Map::new(),
+            },
+        ],
+    };
+
+    let json = to_envelope_json_pretty(&trace).expect("serialize versioned envelope");
+    assert!(
+        json.contains(&format!("\"version\": {TRACE_FORMAT_VERSION}")),
+        "serialized trace must carry the wire-format version: {json}"
+    );
+
+    let dir = std::env::temp_dir().join(format!("aoa-trace-rt-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("versioned.json");
+    std::fs::write(&path, json).unwrap();
+
+    let report = validate_trace(&path).expect("versioned trace validates");
+    assert_eq!(report.total(), 2);
+    assert_eq!(report.count(SpanType::RetrievalSearch), 1);
+    assert_eq!(report.count(SpanType::TestRun), 1);
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A trace stamped with a version this build cannot parse is rejected fast,
+/// rather than silently mis-parsed into the current span shape.
+#[test]
+fn mismatched_version_is_rejected() {
+    let err = validate_trace(&fixture("bad_version.json")).unwrap_err();
+    match err {
+        TraceError::UnsupportedVersion { found, supported } => {
+            assert_eq!(found, 999);
+            assert_eq!(supported, TRACE_FORMAT_VERSION);
+        }
+        other => panic!("expected UnsupportedVersion, got {other:?}"),
+    }
+}
+
+/// Traces written before versioning existed have no `version` key; they are
+/// genuine current-format files and must still validate (non-breaking guard).
+#[test]
+fn unversioned_trace_still_validates() {
+    let report = validate_trace(&fixture("valid.json")).expect("unversioned trace validates");
+    assert_eq!(report.total(), 8);
+}
+
+/// A non-integer version is a structural parse failure, not a silent accept.
+#[test]
+fn malformed_version_is_a_schema_error() {
+    let dir = std::env::temp_dir().join(format!("aoa-trace-badver-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("bad.json");
+    std::fs::write(&path, r#"{"version":"two","spans":[]}"#).unwrap();
+
+    let err = validate_trace(&path).unwrap_err();
+    assert!(
+        matches!(err, TraceError::Schema { .. }),
+        "expected Schema, got {err:?}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]

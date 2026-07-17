@@ -1,0 +1,10 @@
+{
+  "version": 999,
+  "spans": [
+    {
+      "type": "test.run",
+      "source": "native",
+      "seq": 0
+    }
+  ]
+}

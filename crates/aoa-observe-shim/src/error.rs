@@ -35,7 +35,9 @@ pub enum ObserveShimError {
         source: serde_json::Error,
     },
 
-    /// A parsed trace failed [`aoa_trace::validate_trace_value`] (span order).
+    /// A parsed trace failed post-parse validation: an unsupported wire-format
+    /// version ([`aoa_trace::TraceEnvelope::into_trace`]) or out-of-order spans
+    /// ([`aoa_trace::validate_trace_value`]).
     #[error("trace {path} failed validation: {source}")]
     InvalidTrace {
         path: PathBuf,

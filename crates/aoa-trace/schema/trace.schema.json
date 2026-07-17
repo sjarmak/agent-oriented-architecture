@@ -2,11 +2,16 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aoa.dev/schemas/trace.schema.json",
   "title": "AOA Trace File",
-  "description": "A trace file is a JSON object with a `spans` array. Spans are ordered by a monotonically non-decreasing `seq` key.",
+  "description": "A trace file is a JSON object with an optional `version` and a `spans` array. Spans are ordered by a monotonically non-decreasing `seq` key.",
   "type": "object",
   "required": ["spans"],
   "additionalProperties": false,
   "properties": {
+    "version": {
+      "description": "Wire-format version of the trace envelope. Absent is treated as version 1 for backward compatibility; a reader rejects a version it does not support.",
+      "type": "integer",
+      "minimum": 0
+    },
     "spans": {
       "type": "array",
       "items": { "$ref": "#/$defs/span" }
