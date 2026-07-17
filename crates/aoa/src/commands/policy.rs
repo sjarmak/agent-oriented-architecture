@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use aoa_policy::{
     ci_workflow, codeowners, infer_owners, precommit_config, proposed_codeowners,
     render_proposal_diff, BlameCount, OwnedPattern, Policy,
@@ -12,6 +12,7 @@ use serde::Serialize;
 use crate::cli::{PolicyArgs, PolicyCommand};
 use crate::commands::enforce::install_enforce_hooks;
 use crate::commands::generated::write_gitattributes_plane;
+use crate::commands::git;
 use crate::forge::compile_enforcement;
 use crate::output::{print_human, print_json};
 
@@ -231,20 +232,17 @@ fn render_infer_owners_human(view: &InferOwnersView) -> String {
 /// would list a merge-conflicted path once per unmerged stage (tripling its
 /// counts) and would include staged-but-uncommitted files HEAD cannot blame.
 fn head_blob_paths(repo: &Path) -> Result<Vec<String>> {
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .arg("-C")
         .arg(repo)
-        .args(["ls-tree", "-r", "-z", "HEAD"])
-        .output()
-        .context("running git ls-tree (is git installed?)")?;
-    if !output.status.success() {
-        bail!(
-            "git ls-tree failed in {}: {}",
-            repo.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    let stdout = String::from_utf8(output.stdout).context("git ls-tree output was not UTF-8")?;
+        .args(["ls-tree", "-r", "-z", "HEAD"]);
+    let stdout = git::checked(command, &format!("git ls-tree in {}", repo.display()))
+        .map_err(|e| anyhow!(e))?;
+    // Strict decode: tree paths must be valid UTF-8 — a garbage path fed back
+    // into `git blame` would surface as a confusing downstream error, so fail
+    // loud on the decode instead.
+    let stdout = String::from_utf8(stdout).context("git ls-tree output was not UTF-8")?;
     let mut paths = Vec::new();
     for entry in stdout.split('\0').filter(|e| !e.is_empty()) {
         // Entry shape: "<mode> <type> <oid>\t<path>".
@@ -263,20 +261,17 @@ fn head_blob_paths(repo: &Path) -> Result<Vec<String>> {
 /// Count blamed lines per author for one committed file. Uses
 /// `--line-porcelain` so every line carries its `author-mail` attribution.
 fn blame_counts(repo: &Path, path: &str) -> Result<Vec<BlameCount>> {
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .arg("-C")
         .arg(repo)
         .args(["blame", "--line-porcelain", "HEAD", "--"])
-        .arg(path)
-        .output()
-        .context("running git blame")?;
-    if !output.status.success() {
-        bail!(
-            "git blame failed for {path}: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
+        .arg(path);
+    let stdout = git::checked(command, &format!("git blame for {path}")).map_err(|e| anyhow!(e))?;
+    // Lossy decode on purpose: `--line-porcelain` emits raw commit bytes, and an
+    // author name / mail may be non-UTF-8 (legacy or Latin-1 history). One bad
+    // byte must degrade to U+FFFD in a single author key, not abort the run.
+    let text = String::from_utf8_lossy(&stdout);
     let mut per_author: BTreeMap<String, u64> = BTreeMap::new();
     for line in text.lines() {
         if let Some(mail) = line.strip_prefix("author-mail ") {

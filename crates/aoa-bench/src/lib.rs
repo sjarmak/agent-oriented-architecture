@@ -26,6 +26,6 @@ mod task;
 
 pub use bridge::EditLocalityAnchors;
 pub use error::BenchError;
-pub use loader::load_task;
+pub use loader::{is_task_dir, load_task};
 pub use oracle::OracleChainFacts;
 pub use task::{AcceptedSolution, CodeprobeTask};

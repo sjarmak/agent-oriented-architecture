@@ -9,6 +9,14 @@ use crate::error::BenchError;
 use crate::oracle::OracleChainFacts;
 use crate::task::{AcceptedSolution, CodeprobeTask};
 
+/// Whether `dir` is a codeprobe task directory — one carrying either a
+/// `metadata.json` (org-scale layout) or a `task.toml` (probe layout). This is
+/// the single predicate [`load_task`] guards on and `aoa`'s corpus discovery
+/// uses as its leaf test, so the two cannot drift on what counts as a task dir.
+pub fn is_task_dir(dir: &Path) -> bool {
+    dir.join("metadata.json").exists() || dir.join("task.toml").exists()
+}
+
 /// Load a codeprobe task directory into AOA task inputs.
 ///
 /// Supports both observed codeprobe layouts: the rich org-scale form
@@ -19,15 +27,18 @@ use crate::task::{AcceptedSolution, CodeprobeTask};
 /// codeprobe's record of what each consensus-mining backend independently found.
 pub fn load_task(dir: impl AsRef<Path>) -> Result<CodeprobeTask, BenchError> {
     let dir = dir.as_ref();
-    let metadata_path = dir.join("metadata.json");
-    let toml_path = dir.join("task.toml");
+    if !is_task_dir(dir) {
+        return Err(BenchError::NotATask(dir.to_path_buf()));
+    }
 
+    // metadata.json takes precedence when both manifests are present; the
+    // `is_task_dir` guard above guarantees at least one exists, so the `else`
+    // reads `task.toml`.
+    let metadata_path = dir.join("metadata.json");
     let manifest = if metadata_path.exists() {
         read_metadata(&metadata_path)?
-    } else if toml_path.exists() {
-        read_toml(&toml_path)?
     } else {
-        return Err(BenchError::NotATask(dir.to_path_buf()));
+        read_toml(&dir.join("task.toml"))?
     };
 
     let instruction = read_instruction(dir)?;
@@ -406,6 +417,22 @@ fn read_capped(path: &Path, max: u64) -> Result<String, BenchError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_task_dir_recognizes_both_layouts_and_rejects_a_bare_dir() {
+        let dir = std::env::temp_dir().join(format!("aoa-bench-istask-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        // A bare directory is not a task dir.
+        assert!(!is_task_dir(&dir), "no manifest -> not a task dir");
+        // Either manifest makes it a task dir.
+        fs::write(dir.join("task.toml"), "").unwrap();
+        assert!(is_task_dir(&dir), "task.toml -> task dir");
+        fs::remove_file(dir.join("task.toml")).unwrap();
+        fs::write(dir.join("metadata.json"), "{}").unwrap();
+        assert!(is_task_dir(&dir), "metadata.json -> task dir");
+
+        fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn meaningful_commit_rejects_blank_and_the_git_null_id() {
