@@ -1,0 +1,48 @@
+name: Rust CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rust-ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      # Dogfood: the toolkit audits its own repository. Runs before the ESLint
+      # install below so its best-effort indexer doesn't walk node_modules.
+      # Non-gating for now — `aoa audit --repo .` prints the full punch-list on
+      # every run, including the one known Tier-1 gap (missing runtime-hook
+      # enforcement plane), so nothing is hidden. Flip to `--fail-on tier1`
+      # once that gap is closed (tracked in aoa-vrx.3) so future Tier-1
+      # regressions gate CI.
+      - name: Self-audit (aoa audit)
+        run: cargo run -p aoa -- audit --repo .
+      # Node + the vendored, pinned ESLint the aoa-migrate TypeScript adapter
+      # tests need. Absent it those tests skip (they self-guard) rather than
+      # exercising the adapter, so CI installs it to run them for real; see
+      # crates/aoa-migrate/tests/imports_typescript.rs.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: crates/aoa-migrate/assets/eslint/package-lock.json
+      - name: Install vendored ESLint (hermetic)
+        run: npm ci
+        working-directory: crates/aoa-migrate/assets/eslint
+      - name: Test
+        run: cargo test --workspace
