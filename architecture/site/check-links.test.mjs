@@ -22,7 +22,13 @@ function runInFixture(files) {
       mkdirSync(dirname(p), { recursive: true });
       writeFileSync(p, content);
     }
-    return spawnSync(process.execPath, [script], { cwd: dir, encoding: "utf8" });
+    const res = spawnSync(process.execPath, [script], {
+      cwd: dir,
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    assert.equal(res.error, undefined, `guard failed to launch: ${res.error}`);
+    return res;
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

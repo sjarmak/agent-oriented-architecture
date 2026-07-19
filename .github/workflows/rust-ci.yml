@@ -20,7 +20,7 @@ jobs:
       # to advisory again. Needs only the runner's preinstalled Node (node:
       # builtins, no npm deps), so it runs first and fails in seconds.
       - name: Architecture link-guard tests
-        run: node --test architecture/site/check-links.test.mjs
+        run: node --version && node --test architecture/site/check-links.test.mjs
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
