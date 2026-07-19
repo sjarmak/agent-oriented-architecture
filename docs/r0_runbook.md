@@ -101,7 +101,7 @@ codeprobe experiment has been run.
 
 ```bash
 cd /home/ds/projects/codeprobe
-codeprobe experiment init runs/r0 --name r0
+codeprobe experiment init runs --name r0   # base dir = runs/, --name nests to runs/r0/
 # add-config sets HARNESS knobs only (agent/model/mcp/tools/instruction/preamble).
 # The repo dimension is the repo STATE the tasks run against (see the treatment
 # guardrails above), NOT an add-config flag.
