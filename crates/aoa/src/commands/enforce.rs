@@ -800,6 +800,30 @@ mod tests {
         }
     }
 
+    /// A group carrying the command but no `matcher` key is still unreconcilable,
+    /// and must say so as a *missing* matcher. Rendering it as `""` would read as
+    /// a group matching the empty string, sending the operator looking for an
+    /// entry that isn't there.
+    #[test]
+    fn a_command_registered_without_a_matcher_names_the_absence() {
+        let seeded = json!({
+            "hooks": {
+                "PostToolUse": [{
+                    "hooks": [{ "type": "command", "command": "aoa enforce commit" }],
+                }]
+            }
+        });
+        let message = merge_enforce_hooks(seeded).unwrap_err().to_string();
+        assert!(
+            message.contains("a group with no matcher"),
+            "must name the absence rather than an empty matcher, got: {message}"
+        );
+        assert!(
+            !message.contains("matcher \"\""),
+            "must not render the missing key as an empty matcher, got: {message}"
+        );
+    }
+
     /// A hook must not inherit another process's stall; see
     /// [`lock_exclusive_bounded`] for why an unbounded wait is unsafe here.
     ///
