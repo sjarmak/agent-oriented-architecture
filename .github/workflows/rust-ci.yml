@@ -52,3 +52,74 @@ jobs:
         working-directory: crates/aoa-migrate/assets/eslint
       - name: Test
         run: cargo test --workspace
+  # Workspace coverage, measured and gated. Separate job so the instrumented
+  # build (different artifacts, ~2-4x slower) never sits on the fmt/clippy/test
+  # critical path and a coverage failure is diagnosable on its own.
+  # No --ignore-filename-regex: the workspace has no generated or vendored Rust
+  # (the vendored ESLint under crates/aoa-migrate/assets is JavaScript, invisible
+  # to Rust coverage), so nothing is excluded and nothing is masked.
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      # Default per-job cache scoping isolates this cache from the ci job's.
+      # Do NOT add a shared-key spanning both jobs: it would mix
+      # -Cinstrument-coverage objects into the uninstrumented build.
+      - uses: Swatinem/rust-cache@v2
+      # Tool version exact-pinned; bump deliberately, alongside a threshold
+      # re-check. The toolchain itself floats on @stable like the ci job, so
+      # rustc/LLVM bumps can still shift counts slightly — the 13-point margin
+      # between baseline and gate absorbs that.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.8.7
+      # Same hermetic ESLint install as the ci job (rationale documented there),
+      # plus a pinned ruff: both aoa-migrate adapter test suites self-skip when
+      # their tool is absent, and coverage must be over the complete suite, not
+      # a silently reduced one.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: crates/aoa-migrate/assets/eslint/package-lock.json
+      - name: Install vendored ESLint (hermetic)
+        run: npm ci
+        working-directory: crates/aoa-migrate/assets/eslint
+      - name: Install ruff (pinned)
+        run: pipx install ruff==0.15.8
+      # Drop any profraw/profdata restored from cache so counts can never
+      # accumulate across runs — correctness must not depend on rust-cache's
+      # incidental pre-save cleanup of the llvm-cov-target dir.
+      - name: Clean stale coverage data
+        run: cargo llvm-cov clean --workspace
+      # No --all-features/--all-targets: the workspace currently defines no
+      # features, examples, or benches; add the flags if that changes.
+      - name: Collect coverage
+        run: cargo llvm-cov --workspace --no-report
+      # Reporting is decoupled from enforcement and runs even when collection
+      # or the gate fails — the per-file table and lcov artifact exist exactly
+      # when they're needed to diagnose missed paths. (!cancelled(), not
+      # always(): a run superseded via cancel-in-progress shouldn't burn
+      # runner time reporting on abandoned data.)
+      - name: Report per-file coverage
+        if: ${{ !cancelled() }}
+        run: cargo llvm-cov report
+      - name: Export lcov
+        if: ${{ !cancelled() }}
+        run: cargo llvm-cov report --lcov --output-path lcov.info
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: coverage-lcov
+          path: lcov.info
+      # Gate last, reusing the already-collected profdata. Deliberately NOT
+      # if: always() — if collection failed the job is already red and the
+      # gate is meaningless. Threshold is the 80% line-coverage engineering
+      # contract; measured baseline at introduction (2026-07-19,
+      # cargo-llvm-cov 0.8.7) was 93.30% lines.
+      - name: Enforce coverage threshold
+        run: cargo llvm-cov report --fail-under-lines 80
