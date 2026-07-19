@@ -239,20 +239,14 @@ mod tests {
         assert_eq!(note.metrics, behavioral_names());
     }
 
-    /// Two independent pins, not one equality assertion: asserting
-    /// `MIN_HELD_OUT_OBSERVATIONS == MAX_EXACT_N` would re-create the coupling
-    /// the split removed. Whichever value moves, this test fails and a human
-    /// decides — which is the point.
+    /// Pins this file's own constant only. Asserting anything about
+    /// `MAX_EXACT_N` here would re-create, in test code, the cross-module
+    /// reference the split just removed from the production path.
     #[test]
-    fn window_is_pinned_independently_of_the_permutation_cap() {
+    fn window_value_is_pinned_as_a_calibration_decision() {
         assert_eq!(
             MIN_HELD_OUT_OBSERVATIONS, 10,
             "calibration floor; moving it is a decision, not a refactor"
-        );
-        assert_eq!(
-            crate::correlation::MAX_EXACT_N,
-            10,
-            "today's compute ceiling; the shared value is coincidence, not a dependency"
         );
     }
 
