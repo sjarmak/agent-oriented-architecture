@@ -94,12 +94,10 @@ pub fn write_trace(
     // already sitting in the trace dir and pointing outside it. `std::fs::write`
     // follows symlinks, so writing through one would clobber whatever it targets.
     // Refuse rather than follow — `symlink_metadata` does not itself follow.
-    if let Ok(meta) = std::fs::symlink_metadata(&path) {
-        if meta.file_type().is_symlink() {
-            return Err(AuditError::UnsafeTraceName {
-                name: name.to_string(),
-            });
-        }
+    if std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        return Err(AuditError::UnsafeTraceName {
+            name: name.to_string(),
+        });
     }
 
     // Write through the versioned envelope so the file carries the wire-format
