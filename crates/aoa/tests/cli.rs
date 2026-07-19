@@ -39,31 +39,43 @@ fn validate_trace_invalid_exits_non_zero() {
         .failure();
 }
 
-/// The ordering failure is post-parse, so it used to reach the CLI path-free and
-/// was named only by an anyhow context here. Now `aoa-trace` names the file at
-/// its own boundary — so this asserts the diagnostic identifies the offending
-/// file, and that neither the filename nor the reason is printed twice by the
-/// stacked context and source-chain rendering.
-#[test]
-fn validate_trace_error_names_the_file_once() {
+/// Both post-parse failures used to reach the CLI path-free and were named only
+/// by an anyhow context here. Now `aoa-trace` names the file at its own boundary,
+/// so assert the rendered diagnostic identifies the offending file and that
+/// neither the filename nor the reason is printed twice by the stacked context
+/// and source-chain rendering.
+///
+/// Driven over both variants because the acceptance criteria pairs them: a
+/// future variant-specific context added back in `eval.rs` must fail here.
+fn assert_trace_error_names_file_once(fixture_name: &str, reason: &str) {
     let output = aoa()
         .args(["eval", "validate-trace"])
-        .arg(fixture("invalid_trace.json"))
+        .arg(fixture(fixture_name))
         .output()
         .expect("run");
     assert!(!output.status.success());
 
-    let stderr = String::from_utf8(output.stderr).expect("utf-8 stderr");
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(
-        stderr.matches("invalid_trace.json").count(),
+        stderr.matches(fixture_name).count(),
         1,
         "diagnostic must name the offending file exactly once: {stderr}"
     );
     assert_eq!(
-        stderr.matches("out of order").count(),
+        stderr.matches(reason).count(),
         1,
         "diagnostic must state the reason exactly once: {stderr}"
     );
+}
+
+#[test]
+fn validate_trace_ordering_error_names_the_file_once() {
+    assert_trace_error_names_file_once("invalid_trace.json", "out of order");
+}
+
+#[test]
+fn validate_trace_version_error_names_the_file_once() {
+    assert_trace_error_names_file_once("bad_version_trace.json", "unsupported wire-format version");
 }
 
 // Criterion 9 (eval half): --json yields parseable JSON; default yields human text.

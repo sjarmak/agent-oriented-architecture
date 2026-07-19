@@ -1,0 +1,6 @@
+{
+  "version": 999,
+  "spans": [
+    { "type": "retrieval.search", "source": "native", "seq": 0, "attributes": {} }
+  ]
+}

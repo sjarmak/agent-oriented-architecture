@@ -37,8 +37,10 @@ struct TypeCount {
 }
 
 fn validate_trace(path: &Path, json: bool) -> Result<i32> {
-    // No path context here: every `TraceError` names the offending file itself,
-    // so wrapping would print the path twice in the `{err:#}` chain rendering.
+    // No path context here: every `TraceError` *returned by `validate_trace`*
+    // names the offending file itself, so wrapping would print the path twice in
+    // the `{err:#}` chain rendering. (The type carries no such guarantee — a bare
+    // `UnsupportedVersion` from `into_trace` names nothing.)
     let report: TraceReport = aoa_trace::validate_trace(path)?;
 
     let counts: Vec<TypeCount> = report

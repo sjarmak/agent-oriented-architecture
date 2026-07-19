@@ -43,28 +43,17 @@ pub enum TraceError {
     /// A post-parse validation failure for a trace loaded from disk, tagged with
     /// the offending file.
     ///
-    /// [`UnsupportedVersion`] and [`OutOfOrder`] describe the *content* of a
-    /// trace, so they are produced by the path-free in-memory checks
-    /// ([`crate::TraceEnvelope::into_trace`], [`crate::validate_trace_value`])
-    /// that callers holding a `Trace` reuse. Attaching the path is therefore a
-    /// boundary concern, not a per-variant one: carrying an `Option<PathBuf>` on
-    /// every variant would make "in-memory validation is path-free" a runtime
-    /// property instead of a type-level one.
+    /// The content checks describe a `Trace`, not a file, so they stay path-free
+    /// and the path is attached here at the disk boundary. Carrying an
+    /// `Option<PathBuf>` on every variant instead would make "in-memory
+    /// validation is path-free" a runtime property rather than a type-level one.
     ///
-    /// The wrapper is depth-1 by construction — [`crate::validate_trace`] is the
-    /// only site that builds it, and it wraps only path-free inner failures.
-    ///
-    /// This is `aoa-trace`'s own disk boundary. An outer crate that already names
-    /// the file in its own error (e.g. `aoa_observe_shim`'s corpus ingest, which
-    /// calls the path-free entry points directly) must not add the path a second
-    /// time.
+    /// Callers that already name the file in their own error must not add the
+    /// path a second time.
     ///
     /// Display deliberately does not interpolate `{source}`: the inner message is
     /// rendered by source-chain walking (`anyhow`'s `{err:#}`, `std::error`
     /// iteration), so interpolating it here would print the reason twice.
-    ///
-    /// [`UnsupportedVersion`]: TraceError::UnsupportedVersion
-    /// [`OutOfOrder`]: TraceError::OutOfOrder
     #[error("trace file {path} is invalid")]
     InvalidFile {
         path: PathBuf,

@@ -12,16 +12,13 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// Peel the disk-boundary wrapper, asserting it both names `name` structurally
-/// and renders it, then hand back the inner failure so the caller can keep
-/// asserting the behavioural fields. Rendering is checked here rather than in
-/// each caller because the rendered filename is what a human actually reads.
+/// Peel the disk-boundary wrapper, asserting it carries `name`, then hand back
+/// the inner failure so the caller can keep asserting the behavioural fields.
+///
+/// Only the structural path is checked; asserting the rendered `Display` here
+/// would be tautological. The rendered chain a human reads is pinned by `aoa`'s
+/// `validate_trace_{ordering,version}_error_names_the_file_once` CLI tests.
 fn unwrap_invalid_file(err: TraceError, name: &str) -> TraceError {
-    let rendered = err.to_string();
-    assert!(
-        rendered.contains(name),
-        "boundary error must render the offending filename: {rendered}"
-    );
     match err {
         TraceError::InvalidFile { path, source } => {
             assert!(

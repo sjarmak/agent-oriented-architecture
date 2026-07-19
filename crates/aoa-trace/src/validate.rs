@@ -68,24 +68,17 @@ pub fn validate_trace(path: &Path) -> Result<TraceReport, TraceError> {
         })?;
 
     // Version-check the envelope before trusting the spans: a mismatch means a
-    // producer-side format change, so fail fast rather than mis-parse.
-    let trace = envelope
+    // producer-side format change, so fail fast rather than mis-parse. Both
+    // content checks are path-free, so one tagging covers them — which is also
+    // what keeps the wrapper depth-1: there is a single place it is built, and
+    // it only ever wraps an unwrapped inner failure.
+    envelope
         .into_trace()
-        .map_err(|source| in_file(path, source))?;
-
-    validate_trace_value(&trace).map_err(|source| in_file(path, source))
-}
-
-/// Tag a path-free failure with the file it came from.
-///
-/// The sole construction site for [`TraceError::InvalidFile`], which is what
-/// keeps the wrapper depth-1: it is only ever applied to the path-free content
-/// checks, never to an already-wrapped error.
-fn in_file(path: &Path, source: TraceError) -> TraceError {
-    TraceError::InvalidFile {
-        path: path.to_path_buf(),
-        source: Box::new(source),
-    }
+        .and_then(|trace| validate_trace_value(&trace))
+        .map_err(|source| TraceError::InvalidFile {
+            path: path.to_path_buf(),
+            source: Box::new(source),
+        })
 }
 
 /// Validate an already-parsed [`Trace`], producing a report.
