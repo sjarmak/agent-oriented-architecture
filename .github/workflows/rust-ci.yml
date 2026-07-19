@@ -31,9 +31,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       # Dogfood: the toolkit audits its own repository. Runs before the ESLint
       # install below so its best-effort indexer doesn't walk node_modules.
-      # Gating at Tier-1: the runtime-hook plane is satisfied by the tracked
-      # .claude/settings.json (aoa-vrx.3), so any Tier-1 regression fails CI.
-      # Tier-2/3 punch-list items still print without failing the run.
+      # Tier-1 findings gate CI; Tier-2/3 punch-list items still print
+      # without failing the run.
       - name: Self-audit (aoa audit)
         run: cargo run -p aoa -- audit --repo . --fail-on tier1
       # Node + the vendored, pinned ESLint the aoa-migrate TypeScript adapter

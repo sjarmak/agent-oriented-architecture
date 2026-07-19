@@ -1692,6 +1692,14 @@ fn aoa_stdin() -> assert_cmd::Command {
     assert_cmd::Command::cargo_bin("aoa").expect("aoa binary builds")
 }
 
+/// Run `aoa observe --repo <repo> --enforce`, asserting success.
+fn observe_enforce(repo: &Path) {
+    aoa_stdin()
+        .args(["observe", "--repo", repo.to_str().unwrap(), "--enforce"])
+        .assert()
+        .success();
+}
+
 fn hook_payload(tool: &str, command: Option<&str>, cwd: &Path) -> String {
     let mut input = serde_json::Map::new();
     match command {
@@ -2062,29 +2070,13 @@ fn observe_enforce_writes_idempotent_settings_and_plain_observe_does_not() {
     let repo = TempDir::new().unwrap();
     let settings = repo.path().join(".claude/settings.json");
 
-    aoa_stdin()
-        .args([
-            "observe",
-            "--repo",
-            repo.path().to_str().unwrap(),
-            "--enforce",
-        ])
-        .assert()
-        .success();
+    observe_enforce(repo.path());
     let first = std::fs::read_to_string(&settings).expect("settings written");
     assert!(first.contains("aoa enforce check"));
     assert!(first.contains("aoa enforce record"));
 
     // Re-running is byte-stable (idempotent merge).
-    aoa_stdin()
-        .args([
-            "observe",
-            "--repo",
-            repo.path().to_str().unwrap(),
-            "--enforce",
-        ])
-        .assert()
-        .success();
+    observe_enforce(repo.path());
     let second = std::fs::read_to_string(&settings).unwrap();
     assert_eq!(first, second, "second observe --enforce must be a no-op");
 
@@ -2097,23 +2089,14 @@ fn observe_enforce_writes_idempotent_settings_and_plain_observe_does_not() {
     assert!(!plain.path().join(".claude/settings.json").exists());
 }
 
-/// The repo's own tracked `.claude/settings.json` (the Tier-1 runtime-hook
-/// enforcement plane, aoa-vrx.3) must byte-match what the installer emits
-/// today. The audit's plane check is existence-only, so without this test a
-/// change to the generated hook entries would silently strand the committed
-/// file on the old shape while the gating self-audit kept passing.
+/// The audit's runtime-hook plane check is existence-only, so without this
+/// test a change to the generated hook entries would silently strand the
+/// repo's committed `.claude/settings.json` (aoa-vrx.3) on the old shape
+/// while the gating self-audit kept passing.
 #[test]
 fn tracked_settings_json_matches_observe_enforce_output() {
     let fresh = TempDir::new().unwrap();
-    aoa_stdin()
-        .args([
-            "observe",
-            "--repo",
-            fresh.path().to_str().unwrap(),
-            "--enforce",
-        ])
-        .assert()
-        .success();
+    observe_enforce(fresh.path());
     let generated = std::fs::read_to_string(fresh.path().join(".claude/settings.json"))
         .expect("observe --enforce writes settings.json");
 
