@@ -375,6 +375,21 @@ fn append_span(log: &Path, span_type: SpanType, attributes: Map<String, Value>) 
 /// racing an in-flight append can still see a torn final line, which fails loudly
 /// as a parse error rather than corrupting anything (tracked in aoa-wew0).
 fn append_span_with(log: &Path, build: impl FnOnce(u64) -> Span) -> Result<()> {
+    append_span_within(log, LOCK_TIMEOUT, build)
+}
+
+/// [`append_span_with`], with the lock timeout supplied.
+///
+/// Exists so a test can exercise the real append path — including that it
+/// acquires the lock *boundedly* — without waiting a full [`LOCK_TIMEOUT`].
+/// Testing [`lock_exclusive_bounded`] alone would leave the wiring uncovered:
+/// swapping this call for a blocking acquisition reintroduces the session-freeze
+/// hazard while every test still passes.
+fn append_span_within(
+    log: &Path,
+    lock_timeout: Duration,
+    build: impl FnOnce(u64) -> Span,
+) -> Result<()> {
     if let Some(parent) = log.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -387,7 +402,7 @@ fn append_span_with(log: &Path, build: impl FnOnce(u64) -> Span) -> Result<()> {
         .append(true)
         .open(log)
         .with_context(|| format!("failed to open {}", log.display()))?;
-    lock_exclusive_bounded(&file, log, LOCK_TIMEOUT)?;
+    lock_exclusive_bounded(&file, log, lock_timeout)?;
 
     let span = build(read_spans(log)?.len() as u64);
     let mut line = serde_json::to_string(&span).context("failed to serialize span")?;
@@ -427,8 +442,7 @@ fn lock_exclusive_bounded(file: &File, log: &Path, timeout: Duration) -> Result<
                 ))
             }
             Err(TryLockError::Error(err)) => {
-                return Err(anyhow!(err))
-                    .with_context(|| format!("failed to lock {}", log.display()))
+                return Err(err).with_context(|| format!("failed to lock {}", log.display()))
             }
         }
     }
@@ -786,19 +800,18 @@ mod tests {
         }
     }
 
-    /// A hook must not inherit another process's stall. Hooks run synchronously
-    /// in the agent's tool path, so an unbounded wait lets one wedged holder
-    /// freeze every later hook in the session.
+    /// A hook must not inherit another process's stall; see
+    /// [`lock_exclusive_bounded`] for why an unbounded wait is unsafe here.
     ///
-    /// Uses a short timeout directly rather than [`LOCK_TIMEOUT`] to keep the
-    /// test fast; the bounding behaviour is what is under test, not the value.
+    /// Uses a short timeout rather than [`LOCK_TIMEOUT`] to keep the test fast;
+    /// the bounding behaviour is what is under test, not the value.
     #[test]
     fn a_held_lock_fails_the_waiter_instead_of_hanging_it() {
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join(".aoa/traces/live-held.jsonl");
         std::fs::create_dir_all(log.parent().unwrap()).unwrap();
 
-        // A separate open file description, which is what flock arbitrates on.
+        // A separate open file description, which is what the lock arbitrates on.
         let holder = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -825,6 +838,59 @@ mod tests {
         // is transient contention rather than a permanently poisoned log.
         drop(holder);
         lock_exclusive_bounded(&waiter, &log, timeout).expect("lock is available once released");
+    }
+
+    /// The append path itself must acquire the lock boundedly, not merely the
+    /// helper that does the acquiring.
+    ///
+    /// Covering [`lock_exclusive_bounded`] alone leaves the wiring untested:
+    /// replacing the call in [`append_span_within`] with a blocking acquisition
+    /// reintroduces the session-freeze hazard while every other test still
+    /// passes. Verified by exactly that mutation.
+    #[test]
+    fn a_contended_append_fails_bounded_instead_of_hanging() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join(".aoa/traces/live-contended.jsonl");
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+
+        let holder = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log)
+            .unwrap();
+        holder.lock().unwrap();
+
+        let timeout = Duration::from_millis(50);
+        // Run the append off-thread and wait with a deadline, so a regression to
+        // a blocking acquisition surfaces as a diagnosable failure here rather
+        // than hanging the whole test binary until CI times out.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let target = log.clone();
+        std::thread::spawn(move || {
+            let outcome = append_span_within(&target, timeout, |seq| Span {
+                span_type: SpanType::WriteCommitted,
+                source: SpanSource::Native,
+                seq,
+                attributes: Map::new(),
+            });
+            let _ = tx.send(outcome);
+        });
+
+        let err = rx
+            .recv_timeout(timeout * 20)
+            .expect("append never returned — it inherited the holder's stall instead of giving up")
+            .expect_err("append must fail while the lock is held");
+
+        assert!(
+            err.to_string().contains("timed out"),
+            "must report the timeout, got: {err}"
+        );
+        // Nothing was written: failing to lock must never fall through to an
+        // unlocked append, which would reintroduce the corrupt seq.
+        assert!(
+            read_spans(&log).unwrap().is_empty(),
+            "a failed acquisition must not append"
+        );
     }
 
     #[test]
