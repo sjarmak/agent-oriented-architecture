@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use aoa_trace::{validate_trace, Trace, TraceReport};
 
@@ -18,9 +18,39 @@ pub struct ObserveOutcome {
 }
 
 impl ObserveOutcome {
-    /// The path a trace named `name` would be written to.
-    pub fn trace_path(&self, name: &str) -> PathBuf {
-        self.traces_dir.join(name)
+    /// The path a trace named `name` would be written to, once `name` is
+    /// confirmed to be a single safe filename component.
+    ///
+    /// Returns [`AuditError::UnsafeTraceName`] for anything that could escape
+    /// the installed `.aoa/traces` boundary: an absolute path (which would
+    /// replace the base outright), a `.`/`..` component, a multi-component or
+    /// separator-bearing name, or an empty name.
+    pub fn trace_path(&self, name: &str) -> Result<PathBuf, AuditError> {
+        validate_trace_name(name)?;
+        Ok(self.traces_dir.join(name))
+    }
+}
+
+/// Accept a trace filename only if it is exactly one [`Component::Normal`].
+///
+/// This is the containment invariant for the write path: joined onto
+/// `.aoa/traces`, a single normal component always lands directly inside it,
+/// whereas an absolute path replaces the base, `..` walks out of it, and a
+/// multi-component name reaches into sub-trees. The explicit separator/NUL
+/// guard closes the platform gap where `Path::components` folds a trailing
+/// separator into a lone `Normal` and where `\` is an ordinary character on
+/// Unix but a separator elsewhere.
+fn validate_trace_name(name: &str) -> Result<(), AuditError> {
+    let mut components = Path::new(name).components();
+    let single_normal =
+        matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none();
+
+    if single_normal && !name.contains('/') && !name.contains('\\') && !name.contains('\0') {
+        Ok(())
+    } else {
+        Err(AuditError::UnsafeTraceName {
+            name: name.to_string(),
+        })
     }
 }
 
@@ -58,7 +88,20 @@ pub fn write_trace(
     name: &str,
     trace: &Trace,
 ) -> Result<(PathBuf, TraceReport), AuditError> {
-    let path = outcome.trace_path(name);
+    let path = outcome.trace_path(name)?;
+
+    // Symlink boundary: even a legal single-component name can be a symlink
+    // already sitting in the trace dir and pointing outside it. `std::fs::write`
+    // follows symlinks, so writing through one would clobber whatever it targets.
+    // Refuse rather than follow — `symlink_metadata` does not itself follow.
+    if let Ok(meta) = std::fs::symlink_metadata(&path) {
+        if meta.file_type().is_symlink() {
+            return Err(AuditError::UnsafeTraceName {
+                name: name.to_string(),
+            });
+        }
+    }
+
     // Write through the versioned envelope so the file carries the wire-format
     // version and survives the read-side version check below.
     let json = aoa_trace::to_envelope_json_pretty(trace).map_err(|source| AuditError::Io {
@@ -72,4 +115,63 @@ pub fn write_trace(
 
     let report = validate_trace(&path)?;
     Ok((path, report))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn outcome() -> ObserveOutcome {
+        ObserveOutcome {
+            traces_dir: PathBuf::from("/repo/.aoa/traces"),
+            gitignore: PathBuf::from("/repo/.aoa/.gitignore"),
+        }
+    }
+
+    #[test]
+    fn valid_single_component_names_round_trip() {
+        let o = outcome();
+        for name in [
+            "run-1.json",
+            "trace.json",
+            "a",
+            "..foo",
+            "foo..bar",
+            "session_2026.json",
+        ] {
+            let path = o.trace_path(name).expect("valid name accepted");
+            assert_eq!(path, o.traces_dir.join(name));
+            assert_eq!(
+                path.parent(),
+                Some(o.traces_dir.as_path()),
+                "valid name must stay directly inside the trace dir: {name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn escaping_names_are_rejected() {
+        let o = outcome();
+        for name in [
+            "/etc/passwd",      // absolute path replaces the base outright
+            "/tmp/x",           // absolute path
+            "..",               // parent component
+            "../x",             // parent traversal
+            "../../etc/passwd", // deep parent traversal
+            ".",                // current-dir component
+            "a/b",              // multi-component
+            "sub/trace.json",   // multi-component
+            "dir/",             // trailing separator
+            "a\\b",             // backslash separator (defensive)
+            "",                 // empty
+        ] {
+            let err = o
+                .trace_path(name)
+                .expect_err(&format!("must reject {name:?}"));
+            assert!(
+                matches!(err, AuditError::UnsafeTraceName { .. }),
+                "wrong error for {name:?}: {err:?}"
+            );
+        }
+    }
 }

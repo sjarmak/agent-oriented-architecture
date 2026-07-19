@@ -137,6 +137,71 @@ fn observe_path_produces_valid_trace() {
     );
 }
 
+// Criterion (aoa-kk6m): write_trace refuses any caller-supplied name that could
+// escape the installed .aoa/traces boundary — absolute, parent, dot, and
+// multi-component names are rejected before any write, and no stray file lands
+// in the repo.
+#[test]
+fn write_trace_rejects_escaping_names() {
+    let repo = fixture_repo();
+    let outcome = observe(repo.path()).expect("observe succeeds");
+    let before = file_set(repo.path());
+
+    for name in [
+        "/etc/passwd-aoa-should-never-write",
+        "../../escape.json",
+        "..",
+        ".",
+        "a/b.json",
+        "",
+    ] {
+        let err = write_trace(&outcome, name, &valid_trace())
+            .expect_err(&format!("write_trace must reject {name:?}"));
+        assert!(
+            matches!(err, aoa_audit::AuditError::UnsafeTraceName { .. }),
+            "wrong error for {name:?}: {err:?}"
+        );
+    }
+
+    // Every name was rejected at validation, so no file was created in the tree.
+    let after = file_set(repo.path());
+    assert_eq!(before, after, "a rejected trace write must create no file");
+}
+
+// Criterion (aoa-kk6m): the symlink boundary is defended. A legal-looking name
+// that is actually a symlink out of the trace dir must NOT be written through —
+// the file it points at stays untouched, proving no write escapes.
+#[cfg(unix)]
+#[test]
+fn write_trace_refuses_to_follow_a_symlink_out_of_the_trace_dir() {
+    use std::os::unix::fs::symlink;
+
+    let repo = fixture_repo();
+    let outcome = observe(repo.path()).expect("observe succeeds");
+
+    // A file OUTSIDE the trace dir that must never be modified.
+    let secret = repo.path().join("secret.txt");
+    std::fs::write(&secret, "original").expect("seed secret");
+
+    // Plant a symlink INSIDE the trace dir whose name looks legal but points at
+    // the secret. Following it on write would clobber the secret.
+    let link = outcome.traces_dir.join("escape.json");
+    symlink(&secret, &link).expect("create symlink");
+
+    let err = write_trace(&outcome, "escape.json", &valid_trace())
+        .expect_err("write_trace must refuse to write through a symlink");
+    assert!(
+        matches!(err, aoa_audit::AuditError::UnsafeTraceName { .. }),
+        "wrong error: {err:?}"
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(&secret).expect("read secret"),
+        "original",
+        "write escaped the trace dir through the symlink"
+    );
+}
+
 // Criterion 3: audit writes nothing to tracked files.
 #[test]
 fn audit_does_not_mutate_repo() {

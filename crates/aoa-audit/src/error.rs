@@ -14,6 +14,15 @@ pub enum AuditError {
         source: std::io::Error,
     },
 
+    /// A caller-supplied trace name could escape the installed `.aoa/traces`
+    /// boundary. Rejected before any write: the name was absolute, empty, a
+    /// `.`/`..` component, multi-component, or resolved through a symlink.
+    #[error(
+        "unsafe trace name {name:?}: must be a single filename with no path \
+         separators, parent components, or symlink"
+    )]
+    UnsafeTraceName { name: String },
+
     /// A trace produced through the observe-installed path failed validation.
     #[error(transparent)]
     Trace(#[from] aoa_trace::TraceError),
