@@ -392,7 +392,7 @@ fn seed_edit_sessions(repo: &Path, n: usize) {
     }
 }
 
-// aoa-d6t.23 criterion: a history-poor repo (no held-out behavioral signal)
+// aoa-d6t.23 criterion: a repo with no observe-captured held-out signal
 // reports InsufficientData for the behavioral metrics with the reason — never
 // a fabricated mutation-surface score and never a silent checkbox degradation.
 #[test]

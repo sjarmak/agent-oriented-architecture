@@ -14,8 +14,9 @@ use crate::output::{print_human, print_json};
 /// dynamic the construct-validity determination exists to prevent.
 ///
 /// The determination is conditioned on the repo's behavioral signal (counted by
-/// the audit from the observe-captured corpus, aoa-d6t.23): a history-poor repo
-/// reports its behavioral metrics as InsufficientData, never Advisory.
+/// the audit from the observe-captured corpus, aoa-d6t.23): a repo with no
+/// observe-captured held-out signal reports its behavioral metrics as
+/// InsufficientData, never Advisory.
 pub fn run(args: &RecommendArgs) -> Result<i32> {
     let cfg = crate::commands::audit::repo_audit_config(&args.repo)?;
     let audit = aoa_audit::audit(&args.repo, &cfg)

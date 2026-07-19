@@ -1462,10 +1462,11 @@ fn seed_live_sessions(repo: &Path, n: usize) {
     }
 }
 
-// A history-poor repo: audit reports InsufficientData with the reason, and no
-// fabricated mutation-surface score, in both registers.
+// A repo with no observe-captured held-out signal: audit reports
+// InsufficientData with the reason, and no fabricated mutation-surface score,
+// in both registers.
 #[test]
-fn audit_reports_insufficient_data_on_a_history_poor_repo() {
+fn audit_reports_insufficient_data_without_observe_captured_signal() {
     let repo = TempDir::new().expect("tempdir");
     aoa()
         .args(["audit", "--repo"])
@@ -1486,7 +1487,7 @@ fn audit_reports_insufficient_data_on_a_history_poor_repo() {
     let items = parsed["items"].as_array().expect("items");
     assert!(
         !items.iter().any(|i| i["kind"] == "mutation_surface"),
-        "no fabricated behavioral score on a history-poor repo"
+        "no fabricated behavioral score without observe-captured held-out signal"
     );
 }
 
@@ -1571,10 +1572,11 @@ fn audit_ignores_contentless_sessions_when_counting_observations() {
     );
 }
 
-// recommend on a history-poor repo: the determination tags the behavioral
-// metrics InsufficientData (not Advisory) and the note carries the reason.
+// recommend with no observe-captured held-out signal: the determination tags
+// the behavioral metrics InsufficientData (not Advisory) and the note carries
+// the reason.
 #[test]
-fn recommend_reports_insufficient_data_on_a_history_poor_repo() {
+fn recommend_reports_insufficient_data_without_observe_captured_signal() {
     let repo = TempDir::new().expect("tempdir");
     aoa()
         .args(["recommend", "--repo"])

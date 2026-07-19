@@ -616,10 +616,11 @@ mod tests {
 
     #[test]
     fn insufficient_data_determination_surfaces_state_and_reason() {
-        // aoa-d6t.23: on a history-poor repo the determination tags the four
-        // behavioral metrics InsufficientData. recommend must surface that
-        // state — a MutationSurface finding shows the mode (not Advisory), and
-        // the report carries the note with the reason in both registers.
+        // aoa-d6t.23: with no observe-captured held-out signal the determination
+        // tags the four behavioral metrics InsufficientData. recommend must
+        // surface that state — a MutationSurface finding shows the mode (not
+        // Advisory), and the report carries the note with the reason in both
+        // registers.
         let audit = AuditReport::new(vec![item(
             FindingKind::MutationSurface,
             "writable mutation surface within depth 2",
