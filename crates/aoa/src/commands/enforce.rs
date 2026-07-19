@@ -407,12 +407,12 @@ pub(crate) fn merge_enforce_hooks(mut settings: Value) -> Result<Value> {
         ));
     };
     let hooks = object.entry("hooks").or_insert_with(|| json!({}));
-    if !hooks.is_object() {
+    let Some(hooks) = hooks.as_object_mut() else {
         return Err(anyhow!(
             "settings key \"hooks\" must be a JSON object, found {}",
             json_kind(hooks)
         ));
-    }
+    };
 
     let matcher = mutation_tool_matcher();
     add_hook(hooks, "PostToolUse", "Bash", "aoa enforce record")?;
@@ -496,13 +496,13 @@ pub(crate) fn install_enforce_hooks(repo: &Path) -> Result<PathBuf> {
 /// whose matcher fits, so the command would fire twice per tool call and write
 /// two spans for every one write. Neither is recoverable by the tool, so it says
 /// what it found and stops.
-fn add_hook(hooks: &mut Value, event: &str, matcher: &str, command: &str) -> Result<()> {
-    let hooks_kind = json_kind(hooks);
-    let groups = hooks
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("hooks must be a JSON object, found {hooks_kind}"))?
-        .entry(event)
-        .or_insert_with(|| json!([]));
+fn add_hook(
+    hooks: &mut Map<String, Value>,
+    event: &str,
+    matcher: &str,
+    command: &str,
+) -> Result<()> {
+    let groups = hooks.entry(event).or_insert_with(|| json!([]));
     let Some(groups) = groups.as_array_mut() else {
         return Err(anyhow!(
             "hook event \"{event}\" must be an array, found {}",
@@ -584,6 +584,9 @@ mod tests {
         assert_eq!(path, PathBuf::from("/repo/.aoa/traces/live-escape.jsonl"));
     }
 
+    /// Re-merging an already-installed config must be byte-stable: every entry is
+    /// present under the matcher `add_hook` keys on, so the second pass finds
+    /// them all and changes nothing.
     #[test]
     fn merge_enforce_hooks_is_idempotent() {
         let once = merge_enforce_hooks(json!({})).expect("fresh settings merge");
@@ -597,8 +600,8 @@ mod tests {
 
         // PostToolUse carries two entries under different matchers: the Bash
         // test recorder and the mutation-tool commit recorder. They must have
-        // distinct command strings, because `add_hook` dedupes on the command
-        // alone and would otherwise drop the second one silently.
+        // distinct command strings — one command under two matchers is the
+        // conflict `add_hook` rejects, so sharing one would fail the install.
         let post = once["hooks"]["PostToolUse"].as_array().unwrap();
         assert_eq!(post.len(), 2);
         assert_eq!(post[0]["hooks"][0]["command"], "aoa enforce record");
@@ -720,15 +723,6 @@ mod tests {
                 "conflict must name {expected}, got: {message}"
             );
         }
-    }
-
-    /// The same command under the *same* matcher is the re-run case and must stay
-    /// a no-op, or `install_enforce_hooks` would stop being byte-stable.
-    #[test]
-    fn re_registering_an_identical_entry_is_a_no_op() {
-        let once = merge_enforce_hooks(json!({})).expect("fresh merge");
-        let twice = merge_enforce_hooks(once.clone()).expect("re-merge must succeed");
-        assert_eq!(once, twice);
     }
 
     #[test]

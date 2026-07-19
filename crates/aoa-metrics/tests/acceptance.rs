@@ -178,71 +178,52 @@ fn invariant_not_discovered_when_accessed_after_write() {
     assert!(!d.accessed_before_first_write);
 }
 
-/// A settled codeprobe trace carries NO `write.attempt`: the shim rewrites the
-/// correlated attempt in place once the tool result arrives. Deriving the
-/// boundary from `write.attempt` alone therefore left `first_write_seq` at
-/// `None` for every reconstructed transcript whose writes landed, which opened
-/// the boundary and counted post-edit reads as pre-write discovery.
+/// Every span where the agent undertook a write opens the boundary, and all of
+/// them open it in the same place.
 ///
-/// Both spans here are deliberately non-attempt — with a `write.attempt`
-/// anywhere in the trace this test would pass against the old code too.
+/// The non-attempt variants are the regression. A settled codeprobe trace
+/// carries NO `write.attempt`: the shim rewrites the correlated attempt in place
+/// once the tool result arrives. Deriving the boundary from `write.attempt`
+/// alone therefore left `first_write_seq` at `None` for every reconstructed
+/// transcript whose writes landed, which opened the boundary and counted
+/// post-edit reads as pre-write discovery.
+///
+/// The attempt variant then pins the other half: because the shim rewrites in
+/// place the `seq` is preserved, so promoting a span must not move the boundary.
+/// That equivalence is what makes the change safe for the hook path, which still
+/// sees the unpromoted attempt.
 #[test]
-fn committed_write_opens_the_boundary_without_an_attempt() {
-    let input = MetricInput {
-        invariant_set: set(&["invariants::orders"]),
-        trace: Trace {
-            spans: vec![
-                span(
-                    SpanType::WriteCommitted,
-                    1,
-                    serde_json::json!({ "path": "orders.rs" }),
-                ),
-                span(
-                    SpanType::SymbolLookup,
-                    2,
-                    serde_json::json!({ "symbol": "invariants::orders" }),
-                ),
-            ],
-        },
-        ..base_input()
-    };
-    let d = compute_invariant_discoverability(input.as_view());
-    assert_eq!(d.first_write_seq, Some(1));
-    assert!(
-        !d.accessed_before_first_write,
-        "a read after a landed write is not pre-write discovery"
-    );
-}
-
-/// The same trace shape promoted from attempt to committed must measure the
-/// same. Because the shim rewrites the span in place the `seq` is preserved, so
-/// the hook path and the reconstructed path agree by construction — this pins
-/// that they do, which is what makes the boundary change safe for the hook path.
-#[test]
-fn promotion_to_committed_does_not_move_the_boundary() {
-    let trace_with = |t: SpanType| Trace {
-        spans: vec![
-            span(t, 1, serde_json::json!({ "path": "orders.rs" })),
-            span(
-                SpanType::SymbolLookup,
-                2,
-                serde_json::json!({ "symbol": "invariants::orders" }),
-            ),
-        ],
-    };
-    let measure = |t: SpanType| {
+fn undertaken_writes_open_the_boundary_in_the_same_place() {
+    for opening in [
+        SpanType::WriteAttempt,
+        SpanType::WriteCommitted,
+        SpanType::WriteFailed,
+    ] {
         let input = MetricInput {
             invariant_set: set(&["invariants::orders"]),
-            trace: trace_with(t),
+            trace: Trace {
+                spans: vec![
+                    span(opening, 1, serde_json::json!({ "path": "orders.rs" })),
+                    span(
+                        SpanType::SymbolLookup,
+                        2,
+                        serde_json::json!({ "symbol": "invariants::orders" }),
+                    ),
+                ],
+            },
             ..base_input()
         };
         let d = compute_invariant_discoverability(input.as_view());
-        (d.first_write_seq, d.accessed_before_first_write)
-    };
-    assert_eq!(
-        measure(SpanType::WriteAttempt),
-        measure(SpanType::WriteCommitted)
-    );
+        assert_eq!(
+            d.first_write_seq,
+            Some(1),
+            "{opening:?} must open the boundary"
+        );
+        assert!(
+            !d.accessed_before_first_write,
+            "{opening:?}: a read after a write that was undertaken is not pre-write discovery"
+        );
+    }
 }
 
 /// Refusals must NOT open the boundary. The policy gate emits `write.blocked`
