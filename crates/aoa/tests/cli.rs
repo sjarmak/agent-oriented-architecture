@@ -1096,14 +1096,29 @@ fn experiment_answer_shape_computes_real_convention_inputs() {
     );
 }
 
+/// Writes `manifest_json` to a temp dir and runs the experiment builder over
+/// it against the `answer_tasks` fixture, expecting failure; callers assert
+/// on stderr.
+fn experiment_manifest_failure(manifest_json: &str) -> assert_cmd::assert::Assert {
+    let dir = TempDir::new().expect("tempdir");
+    let manifest = dir.path().join("manifest.json");
+    std::fs::write(&manifest, manifest_json).expect("manifest written");
+    aoa()
+        .args(["eval", "experiment", "--manifest"])
+        .arg(&manifest)
+        .arg("--tasks")
+        .arg(fixture("answer_tasks"))
+        .arg("--out")
+        .arg(dir.path().join("falsify_input.json"))
+        .assert()
+        .failure()
+}
+
 // A manifest declaring answer shape without the index it needs fails loud —
 // the builder never silently degrades an operator-declared answer repo.
 #[test]
 fn experiment_answer_shape_without_index_fails_loud() {
-    let dir = TempDir::new().expect("tempdir");
-    let manifest = dir.path().join("manifest.json");
-    std::fs::write(
-        &manifest,
+    experiment_manifest_failure(
         r#"{
           "k_runs": 3, "min_holdout_size": 1,
           "repos": [{
@@ -1117,18 +1132,7 @@ fn experiment_answer_shape_without_index_fails_loud() {
           }]
         }"#,
     )
-    .expect("manifest written");
-
-    aoa()
-        .args(["eval", "experiment", "--manifest"])
-        .arg(&manifest)
-        .arg("--tasks")
-        .arg(fixture("answer_tasks"))
-        .arg("--out")
-        .arg(dir.path().join("falsify_input.json"))
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("requires scip_index"));
+    .stderr(predicate::str::contains("requires scip_index"));
 }
 
 // `deny_unknown_fields` is per-struct, so each of the three manifest
@@ -1164,22 +1168,33 @@ fn experiment_manifest_rejects_unknown_fields_at_every_boundary() {
     ];
 
     for (typo, manifest_json) in cases {
-        let dir = TempDir::new().expect("tempdir");
-        let manifest = dir.path().join("manifest.json");
-        std::fs::write(&manifest, manifest_json).expect("manifest written");
-
-        aoa()
-            .args(["eval", "experiment", "--manifest"])
-            .arg(&manifest)
-            .arg("--tasks")
-            .arg(fixture("answer_tasks"))
-            .arg("--out")
-            .arg(dir.path().join("falsify_input.json"))
-            .assert()
-            .failure()
+        experiment_manifest_failure(&manifest_json)
             .stderr(predicate::str::contains("unknown field"))
             .stderr(predicate::str::contains(typo));
     }
+}
+
+// The strictness above must not reject the documented R11 attestation key
+// (docs/r0_runbook.md § "R11 scope note" tells answer-shape operators to
+// declare `calibrated_basis`). Reaching the post-parse `requires scip_index`
+// diagnostic proves the manifest deserialized cleanly with the key present.
+#[test]
+fn experiment_manifest_accepts_documented_calibrated_basis_key() {
+    experiment_manifest_failure(
+        r#"{
+          "k_runs": 3, "min_holdout_size": 1,
+          "repos": [{
+            "repo_id": "sample/answers", "confidence": "high", "calibrated": true,
+            "calibrated_basis": "consensus-verified-answer-oracles-r11-scope-note-2026-07-05",
+            "task_shape": "answer",
+            "runs": [
+              { "seed": 1, "repo_arm": "seed1/repo_arm", "harness_arm": "seed1/harness_arm" }
+            ]
+          }]
+        }"#,
+    )
+    .stderr(predicate::str::contains("requires scip_index"))
+    .stderr(predicate::str::contains("unknown field").not());
 }
 
 // H2/AC4: given a real >=5-repo input but a build report flagging degraded

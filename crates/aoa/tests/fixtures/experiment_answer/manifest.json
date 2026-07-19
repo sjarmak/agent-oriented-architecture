@@ -7,6 +7,7 @@
       "repo_id": "sample/answers",
       "confidence": "high",
       "calibrated": true,
+      "calibrated_basis": "consensus-verified-answer-oracles-r11-scope-note-2026-07-05",
       "task_shape": "answer",
       "scip_index": "../answer_scip_index.json",
       "runs": [

@@ -93,6 +93,15 @@ struct RepoManifest {
     confidence: ConfidenceDecl,
     /// Operator assertion that the repo's scoring is calibrated. REQUIRED.
     calibrated: bool,
+    /// What backs the `calibrated` assertion. The pre-registered R11 scope
+    /// note (`docs/r0_runbook.md` § "R11 scope note for answer-shaped tasks")
+    /// instructs answer-shape operators to declare this key, so
+    /// `deny_unknown_fields` must not reject it. It is an operator attestation
+    /// for human/audit consumption; the builder does not read it (whether to
+    /// REQUIRE it for answer shape is aoa-j7tg).
+    #[serde(default)]
+    #[expect(dead_code)]
+    calibrated_basis: Option<String>,
     /// The task shape this repo's trials carry. `answer` (comprehension tasks)
     /// computes real trace-locality/trace-reach convention inputs and REQUIRES
     /// `scip_index`; `edit` (the default) emits degraded sentinels until an
