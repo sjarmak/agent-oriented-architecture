@@ -51,11 +51,12 @@
 //! transcript format. It lands under the same ignored `.aoa/traces/` tree that
 //! `observe` already provisions.
 
+use std::fs::{File, TryLockError};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use rustix::fs::{flock, FlockOperation};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
@@ -80,6 +81,15 @@ const MUTATION_TOOLS: [&str; 4] = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 fn mutation_tool_matcher() -> String {
     MUTATION_TOOLS.join("|")
 }
+
+/// How long a hook waits for the span log's lock before failing. Generous
+/// against real contention (the lock spans one read and one append) and short
+/// enough that a wedged holder cannot stall the session.
+const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Poll interval while waiting. Short enough to be invisible under normal
+/// contention, long enough not to spin a core against a wedged holder.
+const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(5);
 
 /// The subset of a Claude Code hook payload this gate needs. Unknown fields are
 /// ignored by serde, so the host may add more without breaking the parse.
@@ -352,10 +362,18 @@ fn append_span(log: &Path, span_type: SpanType, attributes: Map<String, Value>) 
 /// repo — against an append-only log with no repair path. A caller that built
 /// its span before calling would reintroduce exactly that race.
 ///
-/// `flock`, not `fcntl`: [`read_spans`] opens a *second* descriptor on the same
-/// path via `read_to_string`, and POSIX record locks are per-process-per-inode,
-/// so closing that second descriptor would drop the lock mid-update. `flock` is
-/// held per open file description and survives it.
+/// The lock must be one held per *open file description*, which is what
+/// [`File::try_lock`] gives us. [`read_spans`] opens a **second** descriptor on
+/// the same path via `read_to_string` inside the critical section, and a classic
+/// POSIX record lock (`fcntl(F_SETLK)`) is per-process-per-inode, so closing
+/// that second descriptor would drop the lock mid-update. Modern OFD locks
+/// (`fcntl(F_OFD_SETLK)`) would be equivalent; plain `F_SETLK` would not.
+///
+/// Readers outside this function still take no lock. That is deliberate and
+/// bounded: an advisory lock only binds parties that opt in, so this serializes
+/// writer against writer, which is what produced the corrupt `seq`. A reader
+/// racing an in-flight append can still see a torn final line, which fails loudly
+/// as a parse error rather than corrupting anything (tracked in aoa-wew0).
 fn append_span_with(log: &Path, build: impl FnOnce(u64) -> Span) -> Result<()> {
     if let Some(parent) = log.parent() {
         std::fs::create_dir_all(parent)
@@ -369,8 +387,7 @@ fn append_span_with(log: &Path, build: impl FnOnce(u64) -> Span) -> Result<()> {
         .append(true)
         .open(log)
         .with_context(|| format!("failed to open {}", log.display()))?;
-    flock(&file, FlockOperation::LockExclusive)
-        .with_context(|| format!("failed to lock {}", log.display()))?;
+    lock_exclusive_bounded(&file, log, LOCK_TIMEOUT)?;
 
     let span = build(read_spans(log)?.len() as u64);
     let mut line = serde_json::to_string(&span).context("failed to serialize span")?;
@@ -378,6 +395,43 @@ fn append_span_with(log: &Path, build: impl FnOnce(u64) -> Span) -> Result<()> {
     file.write_all(line.as_bytes())
         .with_context(|| format!("failed to append to {}", log.display()))?;
     Ok(())
+}
+
+/// Take the log's exclusive lock, giving up after `timeout` rather than waiting
+/// forever.
+///
+/// Hooks run synchronously in the agent's tool path, so a blocking acquisition
+/// hands any process that stalls while holding this lock — stopped, or on a
+/// wedged network mount — the ability to freeze every later hook in the session
+/// with no recovery but killing it by hand. The lock is only ever held across
+/// one read and one append, so contention resolves in microseconds; waiting
+/// seconds means something is already wrong, and reporting that is strictly
+/// better than inheriting the stall.
+///
+/// Giving up is a real error, never a silent fallback to an unlocked append:
+/// that would trade a visible failure for the corrupt `seq` this lock exists to
+/// prevent.
+fn lock_exclusive_bounded(file: &File, log: &Path, timeout: Duration) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(()),
+            Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                std::thread::sleep(LOCK_RETRY_INTERVAL);
+            }
+            Err(TryLockError::WouldBlock) => {
+                return Err(anyhow!(
+                    "timed out after {timeout:?} waiting for the span log lock on {}; \
+                     another aoa hook is holding it and may be wedged",
+                    log.display()
+                ))
+            }
+            Err(TryLockError::Error(err)) => {
+                return Err(anyhow!(err))
+                    .with_context(|| format!("failed to lock {}", log.display()))
+            }
+        }
+    }
 }
 
 /// Merge the enforcement hook entries into an existing `.claude/settings.json`
@@ -519,15 +573,22 @@ fn add_hook(
                     .iter()
                     .any(|h| h.get("command").and_then(Value::as_str) == Some(command))
             });
-        runs_command.then(|| group.get("matcher").and_then(Value::as_str).unwrap_or(""))
+        runs_command.then(|| group.get("matcher").and_then(Value::as_str))
     });
 
     match registered_matcher {
-        Some(found) if found == matcher => Ok(()),
+        Some(Some(found)) if found == matcher => Ok(()),
+        // A group with no usable matcher still can't be reconciled, but naming it
+        // as `""` would read as an entry that matches the empty string rather
+        // than one that is missing the key.
         Some(found) => Err(anyhow!(
-            "hook event \"{event}\" already runs \"{command}\" under matcher \
-             \"{found}\", but it must run under \"{matcher}\". Remove or correct \
-             that entry and re-run."
+            "hook event \"{event}\" already runs \"{command}\" under {}, but it \
+             must run under matcher \"{matcher}\". Remove or correct that entry \
+             and re-run.",
+            found.map_or_else(
+                || "a group with no matcher".to_string(),
+                |m| format!("matcher \"{m}\"")
+            )
         )),
         None => {
             groups.push(json!({
@@ -723,6 +784,47 @@ mod tests {
                 "conflict must name {expected}, got: {message}"
             );
         }
+    }
+
+    /// A hook must not inherit another process's stall. Hooks run synchronously
+    /// in the agent's tool path, so an unbounded wait lets one wedged holder
+    /// freeze every later hook in the session.
+    ///
+    /// Uses a short timeout directly rather than [`LOCK_TIMEOUT`] to keep the
+    /// test fast; the bounding behaviour is what is under test, not the value.
+    #[test]
+    fn a_held_lock_fails_the_waiter_instead_of_hanging_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join(".aoa/traces/live-held.jsonl");
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+
+        // A separate open file description, which is what flock arbitrates on.
+        let holder = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log)
+            .unwrap();
+        holder.lock().unwrap();
+
+        let waiter = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+        let timeout = Duration::from_millis(50);
+        let started = Instant::now();
+        let err = lock_exclusive_bounded(&waiter, &log, timeout).unwrap_err();
+        let waited = started.elapsed();
+
+        assert!(
+            err.to_string().contains("timed out"),
+            "must report the timeout, got: {err}"
+        );
+        assert!(
+            waited >= timeout && waited < timeout * 20,
+            "must wait roughly the timeout and then give up, waited {waited:?}"
+        );
+
+        // Releasing the holder lets the next acquisition through, so the failure
+        // is transient contention rather than a permanently poisoned log.
+        drop(holder);
+        lock_exclusive_bounded(&waiter, &log, timeout).expect("lock is available once released");
     }
 
     #[test]

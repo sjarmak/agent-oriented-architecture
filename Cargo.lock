@@ -89,7 +89,6 @@ dependencies = [
  "assert_cmd",
  "clap",
  "predicates",
- "rustix",
  "serde",
  "serde_json",
  "sha2",
