@@ -24,8 +24,9 @@ pub struct AuditReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtree_discovery_warning: Option<String>,
     /// The repo's held-out behavioral signal (observe-captured sessions under
-    /// `.aoa/traces/` counted against the exact-permutation window). Reports
-    /// from producers that predate the field deserialize to zero observations.
+    /// `.aoa/traces/` counted against [`aoa_gap::MIN_HELD_OUT_OBSERVATIONS`]).
+    /// Reports from producers that predate the field deserialize to zero
+    /// observations.
     #[serde(default)]
     pub behavioral_signal: BehavioralSignal,
     /// Present when the signal is below the window: the behavioral metrics

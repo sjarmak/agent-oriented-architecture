@@ -85,7 +85,7 @@ struct EvalRunReport {
     record_count: usize,
     error_count: usize,
     /// The run's held-out behavioral signal: one observation per record,
-    /// counted against the exact-permutation window (aoa-d6t.23).
+    /// counted against the behavioral-signal window (aoa-d6t.23).
     behavioral_signal: BehavioralSignal,
     /// Present when the run is below the window: the per-record metrics are
     /// real per-trial measurements, but the run supplies too little held-out

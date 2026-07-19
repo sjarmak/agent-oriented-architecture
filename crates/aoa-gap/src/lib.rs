@@ -57,5 +57,5 @@ pub use provenance::HeldOutProvenance;
 pub use run::{CanaryItem, RunResult, TaskOutcome};
 pub use signal::{
     determination_with_signal, BehavioralSignal, InsufficientDataNote, BEHAVIORAL_METRICS,
-    INSUFFICIENT_DATA_REASON,
+    INSUFFICIENT_DATA_REASON, MIN_HELD_OUT_OBSERVATIONS,
 };

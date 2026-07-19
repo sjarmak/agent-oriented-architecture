@@ -8,12 +8,12 @@
 //! and misrepresented greenfield repos.
 //!
 //! [`BehavioralSignal`] is the mechanical count of held-out behavioral
-//! observations available for one repo. Below the [`MAX_EXACT_N`] window the
-//! behavioral metrics are tagged [`MetricMode::InsufficientData`] — a state
-//! DISTINCT from `Advisory`: an Advisory metric was computed but has not earned
-//! external validation; an InsufficientData metric cannot be computed at all,
-//! with reason [`INSUFFICIENT_DATA_REASON`]. Once enough observations
-//! accumulate, [`determination_with_signal`] returns the ordinary
+//! observations available for one repo. Below the [`MIN_HELD_OUT_OBSERVATIONS`]
+//! window the behavioral metrics are tagged [`MetricMode::InsufficientData`] —
+//! a state DISTINCT from `Advisory`: an Advisory metric was computed but has
+//! not earned external validation; an InsufficientData metric cannot be
+//! computed at all, with reason [`INSUFFICIENT_DATA_REASON`]. Once enough
+//! observations accumulate, [`determination_with_signal`] returns the ordinary
 //! determination and the metrics light up (as Advisory, until R9c correlation
 //! promotes them).
 
@@ -22,7 +22,23 @@ use serde::{Deserialize, Serialize};
 use crate::construct::{
     current_determination, ConstructValidityReport, MetricClassification, MetricMode, MetricName,
 };
-use crate::correlation::MAX_EXACT_N;
+
+/// Held-out behavioral observations one repo must supply before its behavioral
+/// metrics are computed at all.
+///
+/// A calibration floor, not a derived quantity: R9c has not run, so no external
+/// outcome yet says how much held-out signal a locality metric needs to stop
+/// reporting session noise as repo structure. It sits above the correlation-side
+/// floor ([`crate::GatingThresholds::min_n`] = 5) and low enough that a repo
+/// under real observation reaches it. Moving it is a calibration decision, not a
+/// refactor.
+///
+/// Deliberately NOT [`crate::MAX_EXACT_N`], which happens to hold the same
+/// value: that is a *ceiling* on permutation compute over a population of repos,
+/// this is a *floor* on sessions within one repo. Coupled, the sampled
+/// significance test `correlation.rs` anticipates would raise the cap and
+/// thereby make the behavioral window *harder* to satisfy.
+pub const MIN_HELD_OUT_OBSERVATIONS: usize = 10;
 
 /// The gating-candidate metrics that are *behavioral* — computable only from
 /// held-out task traces, never from repo structure alone. A subset of
@@ -54,8 +70,8 @@ fn is_behavioral(metric: &str) -> bool {
 /// signal", not "history").
 ///
 /// `required` is carried as data (inspectable-thresholds discipline) and is
-/// [`MAX_EXACT_N`]: below the exact-permutation window a repo cannot supply
-/// enough held-out signal for its behavioral metrics to mean anything.
+/// [`MIN_HELD_OUT_OBSERVATIONS`]: below that window a repo cannot supply enough
+/// held-out signal for its behavioral metrics to mean anything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BehavioralSignal {
     /// Held-out behavioral observations counted for the repo.
@@ -65,11 +81,12 @@ pub struct BehavioralSignal {
 }
 
 impl BehavioralSignal {
-    /// A signal of `observations` against the [`MAX_EXACT_N`] window.
+    /// A signal of `observations` against the [`MIN_HELD_OUT_OBSERVATIONS`]
+    /// window.
     pub fn from_observations(observations: usize) -> Self {
         Self {
             observations,
-            required: MAX_EXACT_N,
+            required: MIN_HELD_OUT_OBSERVATIONS,
         }
     }
 
@@ -208,18 +225,35 @@ mod tests {
     }
 
     #[test]
-    fn signal_window_is_max_exact_n() {
-        let below = BehavioralSignal::from_observations(MAX_EXACT_N - 1);
+    fn signal_window_is_the_held_out_minimum() {
+        let below = BehavioralSignal::from_observations(MIN_HELD_OUT_OBSERVATIONS - 1);
         assert!(!below.is_sufficient());
-        assert_eq!(below.required, MAX_EXACT_N);
+        assert_eq!(below.required, MIN_HELD_OUT_OBSERVATIONS);
 
-        let at = BehavioralSignal::from_observations(MAX_EXACT_N);
+        let at = BehavioralSignal::from_observations(MIN_HELD_OUT_OBSERVATIONS);
         assert!(at.is_sufficient());
         assert!(at.insufficient_data().is_none());
 
         let note = below.insufficient_data().expect("below window");
         assert_eq!(note.reason, INSUFFICIENT_DATA_REASON);
         assert_eq!(note.metrics, behavioral_names());
+    }
+
+    /// Two independent pins, not one equality assertion: asserting
+    /// `MIN_HELD_OUT_OBSERVATIONS == MAX_EXACT_N` would re-create the coupling
+    /// the split removed. Whichever value moves, this test fails and a human
+    /// decides — which is the point.
+    #[test]
+    fn window_is_pinned_independently_of_the_permutation_cap() {
+        assert_eq!(
+            MIN_HELD_OUT_OBSERVATIONS, 10,
+            "calibration floor; moving it is a decision, not a refactor"
+        );
+        assert_eq!(
+            crate::correlation::MAX_EXACT_N,
+            10,
+            "today's compute ceiling; the shared value is coincidence, not a dependency"
+        );
     }
 
     #[test]
@@ -249,7 +283,9 @@ mod tests {
 
     #[test]
     fn sufficient_signal_lights_the_metrics_up_as_advisory() {
-        let report = determination_with_signal(&BehavioralSignal::from_observations(MAX_EXACT_N));
+        let report = determination_with_signal(&BehavioralSignal::from_observations(
+            MIN_HELD_OUT_OBSERVATIONS,
+        ));
         assert_eq!(report, current_determination());
         for m in &report.metrics {
             assert_eq!(m.mode, MetricMode::Advisory, "{}", m.metric);

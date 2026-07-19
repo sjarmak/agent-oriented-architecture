@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use aoa_audit::{audit, exit_code, observe, write_trace, AuditConfig, AuditReport, Tier};
+use aoa_gap::MIN_HELD_OUT_OBSERVATIONS;
 use aoa_metrics::{IndexQuality, SymbolGraph};
 use aoa_trace::{Span, SpanSource, SpanType, Trace};
 
@@ -495,10 +496,13 @@ fn greenfield_repo_reports_insufficient_data_not_a_fabricated_score() {
 #[test]
 fn accumulated_trace_corpus_lights_the_behavioral_metrics_up() {
     let repo = fixture_repo();
-    seed_edit_sessions(repo.path(), 10);
+    seed_edit_sessions(repo.path(), MIN_HELD_OUT_OBSERVATIONS);
 
     let report = audit(repo.path(), &audit_config()).expect("audit succeeds");
-    assert_eq!(report.behavioral_signal.observations, 10);
+    assert_eq!(
+        report.behavioral_signal.observations,
+        MIN_HELD_OUT_OBSERVATIONS
+    );
     assert!(report.behavioral_signal.is_sufficient());
     assert!(report.insufficient_data.is_none());
     assert!(
@@ -519,7 +523,7 @@ fn accumulated_trace_corpus_lights_the_behavioral_metrics_up() {
 #[test]
 fn sufficient_signal_with_an_empty_graph_emits_no_fabricated_surface_score() {
     let repo = fixture_repo();
-    seed_edit_sessions(repo.path(), 10);
+    seed_edit_sessions(repo.path(), MIN_HELD_OUT_OBSERVATIONS);
 
     let report = audit(repo.path(), &AuditConfig::default()).expect("audit succeeds");
     assert!(report.behavioral_signal.is_sufficient());
@@ -537,15 +541,15 @@ fn sufficient_signal_with_an_empty_graph_emits_no_fabricated_surface_score() {
 }
 
 // aoa-d6t.23 review finding: the window must not be satisfiable by sessions
-// that carry no held-out signal — ten edit-free live logs are zero
-// observations, and the behavioral item stays withheld.
+// that carry no held-out signal — a full window's worth of edit-free live
+// logs is zero observations, and the behavioral item stays withheld.
 #[test]
 fn edit_free_sessions_do_not_satisfy_the_behavioral_window() {
     let repo = fixture_repo();
     let traces = repo.path().join(".aoa").join("traces");
     std::fs::create_dir_all(&traces).expect("create traces dir");
     let span = r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#;
-    for i in 0..10 {
+    for i in 0..MIN_HELD_OUT_OBSERVATIONS {
         std::fs::write(traces.join(format!("live-s{i}.jsonl")), format!("{span}\n"))
             .expect("write live log");
     }

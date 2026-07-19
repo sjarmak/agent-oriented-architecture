@@ -657,8 +657,9 @@ mod tests {
     #[test]
     fn sufficient_signal_determination_carries_no_insufficient_note() {
         let audit = AuditReport::new(vec![nav_item()]);
-        let determination =
-            aoa_gap::determination_with_signal(&aoa_gap::BehavioralSignal::from_observations(10));
+        let determination = aoa_gap::determination_with_signal(
+            &aoa_gap::BehavioralSignal::from_observations(aoa_gap::MIN_HELD_OUT_OBSERVATIONS),
+        );
         let report = recommend(&audit, &determination, &all_fixes());
         assert!(report.insufficient_data.is_none());
         assert!(!report.render_human().contains("InsufficientData"));

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use aoa_gap::MIN_HELD_OUT_OBSERVATIONS;
 use assert_cmd::prelude::*;
 use predicates::prelude::*;
 use serde_json::Value;
@@ -1536,7 +1537,7 @@ fn audit_reports_insufficient_data_without_observe_captured_signal() {
 #[test]
 fn audit_lights_up_behavioral_metrics_once_corpus_is_sufficient() {
     let repo = TempDir::new().expect("tempdir");
-    seed_live_sessions(repo.path(), 10);
+    seed_live_sessions(repo.path(), MIN_HELD_OUT_OBSERVATIONS);
     std::fs::write(
         repo.path().join("app.py"),
         "def handle(x):\n    return store(x)\n\ndef store(x):\n    return x\n",
@@ -1549,7 +1550,10 @@ fn audit_lights_up_behavioral_metrics_once_corpus_is_sufficient() {
         .output()
         .expect("run");
     let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
-    assert_eq!(parsed["behavioral_signal"]["observations"], 10);
+    assert_eq!(
+        parsed["behavioral_signal"]["observations"],
+        MIN_HELD_OUT_OBSERVATIONS
+    );
     assert!(parsed.get("insufficient_data").is_none());
     let items = parsed["items"].as_array().expect("items");
     let surface = items
@@ -1568,7 +1572,7 @@ fn audit_lights_up_behavioral_metrics_once_corpus_is_sufficient() {
 #[test]
 fn audit_withholds_the_surface_score_when_nothing_indexes() {
     let repo = TempDir::new().expect("tempdir");
-    seed_live_sessions(repo.path(), 10);
+    seed_live_sessions(repo.path(), MIN_HELD_OUT_OBSERVATIONS);
 
     let output = aoa()
         .args(["audit", "--json", "--repo"])
@@ -1576,7 +1580,10 @@ fn audit_withholds_the_surface_score_when_nothing_indexes() {
         .output()
         .expect("run");
     let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
-    assert_eq!(parsed["behavioral_signal"]["observations"], 10);
+    assert_eq!(
+        parsed["behavioral_signal"]["observations"],
+        MIN_HELD_OUT_OBSERVATIONS
+    );
     let items = parsed["items"].as_array().expect("items");
     assert!(
         !items.iter().any(|i| i["kind"] == "mutation_surface"),
@@ -1584,15 +1591,15 @@ fn audit_withholds_the_surface_score_when_nothing_indexes() {
     );
 }
 
-// The reviewers' probe (aoa-d6t.23): ten blank live-*.jsonl files must NOT
-// satisfy the behavioral window — the precondition measures held-out signal,
-// not session-file count.
+// The reviewers' probe (aoa-d6t.23): a full window's worth of blank
+// live-*.jsonl files must NOT satisfy the behavioral window — the precondition
+// measures held-out signal, not session-file count.
 #[test]
 fn audit_ignores_contentless_sessions_when_counting_observations() {
     let repo = TempDir::new().expect("tempdir");
     let traces = repo.path().join(".aoa").join("traces");
     std::fs::create_dir_all(&traces).expect("create traces dir");
-    for i in 0..10 {
+    for i in 0..MIN_HELD_OUT_OBSERVATIONS {
         std::fs::write(traces.join(format!("live-s{i}.jsonl")), "").expect("write blank log");
     }
 
@@ -1642,7 +1649,7 @@ fn recommend_reports_insufficient_data_without_observe_captured_signal() {
 #[test]
 fn recommend_omits_insufficient_data_with_a_sufficient_corpus() {
     let repo = TempDir::new().expect("tempdir");
-    seed_live_sessions(repo.path(), 10);
+    seed_live_sessions(repo.path(), MIN_HELD_OUT_OBSERVATIONS);
     let output = aoa()
         .args(["recommend", "--json", "--repo"])
         .arg(repo.path())
