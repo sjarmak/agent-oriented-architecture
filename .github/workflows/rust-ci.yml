@@ -15,6 +15,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      # The architecture dead-link guard is fail-closed (blocks the Pages
+      # deploy); these tests pin that contract so it can't silently regress
+      # to advisory again. Needs only the runner's preinstalled Node (node:
+      # builtins, no npm deps), so it runs first and fails in seconds.
+      - name: Architecture link-guard tests
+        run: node --test architecture/site/check-links.test.mjs
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -44,10 +50,5 @@ jobs:
       - name: Install vendored ESLint (hermetic)
         run: npm ci
         working-directory: crates/aoa-migrate/assets/eslint
-      # The architecture dead-link guard is fail-closed (blocks the Pages
-      # deploy); these tests pin that contract so it can't silently regress
-      # to advisory again.
-      - name: Architecture link-guard tests
-        run: node --test architecture/site/check-links.test.mjs
       - name: Test
         run: cargo test --workspace
