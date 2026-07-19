@@ -25,9 +25,8 @@ pub(crate) const MAX_JSON_BYTES: u64 = 16 * 1024 * 1024;
 /// Largest number of mined task directories accepted under one task tree. Bounds
 /// the work an operator-supplied tree of millions of subdirs can induce.
 ///
-/// The sibling cap for *trials* under a codeprobe run dir is
-/// `aoa_bench::codeprobe_run::MAX_TRIAL_DIRS` — same value, different tree and
-/// different threat, deliberately kept independently tunable.
+/// `aoa-bench` caps *trials* under a codeprobe run dir separately — same value,
+/// different tree and different threat, deliberately kept independently tunable.
 pub(crate) const MAX_TASK_DIRS: usize = 100_000;
 
 /// Read `path` into a `String`, rejecting anything past `max` bytes.

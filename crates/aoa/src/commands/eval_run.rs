@@ -31,12 +31,11 @@
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
-use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use aoa_bench::{discover_tasks, leg_pass, load_task};
+use aoa_bench::{discover_tasks, leg_pass, load_task, scoring_path, transcript_path};
 use aoa_codeprobe_shim::parse_transcript_file;
 use aoa_gap::{
     compute_gap, BehavioralSignal, GapOutcome, HeldOutProvenance, InsufficientDataNote, RunResult,
@@ -176,8 +175,7 @@ pub fn run(args: &EvalRunArgs) -> Result<i32> {
     let mut records = Vec::new();
     let mut errors = Vec::new();
     for task_id in task_ids {
-        let task_dir = args.codeprobe_run.join(&task_id);
-        match process_task(&task_id, &task_dir, args, &indexed, partition.as_ref()) {
+        match process_task(&task_id, args, &indexed, partition.as_ref()) {
             Ok(record) => records.push(record),
             // Fail loud for THIS trial — reported, never silently skipped — and
             // keep processing the rest of the batch.
@@ -279,12 +277,11 @@ fn detect_partition(args: &EvalRunArgs) -> Option<SubtreePartition> {
 /// Build one task's metric record, or fail loud for this trial.
 fn process_task(
     task_id: &str,
-    task_dir: &Path,
     args: &EvalRunArgs,
     indexed: &IndexedRepo,
     partition: Option<&SubtreePartition>,
 ) -> Result<TaskRecord> {
-    let transcript = task_dir.join("agent_output.txt");
+    let transcript = transcript_path(&args.codeprobe_run, task_id);
     let shim = parse_transcript_file(&transcript)
         .with_context(|| format!("trace-shim failed on {}", transcript.display()))?;
     let trace = shim.trace;
@@ -292,7 +289,7 @@ fn process_task(
     // is surfaced on the record rather than dropped.
     let transcript_warnings = shim.warnings.len();
 
-    let scoring_path = task_dir.join("scoring.json");
+    let scoring_path = scoring_path(&args.codeprobe_run, task_id);
     let scoring: Scoring = load_json_capped(&scoring_path, "scoring")?;
     let held_out_success = scoring.held_out_success();
 

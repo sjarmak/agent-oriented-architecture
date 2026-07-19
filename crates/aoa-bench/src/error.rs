@@ -2,17 +2,27 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-/// Render a path for an error message with control characters escaped.
+/// Escape control characters out of untrusted text for an error message.
 ///
-/// Paths reaching these errors are built by joining an attacker-controlled
-/// directory name (a codeprobe `<task_id>`) onto a run or task dir, so the
-/// rendered path is untrusted text. `Path::display()` does NOT escape control
-/// characters — it emits a raw ESC straight to the terminal — and `thiserror`
-/// applies `display()` automatically to `Path`/`PathBuf` fields, so every
-/// path-carrying variant must route through here instead of interpolating the
-/// field directly.
+/// Every field in this enum that carries text from outside — a codeprobe
+/// `<task_id>` (a directory name), values lifted from a `scoring.json`, or a
+/// path built by joining one onto a run dir — is rendered through this, at
+/// render time, in the `#[error]` attribute. Interpolating such a field
+/// directly would emit a raw terminal escape sequence to stderr: `thiserror`
+/// renders fields via `Display`, and neither `str` nor `Path::display()`
+/// escapes control characters.
+///
+/// The CLI has its own `output::escape_terminal` for the same hazard on the
+/// binary side. These are two render boundaries, not two policies — this one
+/// covers what `BenchError` itself prints, and a library crate cannot reach
+/// into the binary's.
+fn escaped(s: &str) -> String {
+    s.escape_debug().to_string()
+}
+
+/// [`escaped`] for a path field.
 fn escaped_path(path: &Path) -> String {
-    path.display().to_string().escape_debug().to_string()
+    escaped(&path.display().to_string())
 }
 
 /// Errors raised while loading a codeprobe-mined task directory or reading a
@@ -55,25 +65,31 @@ pub enum BenchError {
 
     // ---- codeprobe run-dir contract (see `crate::codeprobe_run`) ----
     //
-    // The `task_id`, `found` and `message` fields below carry untrusted text
-    // (a directory name, values lifted from a `scoring.json`). Never build these
-    // variants with unescaped text: put it through `codeprobe_run::escaped`
-    // first, for the reason documented there.
-    //
-    // One exception, by design: `found` is built with `format!("{:?}", ..)`,
-    // and `Debug` for `String` already escapes control characters. It is safe
-    // as-is and must NOT be double-escaped through `escaped`.
+    // `task_id`, `found` and `message` carry untrusted text (a directory name,
+    // values lifted from a `scoring.json`). They are stored RAW and escaped at
+    // render time by the `#[error]` attributes below — same rule as the paths
+    // above, so the enum has exactly one escaping story and no construct-time
+    // invariant for a maintainer to forget on the next field.
     /// A trial's `scoring.json` was not produced by the dual-verifier scorer, so
     /// it carries no independent held-out leg to gate on.
     #[error(
-        "task {task_id}: scoring.json scorer_family is {found}, not \"dual_composite\" — \
-         requires a dual-verifier run (held-out artifact leg vs visible direct leg)"
+        "task {}: scoring.json scorer_family is {:?}, not \"dual_composite\" — \
+         requires a dual-verifier run (held-out artifact leg vs visible direct leg)",
+        escaped(.task_id), .found
     )]
-    NotDualComposite { task_id: String, found: String },
+    NotDualComposite {
+        task_id: String,
+        /// Rendered with `{:?}`: `Debug` escapes control characters itself, and
+        /// it preserves the `Some("..")`/`None` shape the message reads best with.
+        found: Option<String>,
+    },
 
     /// One of the two verifier legs recorded an error, so its outcome is not
     /// trustworthy either way.
-    #[error("task {task_id}: {leg} leg errored, cannot trust its outcome: {message}")]
+    #[error(
+        "task {}: {leg} leg errored, cannot trust its outcome: {}",
+        escaped(.task_id), escaped(.message)
+    )]
     ScoringLegErrored {
         task_id: String,
         leg: &'static str,
@@ -83,14 +99,15 @@ pub enum BenchError {
     /// A leg carried neither an explicit `passed_*` nor a `score_*`, which is an
     /// absence of signal rather than a failure.
     #[error(
-        "task {task_id}: dual scoring is missing the {leg} leg (no passed_* or score_* field)"
+        "task {}: dual scoring is missing the {leg} leg (no passed_* or score_* field)",
+        escaped(.task_id)
     )]
     MissingScoringLeg { task_id: String, leg: &'static str },
 
     /// The run directory itself could not be enumerated. Distinct from [`Self::Io`]
-    /// so the message still says *what* was being walked: this text reaches the
-    /// operator and the persisted `excluded_tasks[].reason` build-report field,
-    /// where a bare "failed to read <path>" loses the run-dir context.
+    /// so the message still says *what* was being walked — `eval r0b` surfaces
+    /// this straight to the operator with no context of its own, where a bare
+    /// "failed to read <path>" would not say it was a codeprobe run dir.
     #[error("failed to read codeprobe run dir {}: {source}", escaped_path(.run_dir))]
     RunDirUnreadable {
         run_dir: PathBuf,

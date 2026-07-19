@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use aoa_bench::load_task;
+use aoa_bench::{load_task, transcript_path};
 use aoa_codeprobe_shim::parse_transcript_file;
 use aoa_falsify::{ConventionInputs, UNREACHABLE_TRACE_REACH_DEPTH};
 use aoa_metrics::{compute_trace_convention_inputs, trace_footprint, SymbolGraph, TraceReach};
@@ -94,7 +94,7 @@ impl AnswerContext {
         oracle: &BTreeSet<String>,
         arm: &str,
     ) -> Result<(f64, u32)> {
-        let transcript = run_dir.join(task_id).join("agent_output.txt");
+        let transcript = transcript_path(run_dir, task_id);
         let shim = parse_transcript_file(&transcript).with_context(|| {
             format!(
                 "{arm} arm: cannot read trial transcript {}",

@@ -245,9 +245,7 @@ fn read_arm(run_dir: &Path) -> Result<ArmOutcomes> {
     let mut held_out = BTreeMap::new();
     let mut excluded = BTreeMap::new();
     for task_id in task_ids {
-        let scoring_path = run_dir.join(&task_id).join("scoring.json");
-        match DualScoring::load(&scoring_path, &task_id).and_then(|s| s.held_out_success(&task_id))
-        {
+        match DualScoring::load(run_dir, &task_id).and_then(|s| s.held_out_success()) {
             Ok(success) => {
                 held_out.insert(task_id, success);
             }

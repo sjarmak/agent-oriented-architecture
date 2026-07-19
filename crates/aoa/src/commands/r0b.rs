@@ -95,12 +95,10 @@ fn aggregate_run(
     let mut canaries = Vec::new();
 
     for task_id in &task_ids {
-        let task_dir = run_dir.join(task_id);
-        let scoring_path = task_dir.join("scoring.json");
-        let scoring = DualScoring::load(&scoring_path, task_id)?;
+        let scoring = DualScoring::load(run_dir, task_id)?;
 
-        let visible_success = scoring.visible_success(task_id)?;
-        let held_out_success = scoring.held_out_success(task_id)?;
+        let visible_success = scoring.visible_success()?;
+        let held_out_success = scoring.held_out_success()?;
 
         let task = load_task(tasks_dir.join(task_id)).with_context(|| {
             format!(

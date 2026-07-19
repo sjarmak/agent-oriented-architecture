@@ -38,7 +38,9 @@ mod provenance;
 mod task;
 
 pub use bridge::EditLocalityAnchors;
-pub use codeprobe_run::{aggregate_provenance, discover_tasks, leg_pass, DualScoring};
+pub use codeprobe_run::{
+    aggregate_provenance, discover_tasks, leg_pass, scoring_path, transcript_path, DualScoring,
+};
 pub use error::BenchError;
 pub use loader::{is_task_dir, load_task};
 pub use oracle::OracleChainFacts;

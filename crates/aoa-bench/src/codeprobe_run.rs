@@ -10,7 +10,7 @@
 //! layout; one definition is what stops them drifting on what counts as a trial
 //! or as a clean dual result.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use aoa_gap::HeldOutProvenance;
 use serde::Deserialize;
@@ -58,6 +58,12 @@ pub fn leg_pass(passed: Option<bool>, score: Option<f64>) -> Option<bool> {
 /// build) so the two cannot drift on what a clean dual result is.
 #[derive(Debug, Deserialize)]
 pub struct DualScoring {
+    /// The trial this was read from. Not part of codeprobe's wire shape — it is
+    /// the directory name, filled in by [`Self::load`] so that every error this
+    /// type raises can name its trial without the caller re-supplying (and
+    /// potentially mismatching) the id on each accessor.
+    #[serde(skip)]
+    task_id: String,
     scorer_family: Option<String>,
     passed_direct: Option<bool>,
     passed_artifact: Option<bool>,
@@ -68,15 +74,18 @@ pub struct DualScoring {
 }
 
 impl DualScoring {
-    /// Read and validate a trial's `scoring.json` as a clean dual-verifier result.
-    pub fn load(scoring_path: &Path, task_id: &str) -> Result<Self, BenchError> {
-        let raw = read_capped(scoring_path, MAX_CODEPROBE_JSON_BYTES)?;
-        let scoring: DualScoring =
-            serde_json::from_str(&raw).map_err(|source| BenchError::Json {
-                path: scoring_path.to_path_buf(),
-                source,
-            })?;
-        scoring.ensure_dual(task_id)?;
+    /// Read and validate one trial's scoring as a clean dual-verifier result.
+    ///
+    /// Takes the run dir and trial id rather than a path: the
+    /// `<run_dir>/<task_id>/scoring.json` layout is this module's contract, so
+    /// callers should not be spelling it out.
+    pub fn load(run_dir: &Path, task_id: &str) -> Result<Self, BenchError> {
+        let path = scoring_path(run_dir, task_id);
+        let raw = read_capped(&path, MAX_CODEPROBE_JSON_BYTES)?;
+        let mut scoring: DualScoring =
+            serde_json::from_str(&raw).map_err(|source| BenchError::Json { path, source })?;
+        scoring.task_id = task_id.to_string();
+        scoring.ensure_dual()?;
         Ok(scoring)
     }
 
@@ -85,75 +94,64 @@ impl DualScoring {
     ///
     /// Private — `load` is the only entry point; tests in this module exercise
     /// it directly on hand-built structs.
-    fn ensure_dual(&self, task_id: &str) -> Result<(), BenchError> {
+    fn ensure_dual(&self) -> Result<(), BenchError> {
         if self.scorer_family.as_deref() != Some("dual_composite") {
             return Err(BenchError::NotDualComposite {
-                task_id: escaped(task_id),
-                // `{:?}` on the way in: `Debug` for `String` escapes control
-                // characters, and this value comes from an untrusted file.
-                found: format!("{:?}", self.scorer_family),
+                task_id: self.task_id.clone(),
+                found: self.scorer_family.clone(),
             });
         }
-        if let Some(e) = &self.error_direct {
-            return Err(BenchError::ScoringLegErrored {
-                task_id: escaped(task_id),
-                leg: "direct (visible)",
-                message: escaped(e),
-            });
-        }
-        if let Some(e) = &self.error_artifact {
-            return Err(BenchError::ScoringLegErrored {
-                task_id: escaped(task_id),
-                leg: "artifact (held-out)",
-                message: escaped(e),
-            });
+        for (leg, error) in [
+            ("direct (visible)", &self.error_direct),
+            ("artifact (held-out)", &self.error_artifact),
+        ] {
+            if let Some(message) = error {
+                return Err(BenchError::ScoringLegErrored {
+                    task_id: self.task_id.clone(),
+                    leg,
+                    message: message.clone(),
+                });
+            }
         }
         Ok(())
     }
 
     /// Visible (direct/`test.sh`) outcome — the gameable proxy verifier.
-    pub fn visible_success(&self, task_id: &str) -> Result<bool, BenchError> {
-        Self::leg(
-            self.passed_direct,
-            self.score_direct,
-            "direct (visible)",
-            task_id,
-        )
+    pub fn visible_success(&self) -> Result<bool, BenchError> {
+        self.leg(self.passed_direct, self.score_direct, "direct (visible)")
     }
 
     /// Held-out (artifact/mined-oracle) outcome — the contamination-free leg.
-    pub fn held_out_success(&self, task_id: &str) -> Result<bool, BenchError> {
-        Self::leg(
+    pub fn held_out_success(&self) -> Result<bool, BenchError> {
+        self.leg(
             self.passed_artifact,
             self.score_artifact,
             "artifact (held-out)",
-            task_id,
         )
     }
 
     fn leg(
+        &self,
         passed: Option<bool>,
         score: Option<f64>,
-        name: &'static str,
-        task_id: &str,
+        leg: &'static str,
     ) -> Result<bool, BenchError> {
         leg_pass(passed, score).ok_or_else(|| BenchError::MissingScoringLeg {
-            task_id: escaped(task_id),
-            leg: name,
+            task_id: self.task_id.clone(),
+            leg,
         })
     }
 }
 
-/// Escape control characters out of untrusted text before it is stored in an
-/// error variant.
-///
-/// The values reaching these errors are a directory name and leg-error strings
-/// lifted verbatim from an untrusted `scoring.json`. Escaping happens HERE, at
-/// construction, rather than in the `#[error(...)]` format string: `thiserror`
-/// renders fields through `Display`, which would emit a raw terminal escape
-/// sequence straight to stderr.
-fn escaped(s: &str) -> String {
-    s.escape_debug().to_string()
+/// Path to a trial's scoring file. The run-dir layout lives here, not in callers.
+pub fn scoring_path(run_dir: &Path, task_id: &str) -> PathBuf {
+    run_dir.join(task_id).join("scoring.json")
+}
+
+/// Path to a trial's agent transcript. Written only when the agent produced
+/// stdout, so callers must tolerate its absence.
+pub fn transcript_path(run_dir: &Path, task_id: &str) -> PathBuf {
+    run_dir.join(task_id).join("agent_output.txt")
 }
 
 /// List the `<task_id>` subdirectories of the run dir that look like trials.
@@ -180,10 +178,7 @@ pub fn discover_tasks(run_dir: &Path) -> Result<Vec<String>, BenchError> {
         })?;
         // `DirEntry::file_type` does NOT follow symlinks: a symlinked directory
         // must not pull in per-trial artifacts from outside the run tree.
-        // Names the entry, not just the run dir: a stat failure is per-entry,
-        // and the original's run-dir-scoped message left the operator with no
-        // way to tell which one. Safe to carry the untrusted directory name
-        // now that every path-bearing `BenchError` escapes it (`error.rs`).
+        // A stat failure is per-entry, so name the entry, not the run dir.
         let file_type = entry.file_type().map_err(|source| BenchError::Io {
             path: entry.path(),
             source,
@@ -191,13 +186,14 @@ pub fn discover_tasks(run_dir: &Path) -> Result<Vec<String>, BenchError> {
         if !file_type.is_dir() {
             continue;
         }
-        let dir = entry.path();
         // No-follow probes: a symlinked `scoring.json`/`agent_output.txt` must
         // not qualify a dir, or a crafted run dir could point the later capped
         // read at an out-of-tree file. `Path::is_file` follows symlinks; the
         // dir-level guard above does not, and these must match it.
-        if is_regular_file(&dir.join("scoring.json"))
-            || is_regular_file(&dir.join("agent_output.txt"))
+        let name = entry.file_name();
+        let id = name.to_string_lossy();
+        if is_regular_file(&scoring_path(run_dir, &id))
+            || is_regular_file(&transcript_path(run_dir, &id))
         {
             // Capped before the push, so the ceiling counts ACCEPTED trials
             // rather than scanned entries.
@@ -207,7 +203,7 @@ pub fn discover_tasks(run_dir: &Path) -> Result<Vec<String>, BenchError> {
                     max: MAX_TRIAL_DIRS,
                 });
             }
-            task_ids.push(entry.file_name().to_string_lossy().into_owned());
+            task_ids.push(id.into_owned());
         }
     }
     task_ids.sort();
@@ -322,6 +318,7 @@ mod tests {
 
     fn dual(scorer_family: Option<&str>) -> DualScoring {
         DualScoring {
+            task_id: "t".to_string(),
             scorer_family: scorer_family.map(str::to_string),
             passed_direct: None,
             passed_artifact: None,
@@ -334,7 +331,7 @@ mod tests {
 
     #[test]
     fn non_dual_scoring_fails_loud() {
-        let err = dual(Some("binary")).ensure_dual("t").unwrap_err();
+        let err = dual(Some("binary")).ensure_dual().unwrap_err();
         assert!(matches!(err, BenchError::NotDualComposite { .. }));
         // `eval r0b` surfaces this string to operators; keep it verbatim.
         assert!(err.to_string().contains("dual_composite"));
@@ -347,7 +344,7 @@ mod tests {
         errored.passed_artifact = Some(true);
         errored.error_artifact = Some("answer.json missing".to_string());
 
-        let err = errored.ensure_dual("t").unwrap_err();
+        let err = errored.ensure_dual().unwrap_err();
         assert!(matches!(err, BenchError::ScoringLegErrored { .. }));
         assert!(err.to_string().contains("artifact (held-out) leg errored"));
     }
@@ -358,25 +355,24 @@ mod tests {
         scored.score_direct = Some(1.0);
         scored.score_artifact = Some(0.0);
 
-        assert!(scored.visible_success("t").unwrap());
-        assert!(!scored.held_out_success("t").unwrap());
+        assert!(scored.visible_success().unwrap());
+        assert!(!scored.held_out_success().unwrap());
     }
 
     #[test]
     fn a_leg_with_no_signal_at_all_fails_loud() {
-        let err = dual(Some("dual_composite"))
-            .held_out_success("t")
-            .unwrap_err();
+        let err = dual(Some("dual_composite")).held_out_success().unwrap_err();
         assert!(matches!(err, BenchError::MissingScoringLeg { .. }));
         assert!(err.to_string().contains("artifact (held-out)"));
     }
 
     #[test]
     fn leg_pass_distinguishes_no_signal_from_failure() {
+        // An explicit `passed_*` wins over the score, and no signal at all is
+        // distinct from a failure — the case a `#[serde(default)]` score would
+        // silently turn into `false`. (The score-threshold fallback itself is
+        // covered through the accessors in `leg_falls_back_to_score_threshold`.)
         assert_eq!(leg_pass(Some(false), Some(1.0)), Some(false));
-        assert_eq!(leg_pass(None, Some(1.0)), Some(true));
-        assert_eq!(leg_pass(None, Some(0.0)), Some(false));
-        // The case a `#[serde(default)]` score would silently turn into `false`.
         assert_eq!(leg_pass(None, None), None);
     }
 
@@ -385,12 +381,10 @@ mod tests {
         // Both the task id (a directory name) and the leg error text come from
         // outside; neither may reach stderr as a live control sequence.
         let mut errored = dual(Some("dual_composite"));
+        errored.task_id = "task\u{1b}[2J".to_string();
         errored.error_direct = Some("boom\u{1b}[31mRED".to_string());
 
-        let rendered = errored
-            .ensure_dual("task\u{1b}[2J")
-            .unwrap_err()
-            .to_string();
+        let rendered = errored.ensure_dual().unwrap_err().to_string();
         assert!(
             !rendered.contains('\u{1b}'),
             "raw ESC survived into the error message: {rendered:?}"
@@ -399,7 +393,7 @@ mod tests {
 
         // The non-dual path renders `scorer_family` from the same untrusted file.
         let rendered = dual(Some("evil\u{1b}[2J"))
-            .ensure_dual("t")
+            .ensure_dual()
             .unwrap_err()
             .to_string();
         assert!(
@@ -425,9 +419,7 @@ mod tests {
         let ids = discover_tasks(&base).unwrap();
         assert_eq!(ids.len(), 1);
 
-        let rendered = DualScoring::load(&base.join(&ids[0]).join("scoring.json"), &ids[0])
-            .unwrap_err()
-            .to_string();
+        let rendered = DualScoring::load(&base, &ids[0]).unwrap_err().to_string();
         assert!(
             !rendered.contains('\u{1b}'),
             "raw ESC survived via the path: {rendered:?}"
