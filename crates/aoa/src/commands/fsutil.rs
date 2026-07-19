@@ -1,9 +1,11 @@
 //! Byte-bounded file reads for untrusted and operator-supplied JSON reached by
 //! the CLI.
 //!
-//! Two threat classes route through here. `aoa eval-run` / `aoa r0b` walk an
-//! untrusted `--codeprobe-run` / `--tasks` directory and read per-trial JSON from
-//! it (attacker-controlled). Other commands (`falsify`, `eval compare`, `eval
+//! Two threat classes route through here. `aoa eval-run` walks an untrusted
+//! `--codeprobe-run` directory and reads per-trial JSON from it
+//! (attacker-controlled); `aoa r0b` and `aoa eval experiment` read their
+//! per-trial JSON through `aoa_bench` instead, and reach this module only for
+//! their operator-supplied manifests. Other commands (`falsify`, `eval compare`, `eval
 //! experiment`, the canary manifest) read operator-supplied JSON paths and
 //! external-tool output (codeprobe `aggregate.json`). Both bound the bytes held
 //! in memory from any one file so a crafted or pathological input cannot exhaust
@@ -20,8 +22,12 @@ use serde::de::DeserializeOwned;
 /// the cap only trips pathological or hostile input.
 pub(crate) const MAX_JSON_BYTES: u64 = 16 * 1024 * 1024;
 
-/// Largest number of task-trial subdirectories accepted under one run dir. Bounds
-/// the work a crafted run dir of millions of empty subdirs can induce.
+/// Largest number of mined task directories accepted under one task tree. Bounds
+/// the work an operator-supplied tree of millions of subdirs can induce.
+///
+/// The sibling cap for *trials* under a codeprobe run dir is
+/// `aoa_bench::codeprobe_run::MAX_TRIAL_DIRS` — same value, different tree and
+/// different threat, deliberately kept independently tunable.
 pub(crate) const MAX_TASK_DIRS: usize = 100_000;
 
 /// Read `path` into a `String`, rejecting anything past `max` bytes.

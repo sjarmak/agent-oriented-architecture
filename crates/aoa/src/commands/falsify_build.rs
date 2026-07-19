@@ -40,7 +40,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use answer::AnswerContext;
-use aoa_bench::load_task;
+use aoa_bench::{aggregate_provenance, discover_tasks, load_task, DualScoring};
 use aoa_falsify::{
     is_eligible, ConventionInputs, Eligibility, FalsifyConfig, FalsifyInput, PairTask, RepoResult,
     RepoRun, ScoringConvention,
@@ -49,7 +49,6 @@ use aoa_gap::HeldOutProvenance;
 use aoa_metrics::Confidence;
 
 use crate::cli::ExperimentArgs;
-use crate::commands::codeprobe::{aggregate_provenance, discover_tasks, DualScoring};
 use crate::commands::fsutil::load_json_capped;
 use crate::output::{escape_terminal, print_human, print_json};
 
@@ -253,7 +252,10 @@ fn read_arm(run_dir: &Path) -> Result<ArmOutcomes> {
                 held_out.insert(task_id, success);
             }
             Err(e) => {
-                excluded.insert(task_id, format!("{e:#}"));
+                // `e` is a `BenchError`, not an `anyhow::Error`: its
+                // `#[error(..)]` already inlines `{source}`, so there is no
+                // chain to walk and no alternate flag to set.
+                excluded.insert(task_id, e.to_string());
             }
         }
     }

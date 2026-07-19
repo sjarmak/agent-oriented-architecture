@@ -1,12 +1,24 @@
-//! codeprobe-mined task loader for the AOA Toolkit.
+//! codeprobe adapter for the AOA Toolkit: mined task dirs in, scored run dirs
+//! back out.
 //!
 //! codeprobe mines benchmark tasks from repo history, which makes their held-out
 //! leg contamination-free by construction (R0b): the answer was never derived
-//! from the visible spec the agent sees. This crate reads a codeprobe task
-//! directory into AOA task inputs — instruction, gold artifact set `G_t`,
-//! accepted-solution file-sets, and a classified held-out provenance — and
-//! bridges those into the `aoa-gap` gap gate and the `aoa-metrics` edit-locality
-//! floor/ceiling.
+//! from the visible spec the agent sees. This crate owns both halves of the
+//! codeprobe boundary:
+//!
+//! - **task dirs** ([`load_task`]) — reads a mined task directory into AOA task
+//!   inputs (instruction, gold artifact set `G_t`, accepted-solution file-sets,
+//!   and a classified held-out provenance) and bridges those into the `aoa-gap`
+//!   gap gate and the `aoa-metrics` edit-locality floor/ceiling.
+//! - **run dirs** ([`DualScoring`], [`discover_tasks`], [`aggregate_provenance`])
+//!   — the `<run_dir>/<task_id>/scoring.json` wire contract codeprobe writes
+//!   after an agent runs, trial discovery over that layout, and the held-out
+//!   provenance reduction across a set of trials.
+//!
+//! Both are external-tool contracts: the field names, the directory layout, and
+//! the provenance lattice are load-bearing for whether a result may be
+//! certified at all. They live here, at the seam, so that no consumer has to
+//! re-derive them and no two consumers can drift.
 //!
 //! Provenance is surfaced to `aoa-gap` as `External` (a `file_list` oracle
 //! anchored to a real ground-truth commit) or `NativeComposed` (two or more
@@ -18,6 +30,7 @@
 //! anchors surface `aoa-metrics`' `InsufficientAcceptedSolutions`, not an invented one.
 
 mod bridge;
+mod codeprobe_run;
 mod error;
 mod loader;
 mod oracle;
@@ -25,6 +38,7 @@ mod provenance;
 mod task;
 
 pub use bridge::EditLocalityAnchors;
+pub use codeprobe_run::{aggregate_provenance, discover_tasks, leg_pass, DualScoring};
 pub use error::BenchError;
 pub use loader::{is_task_dir, load_task};
 pub use oracle::OracleChainFacts;

@@ -33,14 +33,13 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use aoa_bench::load_task;
+use aoa_bench::{aggregate_provenance, discover_tasks, load_task, DualScoring};
 use aoa_gap::{
     compare, CanaryItem, CompareOutcome, CompareWarning, GapError, HeldOutProvenance, Label,
     RunResult, TaskOutcome,
 };
 
 use crate::cli::R0bArgs;
-use crate::commands::codeprobe::{aggregate_provenance, discover_tasks, DualScoring};
 use crate::commands::fsutil::load_json_capped;
 use crate::output::{escape_terminal, print_human, print_json};
 
@@ -324,7 +323,7 @@ mod tests {
 
     #[test]
     fn aggregate_provenance_reduce_is_shared() {
-        // The provenance reduce now lives in `commands::codeprobe`; r0b composes
+        // The provenance reduce lives in `aoa_bench`; r0b composes
         // it. A focused check that the shared rule still drives r0b's aggregation:
         // a None task makes the whole run gap:unavailable (AC3).
         let p =

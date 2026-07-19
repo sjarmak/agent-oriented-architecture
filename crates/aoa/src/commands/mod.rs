@@ -1,5 +1,4 @@
 mod audit;
-mod codeprobe;
 mod corpus;
 mod enforce;
 mod eval;

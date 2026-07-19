@@ -375,15 +375,16 @@ fn parse_ground_truth(path: &Path) -> Result<Option<GroundTruthFile>, BenchError
     Ok(Some(gt))
 }
 
-/// Largest task-dir file read into memory. metadata.json / task.toml /
-/// ground_truth.json / divergence_report.json are small by nature; this ceiling
-/// bounds the bytes held from an attacker-controlled task dir without rejecting
+/// Largest single codeprobe JSON file read into memory. Task-dir files
+/// (metadata.json / task.toml / ground_truth.json / divergence_report.json) and
+/// run-dir files (per-trial scoring.json) are all small by nature; this ceiling
+/// bounds the bytes held from an attacker-controlled directory without rejecting
 /// real input.
-const MAX_TASK_FILE_BYTES: u64 = 16 * 1024 * 1024;
+pub(crate) const MAX_CODEPROBE_JSON_BYTES: u64 = 16 * 1024 * 1024;
 
-/// Read `path` into a `String`, rejecting anything past [`MAX_TASK_FILE_BYTES`].
+/// Read `path` into a `String`, rejecting anything past [`MAX_CODEPROBE_JSON_BYTES`].
 fn read_file(path: &Path) -> Result<String, BenchError> {
-    read_capped(path, MAX_TASK_FILE_BYTES)
+    read_capped(path, MAX_CODEPROBE_JSON_BYTES)
 }
 
 /// Read `path` into a `String`, rejecting anything past `max` bytes.
@@ -392,7 +393,7 @@ fn read_file(path: &Path) -> Result<String, BenchError> {
 /// a file that grows (or a symlink whose target swaps) between stat and read
 /// cannot blow past the cap. One byte past the cap is read so an exactly-`max`
 /// file is accepted while a larger one is rejected.
-fn read_capped(path: &Path, max: u64) -> Result<String, BenchError> {
+pub(crate) fn read_capped(path: &Path, max: u64) -> Result<String, BenchError> {
     let file = fs::File::open(path).map_err(|source| BenchError::Io {
         path: path.to_path_buf(),
         source,

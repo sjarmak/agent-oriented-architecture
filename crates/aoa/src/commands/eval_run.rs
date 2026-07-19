@@ -36,7 +36,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use aoa_bench::load_task;
+use aoa_bench::{discover_tasks, leg_pass, load_task};
 use aoa_codeprobe_shim::parse_transcript_file;
 use aoa_gap::{
     compute_gap, BehavioralSignal, GapOutcome, HeldOutProvenance, InsufficientDataNote, RunResult,
@@ -53,7 +53,6 @@ use aoa_scip_graph::{build_symbol_graph, degraded, IndexSource, IndexedRepo};
 use aoa_trace::Trace;
 
 use crate::cli::EvalRunArgs;
-use crate::commands::codeprobe::discover_tasks;
 use crate::commands::fsutil::load_json_capped;
 use crate::output::{escape_terminal, print_human, print_json};
 
@@ -61,11 +60,13 @@ use crate::output::{escape_terminal, print_human, print_json};
 /// the metric crate's own integration tests exercise; not yet a CLI knob (YAGNI).
 const DEFAULT_K: u32 = 2;
 
-/// `scoring.json` `score` at or above this counts as a held-out pass when the
-/// explicit `passed` boolean is absent (exact-match scorers emit 0.0/1.0).
-const SCORE_PASS_THRESHOLD: f64 = 1.0;
-
 /// The subset of codeprobe's `scoring.json` this post-processor reads.
+///
+/// Deliberately NOT `aoa_bench::DualScoring`: that type hard-requires
+/// `scorer_family == "dual_composite"` and reads the per-leg fields, whereas
+/// `eval run` accepts any codeprobe scorer and reads the top-level composite
+/// (see the module doc on `visible_unobserved`). The two decode different fields
+/// of the same file on purpose; the pass *rule* is shared so they cannot drift.
 #[derive(Debug, Deserialize)]
 struct Scoring {
     #[serde(default)]
@@ -76,7 +77,10 @@ struct Scoring {
 
 impl Scoring {
     fn held_out_success(&self) -> bool {
-        self.passed.unwrap_or(self.score >= SCORE_PASS_THRESHOLD)
+        // `#[serde(default)]` on `score` makes the no-signal case
+        // indistinguishable from a genuine 0.0, so `leg_pass` never returns
+        // `None` here. Making that absence loud is tracked as aoa-vme7.
+        leg_pass(self.passed, Some(self.score)).unwrap_or(false)
     }
 }
 
