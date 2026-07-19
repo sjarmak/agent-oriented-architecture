@@ -64,8 +64,11 @@ const DEGRADED_MUTATION_DEPTH: u32 = 0;
 // Manifest (operator-authored)
 // ---------------------------------------------------------------------------
 
-/// The whole build manifest.
+/// The whole build manifest. `deny_unknown_fields` on every operator-authored
+/// boundary: a misspelled key (`min_effect_szie`) must fail loud, not silently
+/// leave the real field at its default (0.0 disables the effect-size floor).
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Manifest {
     /// Determinism replication count (>= 3); each repo must supply this many runs.
     k_runs: u32,
@@ -82,6 +85,7 @@ struct Manifest {
 
 /// One repo's operator assertions and its per-seed arm run dirs.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RepoManifest {
     repo_id: String,
     /// Operator assertion that the repo carries a SCIP-grade (high-confidence)
@@ -119,6 +123,7 @@ enum TaskShape {
 
 /// One fixed-seed replication: the two arm run dirs over the same mined tasks.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RunManifest {
     seed: u64,
     /// codeprobe config-label run dir for the AOA-migrated arm.

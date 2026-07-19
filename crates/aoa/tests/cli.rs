@@ -1131,6 +1131,64 @@ fn experiment_answer_shape_without_index_fails_loud() {
         .stderr(predicate::str::contains("requires scip_index"));
 }
 
+// A misspelled manifest field must fail loud with the field name in the
+// diagnostic, not silently fall back to a default (`min_effect_szie` would
+// otherwise leave `min_effect_size` at 0.0, disabling the R0 effect-size
+// floor). `deny_unknown_fields` is per-struct, so each of the three manifest
+// boundaries (Manifest, RepoManifest, RunManifest) is exercised separately.
+#[test]
+fn experiment_manifest_rejects_unknown_fields_at_every_boundary() {
+    let repo = r#""repo_id": "sample/repo", "confidence": "high", "calibrated": true"#;
+    let runs = r#""runs": [
+      { "seed": 1, "repo_arm": "seed1/repo_arm", "harness_arm": "seed1/harness_arm" },
+      { "seed": 2, "repo_arm": "seed2/repo_arm", "harness_arm": "seed2/harness_arm" },
+      { "seed": 3, "repo_arm": "seed3/repo_arm", "harness_arm": "seed3/harness_arm" }
+    ]"#;
+    let cases = [
+        (
+            "min_effect_szie",
+            format!(
+                r#"{{ "k_runs": 3, "min_holdout_size": 1, "min_effect_szie": 0.05,
+                     "repos": [{{ {repo}, {runs} }}] }}"#
+            ),
+        ),
+        (
+            "task_shpae",
+            format!(
+                r#"{{ "k_runs": 3, "min_holdout_size": 1,
+                     "repos": [{{ {repo}, "task_shpae": "answer", {runs} }}] }}"#
+            ),
+        ),
+        (
+            "sede",
+            format!(
+                r#"{{ "k_runs": 3, "min_holdout_size": 1,
+                     "repos": [{{ {repo}, "runs": [
+                       {{ "sede": 1, "repo_arm": "seed1/repo_arm", "harness_arm": "seed1/harness_arm" }}
+                     ] }}] }}"#
+            ),
+        ),
+    ];
+
+    for (typo, manifest_json) in cases {
+        let dir = TempDir::new().expect("tempdir");
+        let manifest = dir.path().join("manifest.json");
+        std::fs::write(&manifest, manifest_json).expect("manifest written");
+
+        aoa()
+            .args(["eval", "experiment", "--manifest"])
+            .arg(&manifest)
+            .arg("--tasks")
+            .arg(fixture("answer_tasks"))
+            .arg("--out")
+            .arg(dir.path().join("falsify_input.json"))
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("unknown field"))
+            .stderr(predicate::str::contains(typo));
+    }
+}
+
 // H2/AC4: given a real >=5-repo input but a build report flagging degraded
 // convention inputs, the gate abstains to `inconclusive` with the
 // `convention_inputs_degraded` precondition rather than asserting a verdict the
