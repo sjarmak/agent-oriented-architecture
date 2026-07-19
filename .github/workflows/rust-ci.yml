@@ -44,5 +44,10 @@ jobs:
       - name: Install vendored ESLint (hermetic)
         run: npm ci
         working-directory: crates/aoa-migrate/assets/eslint
+      # The architecture dead-link guard is fail-closed (blocks the Pages
+      # deploy); these tests pin that contract so it can't silently regress
+      # to advisory again.
+      - name: Architecture link-guard tests
+        run: node --test architecture/site/check-links.test.mjs
       - name: Test
         run: cargo test --workspace

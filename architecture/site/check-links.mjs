@@ -46,13 +46,9 @@ for (const f of files) {
 }
 
 if (missing.length) {
-  // Report drift as GitHub Actions warnings (visible on the run) without
-  // blocking the deploy — models are authored from working trees that can
-  // legitimately differ from the published branch.
-  console.log(`::warning::Architecture model has ${missing.length} dead source link(s) — the model may be drifting from the code (these links 404 for viewers; fix in architecture/*.c4):`);
-  for (const x of missing) console.log(`::warning::  ${x}`);
-  console.log(`⚠ ${missing.length} dead source link(s) found (non-blocking — see warnings above).`);
-} else {
-  console.log(`✓ All architecture model source links resolve (${files.length} .c4 file(s) scanned).`);
+  console.log(`::error::Architecture model has ${missing.length} dead source link(s) — the model has drifted from the code (these links 404 for viewers; fix in architecture/*.c4):`);
+  for (const x of missing) console.log(`::error::  ${x}`);
+  console.log(`✗ ${missing.length} dead source link(s) found — failing so the stale model is not published.`);
+  process.exit(1);
 }
-process.exit(0);
+console.log(`✓ All architecture model source links resolve (${files.length} .c4 file(s) scanned).`);
