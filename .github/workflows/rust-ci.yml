@@ -70,10 +70,10 @@ jobs:
       # Do NOT add a shared-key spanning both jobs: it would mix
       # -Cinstrument-coverage objects into the uninstrumented build.
       - uses: Swatinem/rust-cache@v2
-      # Tool version exact-pinned; bump deliberately, alongside a threshold
-      # re-check. The toolchain itself floats on @stable like the ci job, so
-      # rustc/LLVM bumps can still shift counts slightly — the 13-point margin
-      # between baseline and gate absorbs that.
+      # Bump the pin deliberately, alongside a threshold re-check. The
+      # toolchain itself floats on @stable like the ci job, so rustc/LLVM
+      # bumps can still shift counts slightly — the 13-point margin between
+      # baseline and gate absorbs that.
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov@0.8.7
@@ -100,14 +100,10 @@ jobs:
       # features, examples, or benches; add the flags if that changes.
       - name: Collect coverage
         run: cargo llvm-cov --workspace --no-report
-      # Reporting is decoupled from enforcement and runs even when collection
-      # or the gate fails — the per-file table and lcov artifact exist exactly
-      # when they're needed to diagnose missed paths. (!cancelled(), not
-      # always(): a run superseded via cancel-in-progress shouldn't burn
-      # runner time reporting on abandoned data.)
-      - name: Report per-file coverage
-        if: ${{ !cancelled() }}
-        run: cargo llvm-cov report
+      # lcov export is decoupled from enforcement and runs even when collection
+      # or the gate fails, so the artifact exists exactly when it's needed to
+      # diagnose missed paths. (!cancelled(), not always(): a run superseded
+      # via cancel-in-progress shouldn't burn runner time on abandoned data.)
       - name: Export lcov
         if: ${{ !cancelled() }}
         run: cargo llvm-cov report --lcov --output-path lcov.info
@@ -116,10 +112,10 @@ jobs:
         with:
           name: coverage-lcov
           path: lcov.info
-      # Gate last, reusing the already-collected profdata. Deliberately NOT
-      # if: always() — if collection failed the job is already red and the
-      # gate is meaningless. Threshold is the 80% line-coverage engineering
-      # contract; measured baseline at introduction (2026-07-19,
-      # cargo-llvm-cov 0.8.7) was 93.30% lines.
-      - name: Enforce coverage threshold
+      # Gate last, reusing the already-collected profdata. This step also
+      # prints the per-file coverage table before enforcing, so a below-
+      # threshold failure carries its own diagnosis in the log. Threshold is
+      # the 80% line-coverage engineering contract; measured baseline at
+      # introduction (2026-07-19, cargo-llvm-cov 0.8.7) was 93.30% lines.
+      - name: Report coverage and enforce threshold
         run: cargo llvm-cov report --fail-under-lines 80
