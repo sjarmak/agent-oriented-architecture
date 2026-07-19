@@ -46,6 +46,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
+use rustix::fs::{flock, FlockOperation};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
@@ -212,9 +213,8 @@ fn allow(event: &HookEvent) -> Result<i32> {
 /// exit code (2) that signals Claude Code to deny the pending tool call.
 fn block(event: &HookEvent, reason: BlockReason) -> Result<i32> {
     let log = live_log_path(event)?;
-    let next_seq = read_spans(&log)?.len() as u64;
     let message = reason.to_string();
-    append_span_value(&log, blocked_span(next_seq, reason))?;
+    append_span_with(&log, |seq| blocked_span(seq, reason))?;
     eprintln!("aoa: blocked {} — {message}", event.tool_name);
     Ok(2)
 }
@@ -322,30 +322,50 @@ fn read_spans(log: &Path) -> Result<Vec<Span>> {
 /// Append a fresh span of `span_type` with `attributes`, numbered after the
 /// spans already present so `seq` stays monotonic.
 fn append_span(log: &Path, span_type: SpanType, attributes: Map<String, Value>) -> Result<()> {
-    let next_seq = read_spans(log)?.len() as u64;
-    let span = Span {
+    append_span_with(log, |seq| Span {
         span_type,
         source: SpanSource::Native,
-        seq: next_seq,
+        seq,
         attributes,
-    };
-    append_span_value(log, span)
+    })
 }
 
-/// Serialize one span as a JSONL line and append it, creating the traces
-/// directory on first write.
-fn append_span_value(log: &Path, span: Span) -> Result<()> {
+/// Append one span, assigning its `seq` and writing it under an exclusive lock.
+///
+/// `build` receives the next sequence number, so the number is derived *inside*
+/// the locked region. That is the whole point of the closure: deriving `seq`
+/// means reading the log and counting it, which together with the append is a
+/// read-modify-write. Every mutation now drives two of these (intent at
+/// `PreToolUse`, then an outcome), so unsynchronized racers were routine, and
+/// they produced duplicate and even *decreasing* `seq` values. A decreasing
+/// `seq` is not a cosmetic defect: `validate_trace` rejects the trace,
+/// `load_corpus` propagates the error, and `aoa audit` then fails for the whole
+/// repo — against an append-only log with no repair path. A caller that built
+/// its span before calling would reintroduce exactly that race.
+///
+/// `flock`, not `fcntl`: [`read_spans`] opens a *second* descriptor on the same
+/// path via `read_to_string`, and POSIX record locks are per-process-per-inode,
+/// so closing that second descriptor would drop the lock mid-update. `flock` is
+/// held per open file description and survives it.
+fn append_span_with(log: &Path, build: impl FnOnce(u64) -> Span) -> Result<()> {
     if let Some(parent) = log.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    let mut line = serde_json::to_string(&span).context("failed to serialize span")?;
-    line.push('\n');
+    // Bound to a named local, never a temporary: dropping the `File` closes the
+    // descriptor and releases the lock, so a temporary would unlock immediately
+    // and leave the read-modify-write below unguarded.
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(log)
         .with_context(|| format!("failed to open {}", log.display()))?;
+    flock(&file, FlockOperation::LockExclusive)
+        .with_context(|| format!("failed to lock {}", log.display()))?;
+
+    let span = build(read_spans(log)?.len() as u64);
+    let mut line = serde_json::to_string(&span).context("failed to serialize span")?;
+    line.push('\n');
     file.write_all(line.as_bytes())
         .with_context(|| format!("failed to append to {}", log.display()))?;
     Ok(())
@@ -590,5 +610,38 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let spans = read_spans(&dir.path().join("nope.jsonl")).unwrap();
         assert!(spans.is_empty());
+    }
+
+    /// Concurrent appenders must produce one distinct `seq` each.
+    ///
+    /// Asserting only that the result *validates* would pass vacuously:
+    /// `validate_trace` rejects a decreasing `seq` but accepts a repeated one,
+    /// so the duplicate half of the race is invisible to it. The real assertion
+    /// is that N appends yield exactly the set `0..N`.
+    ///
+    /// Every racer goes through `append_span`, which opens its own descriptor —
+    /// `flock` is held per open file description, so a test sharing one handle
+    /// would serialize for the wrong reason and prove nothing.
+    #[test]
+    fn concurrent_appends_assign_distinct_sequence_numbers() {
+        const RACERS: u64 = 20;
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join(".aoa/traces/live-race.jsonl");
+
+        std::thread::scope(|scope| {
+            for _ in 0..RACERS {
+                scope.spawn(|| append_span(&log, SpanType::WriteCommitted, Map::new()).unwrap());
+            }
+        });
+
+        let mut seqs: Vec<u64> = read_spans(&log).unwrap().iter().map(|s| s.seq).collect();
+        assert_eq!(seqs.len(), RACERS as usize, "every append must land");
+        seqs.sort_unstable();
+        assert_eq!(
+            seqs,
+            (0..RACERS).collect::<Vec<_>>(),
+            "seqs must be distinct and gapless; duplicates or gaps mean the \
+             read-modify-write raced"
+        );
     }
 }
