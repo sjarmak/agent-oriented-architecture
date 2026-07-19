@@ -39,6 +39,11 @@ pub const BEHAVIORAL_METRICS: &[MetricName] = &[
 /// [`MetricMode::InsufficientData`].
 pub const INSUFFICIENT_DATA_REASON: &str = "no held-out behavioral signal for this repo yet";
 
+/// Whether `metric` (a wire name) names a member of the behavioral family.
+fn is_behavioral(metric: &str) -> bool {
+    BEHAVIORAL_METRICS.iter().any(|b| b.as_str() == metric)
+}
+
 /// The count of held-out behavioral observations available for one repo, as
 /// supplied by the caller. Purely mechanical, no judgment. Today two producers
 /// count: the audit counts observe-captured sessions that carry a landed edit
@@ -140,7 +145,7 @@ pub fn determination_with_signal(signal: &BehavioralSignal) -> ConstructValidity
         .metrics
         .into_iter()
         .map(|m| {
-            if BEHAVIORAL_METRICS.iter().any(|b| b.as_str() == m.metric) {
+            if is_behavioral(&m.metric) {
                 MetricClassification {
                     mode: MetricMode::InsufficientData,
                     reason: Some(INSUFFICIENT_DATA_REASON.to_string()),
@@ -222,7 +227,7 @@ mod tests {
         let report = determination_with_signal(&BehavioralSignal::from_observations(0));
         assert_eq!(report.metrics.len(), GATING_CANDIDATES.len());
         for m in &report.metrics {
-            if BEHAVIORAL_METRICS.iter().any(|b| b.as_str() == m.metric) {
+            if is_behavioral(&m.metric) {
                 assert_eq!(
                     m.mode,
                     MetricMode::InsufficientData,

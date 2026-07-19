@@ -407,14 +407,8 @@ fn greenfield_repo_reports_insufficient_data_not_a_fabricated_score() {
         .insufficient_data
         .as_ref()
         .expect("insufficient-data note present");
-    assert_eq!(note.reason, aoa_gap::INSUFFICIENT_DATA_REASON);
-    assert_eq!(
-        note.metrics,
-        aoa_gap::BEHAVIORAL_METRICS
-            .iter()
-            .map(|m| m.to_string())
-            .collect::<Vec<_>>()
-    );
+    // Metrics and reason both match the canonical family note.
+    assert_eq!(*note, aoa_gap::InsufficientDataNote::behavioral());
 
     // No fabricated behavioral score: the mutation-surface item is absent.
     assert!(

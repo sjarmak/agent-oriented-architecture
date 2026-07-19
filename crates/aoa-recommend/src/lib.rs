@@ -643,14 +643,8 @@ mod tests {
         assert_eq!(rec.actionability, Actionability::AdvisoryOnly);
 
         let note = report.insufficient_data.as_ref().expect("note present");
-        assert_eq!(note.reason, aoa_gap::INSUFFICIENT_DATA_REASON);
-        assert_eq!(
-            note.metrics,
-            aoa_gap::BEHAVIORAL_METRICS
-                .iter()
-                .map(|m| m.to_string())
-                .collect::<Vec<_>>()
-        );
+        // Metrics and reason both match the canonical family note.
+        assert_eq!(*note, aoa_gap::InsufficientDataNote::behavioral());
 
         let rendered = report.render_human();
         assert!(rendered.contains("InsufficientData"), "{rendered}");
