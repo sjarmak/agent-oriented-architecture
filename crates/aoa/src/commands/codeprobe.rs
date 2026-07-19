@@ -13,7 +13,8 @@ use serde::Deserialize;
 
 use aoa_gap::HeldOutProvenance;
 
-use crate::commands::fsutil::{read_to_string_capped, MAX_JSON_BYTES, MAX_TASK_DIRS};
+use crate::commands::fsutil::{load_json_capped, MAX_TASK_DIRS};
+use crate::output::escape_terminal;
 
 /// A leg `score_*` at or above this counts as a pass when the explicit
 /// `passed_*` boolean is absent (exact-match scorers emit 0.0/1.0).
@@ -44,9 +45,7 @@ pub(crate) struct DualScoring {
 impl DualScoring {
     /// Read and validate a trial's `scoring.json` as a clean dual-verifier result.
     pub(crate) fn load(scoring_path: &Path, task_id: &str) -> Result<Self> {
-        let raw = read_to_string_capped(scoring_path, MAX_JSON_BYTES)?;
-        let scoring: DualScoring = serde_json::from_str(&raw)
-            .with_context(|| format!("failed to parse {}", scoring_path.display()))?;
+        let scoring: DualScoring = load_json_capped(scoring_path, "scoring")?;
         scoring.ensure_dual(task_id)?;
         Ok(scoring)
     }
@@ -59,7 +58,7 @@ impl DualScoring {
         // `task_id` is a directory name and the leg errors come from an untrusted
         // `scoring.json`; escape both so a crafted value cannot inject terminal
         // control sequences when the error surfaces on stderr.
-        let task_id = task_id.escape_debug();
+        let task_id = escape_terminal(task_id);
         if self.scorer_family.as_deref() != Some("dual_composite") {
             bail!(
                 "task {task_id}: scoring.json scorer_family is {:?}, not \"dual_composite\" — \
@@ -70,13 +69,13 @@ impl DualScoring {
         if let Some(e) = &self.error_direct {
             bail!(
                 "task {task_id}: direct (visible) leg errored, cannot trust its outcome: {}",
-                e.escape_debug()
+                escape_terminal(e)
             );
         }
         if let Some(e) = &self.error_artifact {
             bail!(
                 "task {task_id}: artifact (held-out) leg errored, cannot trust its outcome: {}",
-                e.escape_debug()
+                escape_terminal(e)
             );
         }
         Ok(())
@@ -109,7 +108,7 @@ impl DualScoring {
             (None, None) => bail!(
                 "task {}: dual scoring is missing the {name} leg \
                  (no passed_* or score_* field)",
-                task_id.escape_debug()
+                escape_terminal(task_id)
             ),
         }
     }

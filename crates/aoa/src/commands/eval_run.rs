@@ -52,8 +52,8 @@ use aoa_trace::{SpanType, Trace};
 
 use crate::cli::EvalRunArgs;
 use crate::commands::codeprobe::discover_tasks;
-use crate::commands::fsutil::{read_to_string_capped, MAX_JSON_BYTES};
-use crate::output::{print_human, print_json};
+use crate::commands::fsutil::load_json_capped;
+use crate::output::{escape_terminal, print_human, print_json};
 
 /// Mutation-surface reachability depth and retrieval cutoff. Fixed to the value
 /// the metric crate's own integration tests exercise; not yet a CLI knob (YAGNI).
@@ -287,9 +287,7 @@ fn process_task(
     let transcript_warnings = shim.warnings.len();
 
     let scoring_path = task_dir.join("scoring.json");
-    let scoring_raw = read_to_string_capped(&scoring_path, MAX_JSON_BYTES)?;
-    let scoring: Scoring = serde_json::from_str(&scoring_raw)
-        .with_context(|| format!("failed to parse {}", scoring_path.display()))?;
+    let scoring: Scoring = load_json_capped(&scoring_path, "scoring")?;
     let held_out_success = scoring.held_out_success();
 
     // Oracle: when `--tasks` is given the task dir MUST load (fail loud); without
@@ -436,7 +434,7 @@ fn render_human(report: &EvalRunReport) -> String {
         let _ = writeln!(
             out,
             "  {:<28} held_out={} weight={:.1} graph={} gap={} edit=[{}]",
-            r.task_id.escape_debug(),
+            escape_terminal(&r.task_id),
             r.held_out_success,
             r.weight,
             quality_label(r.graph_quality),
@@ -463,7 +461,7 @@ fn render_human(report: &EvalRunReport) -> String {
             let _ = writeln!(
                 out,
                 "    subtree {:<24} spans={} edits={} first_relevant={} {}",
-                row.subtree.escape_debug(),
+                escape_terminal(&row.subtree),
                 row.attributed_span_count,
                 row.edited_file_count,
                 first,
@@ -472,7 +470,12 @@ fn render_human(report: &EvalRunReport) -> String {
         }
     }
     for e in &report.errors {
-        let _ = writeln!(out, "  ERROR {:<26} {}", e.task_id.escape_debug(), e.error);
+        let _ = writeln!(
+            out,
+            "  ERROR {:<26} {}",
+            escape_terminal(&e.task_id),
+            e.error
+        );
     }
     if let Some(note) = &report.insufficient_data {
         let _ = writeln!(out, "{}", note.render_line(&report.behavioral_signal));

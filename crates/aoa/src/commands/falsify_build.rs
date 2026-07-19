@@ -50,8 +50,8 @@ use aoa_metrics::Confidence;
 
 use crate::cli::ExperimentArgs;
 use crate::commands::codeprobe::{aggregate_provenance, discover_tasks, DualScoring};
-use crate::commands::fsutil::{read_to_string_capped, MAX_JSON_BYTES};
-use crate::output::{print_human, print_json};
+use crate::commands::fsutil::load_json_capped;
+use crate::output::{escape_terminal, print_human, print_json};
 
 /// Sentinel convention inputs emitted for edit-shaped repos while a per-repo
 /// symbol-graph edit pipeline is not constructed. They are NOT the admitting
@@ -570,10 +570,7 @@ fn build_report_path(out: &Path) -> PathBuf {
 
 /// Run `aoa eval experiment`.
 pub(crate) fn run(args: &ExperimentArgs) -> Result<i32> {
-    let raw = read_to_string_capped(&args.manifest, MAX_JSON_BYTES)
-        .with_context(|| format!("failed to read manifest {}", args.manifest.display()))?;
-    let manifest: Manifest = serde_json::from_str(&raw)
-        .with_context(|| format!("failed to parse manifest {}", args.manifest.display()))?;
+    let manifest: Manifest = load_json_capped(&args.manifest, "manifest")?;
 
     let base_dir = args.manifest.parent().unwrap_or_else(|| Path::new("."));
     let (input, mut report) = build(&manifest, &args.tasks, base_dir)?;
@@ -610,7 +607,7 @@ fn render_human(report: &BuildReport, report_path: &Path) -> String {
         let _ = writeln!(
             out,
             "  {:<24} pairs={} holdout={} provenance={:?} confidence={:?} calibrated={} eligible={}",
-            r.repo_id.escape_debug(),
+            escape_terminal(&r.repo_id),
             r.identical_pairs,
             r.holdout_size,
             r.native_span,
@@ -625,7 +622,7 @@ fn render_human(report: &BuildReport, report_path: &Path) -> String {
             let _ = writeln!(
                 out,
                 "      excluded {}: {}",
-                ex.task_id.escape_debug(),
+                escape_terminal(&ex.task_id),
                 ex.reason
             );
         }
@@ -634,13 +631,13 @@ fn render_human(report: &BuildReport, report_path: &Path) -> String {
         let _ = writeln!(
             out,
             "  {:<24} DROPPED: no identical pairs",
-            d.repo_id.escape_debug()
+            escape_terminal(&d.repo_id)
         );
         for ex in &d.excluded_tasks {
             let _ = writeln!(
                 out,
                 "      excluded {}: {}",
-                ex.task_id.escape_debug(),
+                escape_terminal(&ex.task_id),
                 ex.reason
             );
         }
@@ -658,6 +655,7 @@ fn render_human(report: &BuildReport, report_path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::fsutil::MAX_JSON_BYTES;
 
     #[test]
     fn build_report_path_swaps_extension() {

@@ -29,8 +29,8 @@ use aoa_gap::ConstructValidityReport;
 use aoa_recommend::RecommendationReport;
 
 use crate::cli::ReportArgs;
-use crate::commands::fsutil::{read_to_string_capped, MAX_JSON_BYTES};
-use crate::output::{print_human, print_json};
+use crate::commands::fsutil::load_json_capped;
+use crate::output::{escape_terminal, print_human, print_json};
 
 /// The filename `aoa falsify` writes by default, consulted under the repo root.
 const FALSIFICATION_FILENAME: &str = "falsification.json";
@@ -121,10 +121,7 @@ fn load_falsification(path: &Path) -> Result<FalsificationView> {
     if !path.exists() {
         return Ok(FalsificationView::Absent);
     }
-    let raw = read_to_string_capped(path, MAX_JSON_BYTES)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-    let slice: FalsificationSlice = serde_json::from_str(&raw)
-        .with_context(|| format!("failed to parse {}", path.display()))?;
+    let slice: FalsificationSlice = load_json_capped(path, "falsification slice")?;
     Ok(FalsificationView::Present {
         verdict: slice.verdict,
         precondition_unmet: slice.precondition_unmet,
@@ -210,7 +207,7 @@ fn render_falsification(falsification: &FalsificationView) -> String {
                 let _ = writeln!(
                     out,
                     "  precondition unmet: {} (not a gate verdict)",
-                    kind.escape_debug()
+                    escape_terminal(kind)
                 );
             }
         }

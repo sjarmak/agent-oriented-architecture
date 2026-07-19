@@ -41,8 +41,8 @@ use aoa_gap::{
 
 use crate::cli::R0bArgs;
 use crate::commands::codeprobe::{aggregate_provenance, discover_tasks, DualScoring};
-use crate::commands::fsutil::{read_to_string_capped, MAX_JSON_BYTES};
-use crate::output::{print_human, print_json};
+use crate::commands::fsutil::load_json_capped;
+use crate::output::{escape_terminal, print_human, print_json};
 
 /// One operator-declared canary: a known held-out probe and the outcome a clean
 /// (non-leaking) run must produce for it.
@@ -54,15 +54,15 @@ struct CanarySpec {
 
 /// Parse the canary manifest into an id → expected-held-out map.
 fn load_canary_manifest(path: &Path) -> Result<BTreeMap<String, bool>> {
-    let raw = read_to_string_capped(path, MAX_JSON_BYTES)
-        .with_context(|| format!("failed to read canary manifest {}", path.display()))?;
-    let specs: Vec<CanarySpec> = serde_json::from_str(&raw)
-        .with_context(|| format!("failed to parse canary manifest {}", path.display()))?;
+    let specs: Vec<CanarySpec> = load_json_capped(path, "canary manifest")?;
 
     let mut map = BTreeMap::new();
     for spec in specs {
         if map.contains_key(&spec.id) {
-            bail!("duplicate canary id {} in manifest", spec.id.escape_debug());
+            bail!(
+                "duplicate canary id {} in manifest",
+                escape_terminal(&spec.id)
+            );
         }
         map.insert(spec.id, spec.expected_held_out);
     }
@@ -85,7 +85,7 @@ fn aggregate_run(
         if !task_ids.iter().any(|t| t == id) {
             bail!(
                 "canary id {} is not a trial in run {} (declared in the manifest but absent)",
-                id.escape_debug(),
+                escape_terminal(id),
                 run_dir.display()
             );
         }
@@ -106,7 +106,7 @@ fn aggregate_run(
         let task = load_task(tasks_dir.join(task_id)).with_context(|| {
             format!(
                 "failed to load task {} oracle from {}",
-                task_id.escape_debug(),
+                escape_terminal(task_id),
                 tasks_dir.display()
             )
         })?;
@@ -320,6 +320,7 @@ fn render_human(report: &R0bReport) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::fsutil::MAX_JSON_BYTES;
 
     #[test]
     fn aggregate_provenance_reduce_is_shared() {

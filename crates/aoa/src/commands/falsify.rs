@@ -33,8 +33,8 @@ use aoa_falsify::{
 };
 
 use crate::cli::FalsifyArgs;
-use crate::commands::fsutil::{read_to_string_capped, MAX_JSON_BYTES};
-use crate::output::{print_human, print_json};
+use crate::commands::fsutil::{load_json_capped, read_to_string_capped, MAX_JSON_BYTES};
+use crate::output::{escape_terminal, print_human, print_json};
 
 /// A codeprobe measurement-bias warning, surfaced verbatim alongside the verdict.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,10 +157,7 @@ impl FalsificationOutput {
 /// or a genuine R0' abstention); `1` when the verdict comes from an unmet
 /// precondition (the gate could not be exercised).
 pub fn run(args: &FalsifyArgs) -> Result<i32> {
-    let raw = read_to_string_capped(&args.repos, MAX_JSON_BYTES)
-        .with_context(|| format!("failed to read falsify input {}", args.repos.display()))?;
-    let input: FalsifyInput = serde_json::from_str(&raw)
-        .with_context(|| format!("failed to parse falsify input {}", args.repos.display()))?;
+    let input: FalsifyInput = load_json_capped(&args.repos, "falsify input")?;
 
     // Abstain-safe: convention inputs count as degraded unless a build report
     // positively says otherwise. `None` carries the reason for the report.
@@ -242,10 +239,7 @@ pub fn run(args: &FalsifyArgs) -> Result<i32> {
 }
 
 fn load_build_meta(path: &Path) -> Result<BuildMeta> {
-    let raw = read_to_string_capped(path, MAX_JSON_BYTES)
-        .with_context(|| format!("failed to read build report {}", path.display()))?;
-    serde_json::from_str(&raw)
-        .with_context(|| format!("failed to parse build report {}", path.display()))
+    load_json_capped(path, "build report")
 }
 
 fn load_bias_warnings(path: &Path) -> Result<Vec<BiasWarning>> {
@@ -263,7 +257,7 @@ fn load_bias_warnings(path: &Path) -> Result<Vec<BiasWarning>> {
 /// Escape each repo id and join with `, ` for safe terminal display.
 fn escape_join(ids: &[String]) -> String {
     ids.iter()
-        .map(|id| id.escape_debug().to_string())
+        .map(|id| escape_terminal(id).to_string())
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -298,9 +292,9 @@ fn render_human(output: &FalsificationOutput, out_path: &Path) -> String {
             let _ = writeln!(
                 s,
                 "    [{}/{}] {}",
-                w.severity.escape_debug(),
-                w.kind.escape_debug(),
-                w.message.escape_debug(),
+                escape_terminal(&w.severity),
+                escape_terminal(&w.kind),
+                escape_terminal(&w.message),
             );
         }
         if output.bias_gate_invalidating {

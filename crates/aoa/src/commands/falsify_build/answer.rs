@@ -23,6 +23,8 @@ use aoa_falsify::{ConventionInputs, UNREACHABLE_TRACE_REACH_DEPTH};
 use aoa_metrics::{compute_trace_convention_inputs, trace_footprint, SymbolGraph, TraceReach};
 use aoa_scip_graph::index_with_scip;
 
+use crate::output::escape_terminal;
+
 /// Per-repo state for computing answer-task convention inputs: the SCIP graph,
 /// its file universe, and a task-id-memoized oracle-chain cache (the chain is a
 /// task property, identical across seeds and arms).
@@ -111,7 +113,7 @@ impl AnswerContext {
                 footprint
                     .ambiguous_relative
                     .iter()
-                    .map(|p| p.escape_debug().to_string())
+                    .map(|p| escape_terminal(p).to_string())
                     .collect::<Vec<_>>()
                     .join(", ")
             );

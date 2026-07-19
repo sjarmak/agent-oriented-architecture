@@ -8,7 +8,7 @@ use aoa_gap::RunResult;
 use aoa_trace::TraceReport;
 
 use crate::cli::{EvalArgs, EvalCommand};
-use crate::commands::fsutil::{read_to_string_capped, MAX_JSON_BYTES};
+use crate::commands::fsutil::load_json_capped;
 use crate::commands::{eval_run, falsify_build, r0b};
 use crate::output::{print_human, print_json};
 
@@ -72,10 +72,7 @@ fn validate_trace(path: &Path, json: bool) -> Result<i32> {
 /// Load a run-result JSON (byte-capped). Shared with the R14 self-audit, whose
 /// held-out leg takes the same `--baseline`/`--migrated` inputs as `compare`.
 pub(crate) fn load_run(path: &Path) -> Result<RunResult> {
-    let raw = read_to_string_capped(path, MAX_JSON_BYTES)
-        .with_context(|| format!("failed to read run file {}", path.display()))?;
-    serde_json::from_str(&raw)
-        .with_context(|| format!("failed to parse run file {}", path.display()))
+    load_json_capped(path, "run file")
 }
 
 fn compare(baseline_path: &Path, migrated_path: &Path, json: bool) -> Result<i32> {
@@ -99,6 +96,7 @@ fn compare(baseline_path: &Path, migrated_path: &Path, json: bool) -> Result<i32
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::fsutil::MAX_JSON_BYTES;
 
     #[test]
     fn load_run_rejects_oversized_input() {

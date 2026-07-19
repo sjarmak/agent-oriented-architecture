@@ -32,7 +32,7 @@ use aoa_migrate::ManifestEntry;
 use crate::cli::AuditArgs;
 use crate::commands::eval::load_run;
 use crate::commands::fsutil::{read_to_string_capped, MAX_JSON_BYTES};
-use crate::output::{print_human, print_json};
+use crate::output::{escape_terminal, print_human, print_json};
 
 /// Exit code returned when a context regression is flagged.
 const REGRESSION_EXIT_CODE: i32 = 1;
@@ -264,8 +264,8 @@ fn regression(median_before: f64, median_after: f64, evidence: &HeldOutEvidence)
 /// Render the self-audit for the human register.
 ///
 /// Entry paths and fix ids come verbatim from on-disk manifest JSON — the same
-/// trust level as `falsification.json` — so both are `escape_debug`'d before
-/// they reach the terminal.
+/// trust level as `falsification.json` — so both are escaped via
+/// [`escape_terminal`] before they reach the terminal.
 fn render_human(view: &SelfAuditView) -> String {
     let mut out = String::new();
     match view {
@@ -286,7 +286,7 @@ fn render_human(view: &SelfAuditView) -> String {
         } => {
             let fix_ids: Vec<String> = fixes_applied
                 .iter()
-                .map(|id| id.escape_debug().to_string())
+                .map(|id| escape_terminal(id).to_string())
                 .collect();
             let _ = writeln!(
                 out,
@@ -298,7 +298,7 @@ fn render_human(view: &SelfAuditView) -> String {
                 let _ = writeln!(
                     out,
                     "  {}: {} -> {} tokens",
-                    f.path.escape_debug(),
+                    escape_terminal(&f.path),
                     f.before_tokens,
                     f.after_tokens
                 );
