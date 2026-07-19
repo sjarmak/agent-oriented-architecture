@@ -37,6 +37,15 @@
 //! `InsufficientData` reason from `aoa audit` rather than as a confident score
 //! over zero evidence, but the fix is to re-run `aoa observe --enforce`.
 //!
+//! That remedy is only worth documenting because installation now fails loudly
+//! when it cannot be applied. A hand-edited `settings.json` — a non-object file,
+//! a non-object `hooks`, a non-array event, or one of these commands already
+//! registered under a different matcher — is reported with the offending file
+//! and key, and the operator's file is left untouched. Each of those shapes was
+//! previously swallowed (or, for a non-object `hooks`, a panic), so re-running
+//! the documented remedy silently changed nothing and the repo went on reading
+//! as greenfield.
+//!
 //! The live log is owned by this layer (approach (a)): we control its format, so
 //! the gate reads exactly the spans we wrote — no dependency on the host's
 //! transcript format. It lands under the same ignored `.aoa/traces/` tree that
@@ -374,33 +383,64 @@ fn append_span_with(log: &Path, build: impl FnOnce(u64) -> Span) -> Result<()> {
 /// Merge the enforcement hook entries into an existing `.claude/settings.json`
 /// value, idempotently. Re-running produces a byte-identical result: an entry is
 /// added only when no hook with the same command string is already registered
-/// under its event. Pure so `observe --enforce` can test the merge in isolation.
-pub(crate) fn merge_enforce_hooks(mut settings: Value) -> Value {
-    if !settings.is_object() {
-        settings = json!({});
+/// under its event *with the same matcher*. Pure so `observe --enforce` can test
+/// the merge in isolation.
+///
+/// Fallible on purpose. Every shape this rejects used to be handled silently, in
+/// a way that made the module's own upgrade remedy — re-run `observe --enforce` —
+/// quietly fail to do anything:
+///
+/// - a non-object `settings.json` was *replaced*, so the caller then wrote the
+///   replacement over the operator's file and destroyed it with no diagnostic;
+/// - a non-object `hooks` key panicked, aborting the process instead of
+///   reporting a fixable config error;
+/// - a non-array event value was skipped, so install reported success while
+///   registering nothing.
+///
+/// All three are hand-edited-config cases, which is exactly when an operator is
+/// relying on the tool to tell them the truth.
+pub(crate) fn merge_enforce_hooks(mut settings: Value) -> Result<Value> {
+    let Some(object) = settings.as_object_mut() else {
+        return Err(anyhow!(
+            "settings must be a JSON object, found {}",
+            json_kind(&settings)
+        ));
+    };
+    let hooks = object.entry("hooks").or_insert_with(|| json!({}));
+    if !hooks.is_object() {
+        return Err(anyhow!(
+            "settings key \"hooks\" must be a JSON object, found {}",
+            json_kind(hooks)
+        ));
     }
-    let hooks = settings
-        .as_object_mut()
-        .expect("settings is an object")
-        .entry("hooks")
-        .or_insert_with(|| json!({}));
 
     let matcher = mutation_tool_matcher();
-    add_hook(hooks, "PostToolUse", "Bash", "aoa enforce record");
-    add_hook(hooks, "PreToolUse", &matcher, "aoa enforce check");
-    // One hook per write outcome. Each needs its own command string, not just
-    // its own matcher: `add_hook` treats a command already present under the
-    // event as installed regardless of matcher, so reusing `aoa enforce record`
-    // for the mutation-tool PostToolUse entry would silently install nothing at
-    // all — the Bash entry above already claims that command.
+    add_hook(hooks, "PostToolUse", "Bash", "aoa enforce record")?;
+    add_hook(hooks, "PreToolUse", &matcher, "aoa enforce check")?;
+    // One hook per write outcome, each with its own command string. The distinct
+    // commands are still required even though `add_hook` now keys on matcher as
+    // well: the host runs every group whose matcher fits, so two entries sharing
+    // a command would run it twice per tool call and double every span it emits.
     for (event, command) in [
         ("PostToolUse", "aoa enforce commit"),
         ("PostToolUseFailure", "aoa enforce fail"),
         ("PermissionDenied", "aoa enforce deny"),
     ] {
-        add_hook(hooks, event, &matcher, command);
+        add_hook(hooks, event, &matcher, command)?;
     }
-    settings
+    Ok(settings)
+}
+
+/// Name a JSON value's type for an error message.
+fn json_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "a boolean",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Array(_) => "an array",
+        Value::Object(_) => "an object",
+    }
 }
 
 /// Merge the enforcement hooks into `<repo>/.claude/settings.json`, creating the
@@ -420,7 +460,15 @@ pub(crate) fn install_enforce_hooks(repo: &Path) -> Result<PathBuf> {
         }
     };
 
-    let merged = merge_enforce_hooks(existing);
+    // Name the file in the error: `merge_enforce_hooks` is pure and has no path,
+    // so without this an operator with a hand-edited config is told the shape is
+    // wrong but not which file to open.
+    let merged = merge_enforce_hooks(existing).with_context(|| {
+        format!(
+            "cannot install enforcement hooks into {}",
+            settings_path.display()
+        )
+    })?;
 
     if let Some(parent) = settings_path.parent() {
         std::fs::create_dir_all(parent)
@@ -434,36 +482,61 @@ pub(crate) fn install_enforce_hooks(repo: &Path) -> Result<PathBuf> {
     Ok(settings_path)
 }
 
-/// Ensure `hooks[event]` contains a matcher group running `command`. Idempotent:
-/// a no-op if an entry with that command already exists anywhere under `event`.
-fn add_hook(hooks: &mut Value, event: &str, matcher: &str, command: &str) {
+/// Ensure `hooks[event]` contains a matcher group running `command`.
+///
+/// Idempotent on the shape this installs: an entry already registered under the
+/// same matcher is left exactly as it is, so a re-run is byte-stable.
+///
+/// The matcher is part of the identity, and both ways of getting that wrong are
+/// errors rather than guesses. Keying on the command alone (the previous
+/// behaviour) meant an entry registered under *any* matcher suppressed the
+/// install, so a command pre-seeded under an unrelated matcher silently left the
+/// hook uninstalled while install still reported success. Installing a second
+/// group whenever the matcher differs would be worse: the host runs every group
+/// whose matcher fits, so the command would fire twice per tool call and write
+/// two spans for every one write. Neither is recoverable by the tool, so it says
+/// what it found and stops.
+fn add_hook(hooks: &mut Value, event: &str, matcher: &str, command: &str) -> Result<()> {
+    let hooks_kind = json_kind(hooks);
     let groups = hooks
         .as_object_mut()
-        .expect("hooks is an object")
+        .ok_or_else(|| anyhow!("hooks must be a JSON object, found {hooks_kind}"))?
         .entry(event)
         .or_insert_with(|| json!([]));
     let Some(groups) = groups.as_array_mut() else {
-        return;
+        return Err(anyhow!(
+            "hook event \"{event}\" must be an array, found {}",
+            json_kind(groups)
+        ));
     };
 
-    let already_present = groups.iter().any(|group| {
-        group
+    let registered_matcher = groups.iter().find_map(|group| {
+        let runs_command = group
             .get("hooks")
             .and_then(Value::as_array)
             .is_some_and(|inner| {
                 inner
                     .iter()
                     .any(|h| h.get("command").and_then(Value::as_str) == Some(command))
-            })
+            });
+        runs_command.then(|| group.get("matcher").and_then(Value::as_str).unwrap_or(""))
     });
-    if already_present {
-        return;
-    }
 
-    groups.push(json!({
-        "matcher": matcher,
-        "hooks": [{ "type": "command", "command": command }],
-    }));
+    match registered_matcher {
+        Some(found) if found == matcher => Ok(()),
+        Some(found) => Err(anyhow!(
+            "hook event \"{event}\" already runs \"{command}\" under matcher \
+             \"{found}\", but it must run under \"{matcher}\". Remove or correct \
+             that entry and re-run."
+        )),
+        None => {
+            groups.push(json!({
+                "matcher": matcher,
+                "hooks": [{ "type": "command", "command": command }],
+            }));
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -513,8 +586,8 @@ mod tests {
 
     #[test]
     fn merge_enforce_hooks_is_idempotent() {
-        let once = merge_enforce_hooks(json!({}));
-        let twice = merge_enforce_hooks(once.clone());
+        let once = merge_enforce_hooks(json!({})).expect("fresh settings merge");
+        let twice = merge_enforce_hooks(once.clone()).expect("re-merging an installed config");
         assert_eq!(once, twice, "second merge must be a no-op");
 
         // Pinned as a wire contract: this is the alternation syntax Claude Code
@@ -552,7 +625,7 @@ mod tests {
     /// look like abandoned attempts.
     #[test]
     fn every_write_outcome_has_a_registered_hook() {
-        let merged = merge_enforce_hooks(json!({}));
+        let merged = merge_enforce_hooks(json!({})).expect("fresh settings merge");
         let matcher = mutation_tool_matcher();
         let commands: Vec<&str> = ["PostToolUse", "PostToolUseFailure", "PermissionDenied"]
             .iter()
@@ -578,7 +651,7 @@ mod tests {
                 ]
             }
         });
-        let merged = merge_enforce_hooks(existing);
+        let merged = merge_enforce_hooks(existing).expect("merge into existing settings");
         assert_eq!(merged["model"], "claude-opus-4-8");
         // Existing Read hook retained, our Bash and mutation hooks added
         // alongside it.
@@ -590,6 +663,72 @@ mod tests {
                 "{command} missing from merged PostToolUse hooks"
             );
         }
+    }
+
+    /// A malformed config must be reported, never worked around. Each of these
+    /// shapes used to be swallowed in a way that left the hooks uninstalled while
+    /// `observe --enforce` still exited 0 — so the module's own upgrade remedy
+    /// ("re-run `aoa observe --enforce`") could not fix the repos that needed it,
+    /// and `held_out_edits` stayed permanently empty with no diagnostic.
+    #[test]
+    fn malformed_settings_are_reported_not_silently_accepted() {
+        // Was a panic: `entry()` returns the existing value, so a non-object
+        // `hooks` reached an `.expect` and aborted the process.
+        let err = merge_enforce_hooks(json!({ "hooks": [] })).unwrap_err();
+        assert!(
+            err.to_string().contains("\"hooks\""),
+            "error must name the offending key, got: {err}"
+        );
+
+        // Was silent data loss: a non-object settings.json was replaced wholesale
+        // and the caller then wrote the replacement over the operator's file.
+        for hostile in [json!([]), json!("hooks"), json!(null)] {
+            assert!(
+                merge_enforce_hooks(hostile.clone()).is_err(),
+                "{hostile} must be rejected, not replaced"
+            );
+        }
+
+        // Was a silent skip: a non-array event value returned early.
+        let err = merge_enforce_hooks(json!({ "hooks": { "PostToolUse": {} } })).unwrap_err();
+        assert!(
+            err.to_string().contains("PostToolUse"),
+            "error must name the offending event, got: {err}"
+        );
+    }
+
+    /// Keying dedupe on the command alone meant an entry pre-seeded under any
+    /// unrelated matcher suppressed the install entirely, so the mutation hooks
+    /// were never registered and install still reported success. Installing a
+    /// duplicate group instead would make the host run the command twice per
+    /// tool call, so the conflict is reported rather than resolved.
+    #[test]
+    fn a_command_registered_under_the_wrong_matcher_is_a_loud_conflict() {
+        let seeded = json!({
+            "hooks": {
+                "PostToolUse": [{
+                    "matcher": "Bash",
+                    "hooks": [{ "type": "command", "command": "aoa enforce commit" }],
+                }]
+            }
+        });
+        let err = merge_enforce_hooks(seeded).unwrap_err();
+        let message = err.to_string();
+        for expected in ["aoa enforce commit", "Bash", &mutation_tool_matcher()] {
+            assert!(
+                message.contains(expected),
+                "conflict must name {expected}, got: {message}"
+            );
+        }
+    }
+
+    /// The same command under the *same* matcher is the re-run case and must stay
+    /// a no-op, or `install_enforce_hooks` would stop being byte-stable.
+    #[test]
+    fn re_registering_an_identical_entry_is_a_no_op() {
+        let once = merge_enforce_hooks(json!({})).expect("fresh merge");
+        let twice = merge_enforce_hooks(once.clone()).expect("re-merge must succeed");
+        assert_eq!(once, twice);
     }
 
     #[test]

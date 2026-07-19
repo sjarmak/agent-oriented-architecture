@@ -128,7 +128,7 @@ fn edit_locality_requires_two_solutions() {
 }
 
 // Criterion 3: invariant-discoverability is true when an I_t access precedes the
-// first write.attempt, false otherwise.
+// span that opened the write boundary, false otherwise.
 #[test]
 fn invariant_discovered_before_write() {
     let input = MetricInput {
