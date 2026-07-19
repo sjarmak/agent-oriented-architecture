@@ -32,6 +32,7 @@ crates/aoa-migrate/assets/eslint/node_modules/
 /aoa-*/
 /worktrees/
 /.gc/
+/.gc-reports/
 /.codex/
 /.ruff_cache/
 .DS_Store
