@@ -12,6 +12,29 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// Peel the disk-boundary wrapper, asserting it both names `name` structurally
+/// and renders it, then hand back the inner failure so the caller can keep
+/// asserting the behavioural fields. Rendering is checked here rather than in
+/// each caller because the rendered filename is what a human actually reads.
+fn unwrap_invalid_file(err: TraceError, name: &str) -> TraceError {
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains(name),
+        "boundary error must render the offending filename: {rendered}"
+    );
+    match err {
+        TraceError::InvalidFile { path, source } => {
+            assert!(
+                path.ends_with(name),
+                "boundary error must carry the offending path: {}",
+                path.display()
+            );
+            *source
+        }
+        other => panic!("expected InvalidFile, got {other:?}"),
+    }
+}
+
 #[test]
 fn valid_trace_reports_per_type_counts() {
     let report = validate_trace(&fixture("valid.json")).expect("valid trace");
@@ -34,7 +57,7 @@ fn valid_trace_reports_per_type_counts() {
 #[test]
 fn out_of_order_trace_is_rejected() {
     let err = validate_trace(&fixture("out_of_order.json")).unwrap_err();
-    match err {
+    match unwrap_invalid_file(err, "out_of_order.json") {
         TraceError::OutOfOrder {
             index,
             seq,
@@ -46,6 +69,37 @@ fn out_of_order_trace_is_rejected() {
         }
         other => panic!("expected OutOfOrder, got {other:?}"),
     }
+}
+
+/// The ordering check itself stays path-free: a caller validating a `Trace` it
+/// holds in memory has no file to name, so the path lives only at the disk
+/// boundary. The version half of this guarantee is covered by
+/// `envelope::tests::mismatched_version_is_rejected`, which matches the bare
+/// `UnsupportedVersion` returned by `into_trace`.
+#[test]
+fn in_memory_ordering_failure_is_path_free() {
+    let trace = Trace {
+        spans: vec![
+            Span {
+                span_type: SpanType::TestRun,
+                source: SpanSource::Native,
+                seq: 5,
+                attributes: serde_json::Map::new(),
+            },
+            Span {
+                span_type: SpanType::TestRun,
+                source: SpanSource::Native,
+                seq: 2,
+                attributes: serde_json::Map::new(),
+            },
+        ],
+    };
+
+    let err = aoa_trace::validate_trace_value(&trace).unwrap_err();
+    assert!(
+        matches!(err, TraceError::OutOfOrder { index: 1, .. }),
+        "in-memory validation must not wrap in a path-carrying error: {err:?}"
+    );
 }
 
 #[test]
@@ -129,7 +183,7 @@ fn versioned_trace_round_trips_through_disk() {
 #[test]
 fn mismatched_version_is_rejected() {
     let err = validate_trace(&fixture("bad_version.json")).unwrap_err();
-    match err {
+    match unwrap_invalid_file(err, "bad_version.json") {
         TraceError::UnsupportedVersion { found, supported } => {
             assert_eq!(found, 999);
             assert_eq!(supported, TRACE_FORMAT_VERSION);

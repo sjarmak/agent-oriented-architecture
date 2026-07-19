@@ -39,6 +39,33 @@ fn validate_trace_invalid_exits_non_zero() {
         .failure();
 }
 
+/// The ordering failure is post-parse, so it used to reach the CLI path-free and
+/// was named only by an anyhow context here. Now `aoa-trace` names the file at
+/// its own boundary — so this asserts the diagnostic identifies the offending
+/// file, and that neither the filename nor the reason is printed twice by the
+/// stacked context and source-chain rendering.
+#[test]
+fn validate_trace_error_names_the_file_once() {
+    let output = aoa()
+        .args(["eval", "validate-trace"])
+        .arg(fixture("invalid_trace.json"))
+        .output()
+        .expect("run");
+    assert!(!output.status.success());
+
+    let stderr = String::from_utf8(output.stderr).expect("utf-8 stderr");
+    assert_eq!(
+        stderr.matches("invalid_trace.json").count(),
+        1,
+        "diagnostic must name the offending file exactly once: {stderr}"
+    );
+    assert_eq!(
+        stderr.matches("out of order").count(),
+        1,
+        "diagnostic must state the reason exactly once: {stderr}"
+    );
+}
+
 // Criterion 9 (eval half): --json yields parseable JSON; default yields human text.
 #[test]
 fn validate_trace_json_is_parseable() {

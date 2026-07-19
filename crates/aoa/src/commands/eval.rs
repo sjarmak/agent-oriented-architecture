@@ -37,8 +37,9 @@ struct TypeCount {
 }
 
 fn validate_trace(path: &Path, json: bool) -> Result<i32> {
-    let report: TraceReport = aoa_trace::validate_trace(path)
-        .with_context(|| format!("trace {} is invalid", path.display()))?;
+    // No path context here: every `TraceError` names the offending file itself,
+    // so wrapping would print the path twice in the `{err:#}` chain rendering.
+    let report: TraceReport = aoa_trace::validate_trace(path)?;
 
     let counts: Vec<TypeCount> = report
         .counts()

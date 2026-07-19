@@ -52,6 +52,12 @@ fn read_capped(path: &Path, max: u64) -> Result<String, TraceError> {
 ///
 /// On success returns a [`TraceReport`] with per-span-type counts and a
 /// `has_reconstructed` flag.
+///
+/// Every failure names the offending file. Read, size-cap and schema failures
+/// carry the path directly; the post-parse content checks are path-free by
+/// design, so their failures come back wrapped in [`TraceError::InvalidFile`] —
+/// a caller matching on `UnsupportedVersion` or `OutOfOrder` must peel that
+/// wrapper first.
 pub fn validate_trace(path: &Path) -> Result<TraceReport, TraceError> {
     let raw = read_capped(path, MAX_TRACE_BYTES)?;
 
@@ -63,9 +69,23 @@ pub fn validate_trace(path: &Path) -> Result<TraceReport, TraceError> {
 
     // Version-check the envelope before trusting the spans: a mismatch means a
     // producer-side format change, so fail fast rather than mis-parse.
-    let trace = envelope.into_trace()?;
+    let trace = envelope
+        .into_trace()
+        .map_err(|source| in_file(path, source))?;
 
-    validate_trace_value(&trace)
+    validate_trace_value(&trace).map_err(|source| in_file(path, source))
+}
+
+/// Tag a path-free failure with the file it came from.
+///
+/// The sole construction site for [`TraceError::InvalidFile`], which is what
+/// keeps the wrapper depth-1: it is only ever applied to the path-free content
+/// checks, never to an already-wrapped error.
+fn in_file(path: &Path, source: TraceError) -> TraceError {
+    TraceError::InvalidFile {
+        path: path.to_path_buf(),
+        source: Box::new(source),
+    }
 }
 
 /// Validate an already-parsed [`Trace`], producing a report.

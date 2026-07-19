@@ -53,10 +53,12 @@ impl TraceEnvelope {
     /// Check the version and unwrap into the in-memory [`Trace`].
     ///
     /// Fails fast with [`TraceError::UnsupportedVersion`] if the declared
-    /// version is one this build cannot parse. The error carries no path; every
-    /// caller reading from disk (e.g. [`crate::validate_trace`],
-    /// `aoa_observe_shim`'s corpus ingest) wraps it with the offending file's
-    /// path, so the file is always named at the boundary.
+    /// version is one this build cannot parse. The error carries no path — the
+    /// version is a property of the envelope, not of any particular file, so
+    /// callers holding one in memory have nothing to name. Every caller reading
+    /// from disk tags it with the offending file at its own boundary:
+    /// [`crate::validate_trace`] via [`TraceError::InvalidFile`], and
+    /// `aoa_observe_shim`'s corpus ingest via its own `InvalidTrace`.
     pub fn into_trace(self) -> Result<Trace, TraceError> {
         if self.version != TRACE_FORMAT_VERSION {
             return Err(TraceError::UnsupportedVersion {
