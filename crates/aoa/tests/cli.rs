@@ -2564,11 +2564,7 @@ fn report_json_composes_pillars_and_pillar_is_not_live_without_falsification() {
 
 // aoa-d6t.35: `report` composes audit + determination + recommend into ONE
 // document, so it must condition the determination on the same behavioral
-// signal the audit measured. Composing an unconditioned determination made the
-// document contradict itself on a history-poor repo: `audit.insufficient_data`
-// named the four metrics while `construct_validity` still called them Advisory
-// and `recommendations.insufficient_data` was absent — the exact "not Advisory,
-// not a fabricated score" state the criterion forbids.
+// signal the audit measured — otherwise the halves contradict each other.
 #[test]
 fn report_json_conditions_the_determination_on_the_behavioral_signal() {
     let repo = TempDir::new().expect("tempdir");
@@ -2624,13 +2620,12 @@ fn report_json_omits_insufficient_data_with_a_sufficient_corpus() {
 
     assert!(parsed["audit"].get("insufficient_data").is_none());
     assert!(parsed["recommendations"].get("insufficient_data").is_none());
+    let metrics = parsed["construct_validity"]["metrics"]
+        .as_array()
+        .expect("metrics");
     assert!(
-        !parsed["construct_validity"]["metrics"]
-            .as_array()
-            .expect("metrics")
-            .iter()
-            .any(|m| m["mode"] == "insufficient_data"),
-        "a sufficient corpus leaves no metric in insufficient_data"
+        !metrics.iter().any(|m| m["mode"] == "insufficient_data"),
+        "a sufficient corpus leaves no metric in insufficient_data: {metrics:#?}"
     );
 }
 
