@@ -210,10 +210,11 @@ fn mode_for(determination: &ConstructValidityReport, metric: &str) -> Option<Met
 /// associated with each finding kind. The connective tissue — mechanism, not
 /// judgment (ZFC): a static, exhaustive, inspectable table in one place.
 ///
-/// Drift from the upstream registries is caught by the tests
-/// (`every_joined_metric_is_a_gating_candidate`, `every_joined_fix_exists`), and
-/// the exhaustive match makes a new [`FindingKind`] a compile error here until its
-/// association is declared.
+/// The metric column is typed [`MetricName`], so naming an unknown metric is a
+/// compile error (registration in `MetricName::ALL` is guarded upstream by
+/// `aoa-audit`'s `every_metric_name_is_a_registered_candidate`); fix-name drift
+/// is caught by `every_joined_fix_exists`. The exhaustive match makes a new
+/// [`FindingKind`] a compile error here until its association is declared.
 ///
 /// `ContextBudget` names `budget_adherence` though no migration drives it: the
 /// overflow finding informs that construct-validity metric, and `recommend` reads

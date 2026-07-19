@@ -185,9 +185,14 @@ pub fn classify_metric(
 /// truth the stringly-typed wire literal (e.g. `write_safety_zone_absence`)
 /// derives from via [`MetricName::as_str`]. Keying [`GATING_CANDIDATES`],
 /// [`STRUCTURE_MEASURE_SPECS`], [`crate::BEHAVIORAL_METRICS`], and
-/// `FindingKind::metric_name` (aoa-audit) on this enum makes "every named
-/// metric is a registered candidate" a type-level fact instead of a
-/// runtime-tested one.
+/// `FindingKind::metric_name` (aoa-audit) on this enum makes a misspelled or
+/// colliding metric name a compile error instead of a runtime-tested one.
+///
+/// One invariant stays hand-maintained: [`MetricName::ALL`] listing every
+/// variant. The compiler cannot check ALL-completeness on stable, so a variant
+/// absent from `ALL` would be missing from the derived [`GATING_CANDIDATES`] —
+/// that residue is what the small `*_names_a_registered_candidate` membership
+/// tests here and in `aoa-audit` guard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetricName {
     RetrievalLocality,
@@ -289,9 +294,10 @@ impl std::fmt::Display for MetricName {
 /// could let gate a generative feature once a confirming correlation exists.
 ///
 /// Derived from [`MetricName::ALL`] and [`MetricName::orientation`], so every
-/// [`MetricName`] is a registered candidate by construction — cross-crate
-/// consumers that key on the enum cannot name an unregistered metric, which is
-/// what retired the runtime drift guards that used to assert it.
+/// `ALL` entry is a registered candidate by construction, and a typed consumer
+/// cannot misspell a metric name — which is what retired the stringly-typed
+/// drift guards. Membership still depends on the variant being listed in
+/// `ALL` (hand-maintained; see the note on [`MetricName`]).
 pub const GATING_CANDIDATES: [(MetricName, MetricOrientation); MetricName::ALL.len()] = {
     let mut table = [(
         MetricName::RetrievalLocality,
@@ -552,6 +558,27 @@ mod tests {
         let unique: std::collections::HashSet<&str> =
             MetricName::ALL.iter().map(|m| m.as_str()).collect();
         assert_eq!(unique.len(), MetricName::ALL.len());
+    }
+
+    #[test]
+    fn every_table_entry_names_a_registered_candidate() {
+        // ALL-completeness is the one hand-maintained invariant left (the
+        // compiler cannot enforce it on stable): a variant absent from ALL is
+        // absent from the derived GATING_CANDIDATES, and a table naming it
+        // would be silently dropped by the downstream reducers. Guard the two
+        // in-crate tables; aoa-audit guards its FindingKind map the same way.
+        for (metric, _) in STRUCTURE_MEASURE_SPECS {
+            assert!(
+                MetricName::ALL.contains(metric),
+                "spec metric {metric} is not listed in MetricName::ALL"
+            );
+        }
+        for metric in crate::BEHAVIORAL_METRICS {
+            assert!(
+                MetricName::ALL.contains(metric),
+                "behavioral metric {metric} is not listed in MetricName::ALL"
+            );
+        }
     }
 
     #[test]

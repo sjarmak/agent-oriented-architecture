@@ -81,11 +81,13 @@ impl FindingKind {
     /// association: `aoa_recommend`'s join reads its metric column from here, and
     /// `aoa`'s corpus reducer reads names from here under its own orientation
     /// include/exclude policy, so a rename lands in one place. The typed
-    /// [`MetricName`] return makes every named metric a registered
-    /// `aoa_gap::GATING_CANDIDATES` entry by construction — the compiler now
-    /// enforces what a runtime drift guard used to assert across the crate
-    /// boundary (`aoa-gap` sits below `aoa-audit` and cannot key on
-    /// `FindingKind`, so the association lives here).
+    /// [`MetricName`] return makes a misspelled or unknown metric name a
+    /// compile error — what the old stringly-typed drift guard asserted at
+    /// runtime across the crate boundary (`aoa-gap` sits below `aoa-audit` and
+    /// cannot key on `FindingKind`, so the association lives here). The one
+    /// residue the type cannot carry — the named variant being listed in
+    /// `MetricName::ALL`, hence in the derived `GATING_CANDIDATES` — is
+    /// guarded by [`tests::every_metric_name_is_a_registered_candidate`].
     ///
     /// The match is exhaustive: a new variant forces its metric association to
     /// be declared (compile error) rather than silently defaulting.
@@ -196,6 +198,24 @@ mod tests {
             }
         }
         assert_eq!(FindingKind::ALL.len(), 13);
+    }
+
+    #[test]
+    fn every_metric_name_is_a_registered_candidate() {
+        // MetricName::ALL completeness is hand-maintained (stable Rust cannot
+        // enforce it), so a mapping to a variant missing from ALL would
+        // compile and then be silently dropped by every reducer that iterates
+        // the derived GATING_CANDIDATES. One membership check over the
+        // canonical map covers recommend's join and aoa's corpus reducer too —
+        // both source their metric column from here.
+        for kind in FindingKind::ALL {
+            if let Some(metric) = kind.metric_name() {
+                assert!(
+                    MetricName::ALL.contains(&metric),
+                    "{kind:?} maps to {metric}, which is not listed in MetricName::ALL"
+                );
+            }
+        }
     }
 
     #[test]

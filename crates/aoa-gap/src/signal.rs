@@ -103,10 +103,7 @@ impl InsufficientDataNote {
     /// The note for the behavioral metric family with the canonical reason.
     pub fn behavioral() -> Self {
         Self {
-            metrics: BEHAVIORAL_METRICS
-                .iter()
-                .map(|m| (*m).to_string())
-                .collect(),
+            metrics: BEHAVIORAL_METRICS.iter().map(|m| m.to_string()).collect(),
             reason: INSUFFICIENT_DATA_REASON.to_string(),
         }
     }
