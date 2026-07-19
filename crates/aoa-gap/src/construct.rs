@@ -188,7 +188,7 @@ pub fn classify_metric(
 /// `FindingKind::metric_name` (aoa-audit) on this enum makes "every named
 /// metric is a registered candidate" a type-level fact instead of a
 /// runtime-tested one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetricName {
     RetrievalLocality,
     EditLocality,
@@ -523,8 +523,9 @@ mod tests {
 
     #[test]
     fn all_lists_every_variant_with_unique_wire_names() {
-        // Match every variant so adding one without listing it in ALL fails to
-        // compile, keeping GATING_CANDIDATES (derived from ALL) exhaustive.
+        // A new variant makes this match non-exhaustive (compile error),
+        // steering its author to this test — and to ALL above, which the
+        // compiler cannot check for completeness — before anything ships.
         for name in MetricName::ALL {
             match name {
                 MetricName::RetrievalLocality
