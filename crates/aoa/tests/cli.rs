@@ -2097,6 +2097,39 @@ fn observe_enforce_writes_idempotent_settings_and_plain_observe_does_not() {
     assert!(!plain.path().join(".claude/settings.json").exists());
 }
 
+/// The repo's own tracked `.claude/settings.json` (the Tier-1 runtime-hook
+/// enforcement plane, aoa-vrx.3) must byte-match what the installer emits
+/// today. The audit's plane check is existence-only, so without this test a
+/// change to the generated hook entries would silently strand the committed
+/// file on the old shape while the gating self-audit kept passing.
+#[test]
+fn tracked_settings_json_matches_observe_enforce_output() {
+    let fresh = TempDir::new().unwrap();
+    aoa_stdin()
+        .args([
+            "observe",
+            "--repo",
+            fresh.path().to_str().unwrap(),
+            "--enforce",
+        ])
+        .assert()
+        .success();
+    let generated = std::fs::read_to_string(fresh.path().join(".claude/settings.json"))
+        .expect("observe --enforce writes settings.json");
+
+    let tracked_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(".claude/settings.json");
+    let tracked = std::fs::read_to_string(&tracked_path)
+        .expect("repo-root .claude/settings.json is tracked (runtime-hook plane)");
+
+    assert_eq!(
+        tracked, generated,
+        "tracked .claude/settings.json drifted from `aoa observe --enforce` output; \
+         regenerate it with `cargo run -p aoa -- observe --repo . --enforce`"
+    );
+}
+
 // --- aoa gap checkbox-baseline (aoa-d6t.28) ---------------------------------
 
 /// A fixture tree passing all four level-1 mechanical criteria, so the

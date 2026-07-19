@@ -10,8 +10,11 @@ target/
 # AOA toolkit local state
 .aoa/
 
-# Local tooling / config (kept out of the public repo)
-.claude/
+# Local tooling / config (kept out of the public repo). settings.json is the
+# exception: it carries the aoa runtime enforcement hooks (the audit's
+# runtime-hook plane) and is deliberately tracked; see README "Runtime hooks".
+.claude/*
+!.claude/settings.json
 .prd-build/
 .mcp.json
 

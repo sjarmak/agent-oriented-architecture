@@ -31,13 +31,11 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       # Dogfood: the toolkit audits its own repository. Runs before the ESLint
       # install below so its best-effort indexer doesn't walk node_modules.
-      # Non-gating for now — `aoa audit --repo .` prints the full punch-list on
-      # every run, including the one known Tier-1 gap (missing runtime-hook
-      # enforcement plane), so nothing is hidden. Flip to `--fail-on tier1`
-      # once that gap is closed (tracked in aoa-vrx.3) so future Tier-1
-      # regressions gate CI.
+      # Gating at Tier-1: the runtime-hook plane is satisfied by the tracked
+      # .claude/settings.json (aoa-vrx.3), so any Tier-1 regression fails CI.
+      # Tier-2/3 punch-list items still print without failing the run.
       - name: Self-audit (aoa audit)
-        run: cargo run -p aoa -- audit --repo .
+        run: cargo run -p aoa -- audit --repo . --fail-on tier1
       # Node + the vendored, pinned ESLint the aoa-migrate TypeScript adapter
       # tests need. Absent it those tests skip (they self-guard) rather than
       # exercising the adapter, so CI installs it to run them for real; see
