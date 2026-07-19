@@ -1844,10 +1844,13 @@ fn hook_payload(tool: &str, command: Option<&str>, cwd: &Path) -> String {
     .unwrap()
 }
 
-/// Read the live log the enforce hooks append to for `hook_payload`'s session.
+/// The live log the enforce hooks append to for `hook_payload`'s session.
+fn live_log_path(repo: &Path) -> std::path::PathBuf {
+    repo.join(".aoa/traces/live-it-session.jsonl")
+}
+
 fn live_log(repo: &Path) -> String {
-    std::fs::read_to_string(repo.join(".aoa/traces/live-it-session.jsonl"))
-        .expect("hooks created a live log")
+    std::fs::read_to_string(live_log_path(repo)).expect("hooks created a live log")
 }
 
 /// The acceptance criterion, driven through the real CLI: each of the four
@@ -1895,10 +1898,7 @@ fn enforce_outcome_hooks_never_block_and_ignore_unguarded_tools() {
         .success();
 
     assert!(
-        !repo
-            .path()
-            .join(".aoa/traces/live-it-session.jsonl")
-            .exists(),
+        !live_log_path(repo.path()).exists(),
         "a non-mutation tool records no write outcome"
     );
 }
@@ -1978,8 +1978,7 @@ fn enforce_allows_write_after_a_test_run_is_recorded() {
     // The live log carries the test.run, the earlier write.blocked span, and
     // the allowed write recorded as write.attempt with its target path — the
     // held-out ground truth the live corpus accumulates (aoa-d6t.23).
-    let log = repo.path().join(".aoa/traces/live-it-session.jsonl");
-    let contents = std::fs::read_to_string(&log).expect("live log written");
+    let contents = live_log(repo.path());
     assert!(contents.contains("test.run"));
     assert!(contents.contains("write.blocked"));
     assert!(
@@ -2009,8 +2008,7 @@ fn enforce_check_records_allowed_write_when_reproduction_is_disabled() {
         .assert()
         .success();
 
-    let log = repo.path().join(".aoa/traces/live-it-session.jsonl");
-    let contents = std::fs::read_to_string(&log).expect("live log written");
+    let contents = live_log(repo.path());
     assert!(
         contents.contains(r#""type":"write.attempt""#) && contents.contains("src/lib.rs"),
         "allowed write recorded with its path: {contents}"

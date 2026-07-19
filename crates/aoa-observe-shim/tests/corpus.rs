@@ -118,9 +118,9 @@ fn held_out_edits_admit_only_confirmed_successful_mutations() {
     let corpus = load_corpus(repo.path()).expect("parseable");
     let trace = &corpus.sessions[0].trace;
 
-    let edits: Vec<String> = held_out_edits(trace).into_iter().collect();
+    let edits = held_out_edits(trace);
     assert_eq!(
-        edits,
+        edits.iter().map(String::as_str).collect::<Vec<_>>(),
         vec!["src/lib.rs"],
         "only the committed write is ground truth"
     );
@@ -133,7 +133,7 @@ fn held_out_edits_admit_only_confirmed_successful_mutations() {
         ("refused.rs", "a write the host refused"),
     ] {
         assert!(
-            !held_out_edits(trace).contains(path),
+            !edits.contains(path),
             "{outcome} never landed; it is not ground truth"
         );
     }

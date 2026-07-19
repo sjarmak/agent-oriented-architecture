@@ -228,9 +228,8 @@ pub(crate) fn parse_transcript_bounded(raw: &str, limits: Limits) -> Result<Shim
                     if block.get("type").and_then(Value::as_str) != Some("tool_result") {
                         continue;
                     }
-                    let id = match block.get("tool_use_id").and_then(Value::as_str) {
-                        Some(id) => id,
-                        None => continue,
+                    let Some(id) = block.get("tool_use_id").and_then(Value::as_str) else {
+                        continue;
                     };
                     let Some(&idx) = span_index_by_tool_id.get(id) else {
                         continue;

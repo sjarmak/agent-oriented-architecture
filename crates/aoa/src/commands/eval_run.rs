@@ -520,42 +520,35 @@ mod tests {
         );
     }
 
-    /// The other half of the same guard: a write the transcript reports as
-    /// errored is not an edit. `write.blocked` used to be counted here, which
-    /// inflated `F_edit` with files that were never touched.
+    fn write_span(seq: u64, span_type: SpanType, path: &str) -> Span {
+        Span {
+            span_type,
+            source: SpanSource::Native,
+            seq,
+            attributes: [("path".to_string(), Value::String(path.into()))]
+                .into_iter()
+                .collect(),
+        }
+    }
+
+    /// The other half of the same guard: every write the transcript reports as
+    /// anything but a landed edit stays out of `F_edit`. `write.blocked` used to
+    /// be counted here, which inflated it with files that were never touched.
     #[test]
     fn f_edit_excludes_writes_that_did_not_land() {
-        let trace = Trace {
-            spans: vec![
-                Span {
-                    span_type: SpanType::WriteAttempt,
-                    source: SpanSource::Native,
-                    seq: 0,
-                    attributes: [("path".to_string(), Value::String("intent.rs".into()))]
-                        .into_iter()
-                        .collect(),
-                },
-                Span {
-                    span_type: SpanType::WriteBlocked,
-                    source: SpanSource::Native,
-                    seq: 1,
-                    attributes: [("path".to_string(), Value::String("denied.rs".into()))]
-                        .into_iter()
-                        .collect(),
-                },
-                Span {
-                    span_type: SpanType::WriteFailed,
-                    source: SpanSource::Native,
-                    seq: 2,
-                    attributes: [("path".to_string(), Value::String("errored.rs".into()))]
-                        .into_iter()
-                        .collect(),
-                },
-            ],
-        };
+        let spans = [
+            SpanType::WriteAttempt,
+            SpanType::WriteBlocked,
+            SpanType::WriteFailed,
+            SpanType::WriteDenied,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, span_type)| write_span(i as u64, span_type, &format!("f{i}.rs")))
+        .collect();
 
         assert!(
-            edited_files_from_trace(&trace).is_empty(),
+            edited_files_from_trace(&Trace { spans }).is_empty(),
             "no write in this trace landed, so F_edit is empty"
         );
     }

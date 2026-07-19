@@ -63,10 +63,13 @@ use crate::commands::generated::generated_rules;
 /// mutation and must be preceded by a reproduction (`test.run`) span.
 const MUTATION_TOOLS: [&str; 4] = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
 
-/// The Claude Code matcher selecting exactly [`MUTATION_TOOLS`]. Every mutation
-/// hook AOA installs shares it, so the guarded set cannot drift between the
-/// gate and the outcome recorders.
-const MUTATION_TOOL_MATCHER: &str = "Write|Edit|MultiEdit|NotebookEdit";
+/// The Claude Code matcher selecting exactly [`MUTATION_TOOLS`]. Derived from
+/// that list rather than spelled out again, so adding a guarded tool cannot
+/// leave the hooks matching the old set. Every mutation hook AOA installs
+/// shares it.
+fn mutation_tool_matcher() -> String {
+    MUTATION_TOOLS.join("|")
+}
 
 /// The subset of a Claude Code hook payload this gate needs. Unknown fields are
 /// ignored by serde, so the host may add more without breaking the parse.
@@ -118,13 +121,23 @@ fn run_outcome(event: &HookEvent, span_type: SpanType) -> Result<i32> {
     if !MUTATION_TOOLS.contains(&event.tool_name.as_str()) {
         return Ok(0);
     }
+    record_write_span(event, span_type)?;
+    Ok(0)
+}
+
+/// Append one write-lifecycle span carrying the event's target path.
+///
+/// A mutation call with no resolvable target records nothing: there is no path
+/// to hold out, and a pathless write span would be indistinguishable from one
+/// whose target was dropped.
+fn record_write_span(event: &HookEvent, span_type: SpanType) -> Result<()> {
     if let Some(target) = write_target(event) {
         let log = live_log_path(event)?;
         let mut attributes = Map::new();
         attributes.insert("path".to_string(), Value::String(target.to_string()));
         append_span(&log, span_type, attributes)?;
     }
-    Ok(0)
+    Ok(())
 }
 
 /// PostToolUse: append a `test.run` span iff the Bash command ran tests. Never
@@ -190,16 +203,8 @@ fn run_check(event: &HookEvent) -> Result<i32> {
 /// [`SpanType::is_confirmed_mutation`]. Intent is kept anyway because the gap
 /// between what an agent tried to write and what it managed to write is itself
 /// signal.
-///
-/// A mutation call with no resolvable target records nothing: there is no path
-/// to hold out.
 fn allow(event: &HookEvent) -> Result<i32> {
-    if let Some(target) = write_target(event) {
-        let log = live_log_path(event)?;
-        let mut attributes = Map::new();
-        attributes.insert("path".to_string(), Value::String(target.to_string()));
-        append_span(&log, SpanType::WriteAttempt, attributes)?;
-    }
+    record_write_span(event, SpanType::WriteAttempt)?;
     Ok(0)
 }
 
@@ -346,7 +351,7 @@ fn append_span_value(log: &Path, span: Span) -> Result<()> {
     Ok(())
 }
 
-/// Merge the two enforcement hook entries into an existing `.claude/settings.json`
+/// Merge the enforcement hook entries into an existing `.claude/settings.json`
 /// value, idempotently. Re-running produces a byte-identical result: an entry is
 /// added only when no hook with the same command string is already registered
 /// under its event. Pure so `observe --enforce` can test the merge in isolation.
@@ -360,36 +365,21 @@ pub(crate) fn merge_enforce_hooks(mut settings: Value) -> Value {
         .entry("hooks")
         .or_insert_with(|| json!({}));
 
+    let matcher = mutation_tool_matcher();
     add_hook(hooks, "PostToolUse", "Bash", "aoa enforce record");
-    add_hook(
-        hooks,
-        "PreToolUse",
-        MUTATION_TOOL_MATCHER,
-        "aoa enforce check",
-    );
+    add_hook(hooks, "PreToolUse", &matcher, "aoa enforce check");
     // One hook per write outcome. Each needs its own command string, not just
     // its own matcher: `add_hook` treats a command already present under the
     // event as installed regardless of matcher, so reusing `aoa enforce record`
     // for the mutation-tool PostToolUse entry would silently install nothing at
     // all — the Bash entry above already claims that command.
-    add_hook(
-        hooks,
-        "PostToolUse",
-        MUTATION_TOOL_MATCHER,
-        "aoa enforce commit",
-    );
-    add_hook(
-        hooks,
-        "PostToolUseFailure",
-        MUTATION_TOOL_MATCHER,
-        "aoa enforce fail",
-    );
-    add_hook(
-        hooks,
-        "PermissionDenied",
-        MUTATION_TOOL_MATCHER,
-        "aoa enforce deny",
-    );
+    for (event, command) in [
+        ("PostToolUse", "aoa enforce commit"),
+        ("PostToolUseFailure", "aoa enforce fail"),
+        ("PermissionDenied", "aoa enforce deny"),
+    ] {
+        add_hook(hooks, event, &matcher, command);
+    }
     settings
 }
 
@@ -507,6 +497,11 @@ mod tests {
         let twice = merge_enforce_hooks(once.clone());
         assert_eq!(once, twice, "second merge must be a no-op");
 
+        // Pinned as a wire contract: this is the alternation syntax Claude Code
+        // matchers use, and it is derived rather than written out.
+        let matcher = mutation_tool_matcher();
+        assert_eq!(matcher, "Write|Edit|MultiEdit|NotebookEdit");
+
         // PostToolUse carries two entries under different matchers: the Bash
         // test recorder and the mutation-tool commit recorder. They must have
         // distinct command strings, because `add_hook` dedupes on the command
@@ -516,7 +511,7 @@ mod tests {
         assert_eq!(post[0]["hooks"][0]["command"], "aoa enforce record");
         assert_eq!(post[0]["matcher"], "Bash");
         assert_eq!(post[1]["hooks"][0]["command"], "aoa enforce commit");
-        assert_eq!(post[1]["matcher"], MUTATION_TOOL_MATCHER);
+        assert_eq!(post[1]["matcher"], matcher);
 
         let pre = &once["hooks"]["PreToolUse"];
         assert_eq!(pre[0]["hooks"][0]["command"], "aoa enforce check");
@@ -528,7 +523,7 @@ mod tests {
             let group = once["hooks"][event].as_array().unwrap();
             assert_eq!(group.len(), 1, "{event} registers exactly one hook");
             assert_eq!(group[0]["hooks"][0]["command"], command);
-            assert_eq!(group[0]["matcher"], MUTATION_TOOL_MATCHER);
+            assert_eq!(group[0]["matcher"], matcher);
         }
     }
 
@@ -538,17 +533,18 @@ mod tests {
     #[test]
     fn every_write_outcome_has_a_registered_hook() {
         let merged = merge_enforce_hooks(json!({}));
-        let commands: Vec<String> = ["PostToolUse", "PostToolUseFailure", "PermissionDenied"]
+        let matcher = mutation_tool_matcher();
+        let commands: Vec<&str> = ["PostToolUse", "PostToolUseFailure", "PermissionDenied"]
             .iter()
             .filter_map(|event| merged["hooks"][event].as_array())
             .flatten()
-            .filter(|g| g["matcher"] == MUTATION_TOOL_MATCHER)
-            .map(|g| g["hooks"][0]["command"].as_str().unwrap().to_string())
+            .filter(|g| g["matcher"] == matcher)
+            .map(|g| g["hooks"][0]["command"].as_str().unwrap())
             .collect();
 
         assert_eq!(
             commands,
-            vec!["aoa enforce commit", "aoa enforce fail", "aoa enforce deny"]
+            ["aoa enforce commit", "aoa enforce fail", "aoa enforce deny"]
         );
     }
 
