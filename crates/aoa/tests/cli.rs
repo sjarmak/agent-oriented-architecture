@@ -2562,6 +2562,78 @@ fn report_json_composes_pillars_and_pillar_is_not_live_without_falsification() {
     assert_eq!(parsed["migrate_pillar_live"], false);
 }
 
+// aoa-d6t.35: `report` composes audit + determination + recommend into ONE
+// document, so it must condition the determination on the same behavioral
+// signal the audit measured. Composing an unconditioned determination made the
+// document contradict itself on a history-poor repo: `audit.insufficient_data`
+// named the four metrics while `construct_validity` still called them Advisory
+// and `recommendations.insufficient_data` was absent — the exact "not Advisory,
+// not a fabricated score" state the criterion forbids.
+#[test]
+fn report_json_conditions_the_determination_on_the_behavioral_signal() {
+    let repo = TempDir::new().expect("tempdir");
+    let output = aoa()
+        .args(["report", "--json", "--repo"])
+        .arg(repo.path())
+        .output()
+        .expect("run");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+
+    // The audit half already reports the shortfall.
+    assert_eq!(
+        parsed["audit"]["insufficient_data"]["reason"],
+        INSUFFICIENT_REASON
+    );
+
+    // The determination must agree: all four behavioral metrics tagged
+    // insufficient_data, never advisory.
+    let metrics = parsed["construct_validity"]["metrics"]
+        .as_array()
+        .expect("metrics");
+    let insufficient = metrics
+        .iter()
+        .filter(|m| m["mode"] == "insufficient_data")
+        .count();
+    assert_eq!(insufficient, 4, "the four locality metrics: {metrics:#?}");
+    assert!(
+        metrics
+            .iter()
+            .any(|m| m["metric"] == "retrieval_locality" && m["mode"] == "insufficient_data"),
+        "retrieval_locality must not be advisory on a greenfield repo: {metrics:#?}"
+    );
+
+    // And the recommend join carries the note, as `aoa recommend` does.
+    assert_eq!(
+        parsed["recommendations"]["insufficient_data"]["reason"],
+        INSUFFICIENT_REASON
+    );
+}
+
+// The mirror: once the corpus crosses the window, `report` stops reporting the
+// shortfall — the conditioning is a real precondition, not a constant.
+#[test]
+fn report_json_omits_insufficient_data_with_a_sufficient_corpus() {
+    let repo = TempDir::new().expect("tempdir");
+    seed_live_sessions(repo.path(), 10);
+    let output = aoa()
+        .args(["report", "--json", "--repo"])
+        .arg(repo.path())
+        .output()
+        .expect("run");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+
+    assert!(parsed["audit"].get("insufficient_data").is_none());
+    assert!(parsed["recommendations"].get("insufficient_data").is_none());
+    assert!(
+        !parsed["construct_validity"]["metrics"]
+            .as_array()
+            .expect("metrics")
+            .iter()
+            .any(|m| m["mode"] == "insufficient_data"),
+        "a sufficient corpus leaves no metric in insufficient_data"
+    );
+}
+
 #[test]
 fn report_proceed_verdict_marks_the_migrate_pillar_live() {
     let repo = TempDir::new().expect("tempdir");

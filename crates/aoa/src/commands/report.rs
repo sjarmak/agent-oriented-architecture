@@ -85,7 +85,10 @@ pub fn run(args: &ReportArgs) -> Result<i32> {
     let cfg = aoa_audit::AuditConfig::default();
     let audit = aoa_audit::audit(&args.repo, &cfg)
         .with_context(|| format!("failed to audit {}", args.repo.display()))?;
-    let determination = aoa_gap::current_determination();
+    // Condition on the signal the audit just measured, as `aoa recommend`
+    // does. `report` composes both into one document, so an unconditioned
+    // determination would contradict the audit half it ships alongside.
+    let determination = aoa_gap::determination_with_signal(&audit.behavioral_signal);
     let fixes = aoa_migrate::all_fixes();
     let recommendations = aoa_recommend::recommend(&audit, &determination, &fixes);
     let migrations: Vec<MigrationView> = fixes
