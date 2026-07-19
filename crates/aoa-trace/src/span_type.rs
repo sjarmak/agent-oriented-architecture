@@ -124,6 +124,33 @@ impl SpanType {
                 | SpanType::WriteBlocked
         )
     }
+
+    /// Whether this span marks the point where the agent undertook a write.
+    ///
+    /// The *ordering* question, distinct from both siblings above: metrics that
+    /// split a trace into before-writing and after-writing need the seq where
+    /// writing began. Three spans answer yes — intent recorded at `PreToolUse`,
+    /// a mutation that landed, and one that ran and errored.
+    ///
+    /// Refusals deliberately answer no. `write.blocked` and `write.denied` are
+    /// *pre-execution* refusals: the agent was stopped before it could write, so
+    /// a read that follows one is still genuinely a pre-write read. Counting
+    /// them would invert the meaning of the metric on the enforce path, where
+    /// the policy gate emits `write.blocked` without a preceding attempt — an
+    /// agent whose first call is a blocked edit would have its boundary pinned
+    /// at seq 0 and could never register a pre-write read again. Since the R7
+    /// reproduction gate exists to bounce the agent back into reading, that
+    /// would make `--enforce` depress the very measurement it improves.
+    ///
+    /// Narrower than [`is_write_lifecycle`](SpanType::is_write_lifecycle), which
+    /// asks the *attention* question and so counts refusals: a file the agent
+    /// was refused is still a file it navigated to.
+    pub fn opens_write_boundary(&self) -> bool {
+        matches!(
+            self,
+            SpanType::WriteAttempt | SpanType::WriteCommitted | SpanType::WriteFailed
+        )
+    }
 }
 
 /// Provenance of a span: emitted directly by an instrumented component
@@ -224,6 +251,31 @@ mod tests {
         assert!(SpanType::WriteCommitted.is_write_lifecycle());
         assert!(!SpanType::FileRead.is_write_lifecycle());
         assert!(!SpanType::TestRun.is_write_lifecycle());
+    }
+
+    /// The before/after-writing split counts only spans where the agent actually
+    /// undertook a write. Refusals are excluded on purpose: pinning the boundary
+    /// at a `write.blocked` the policy gate emitted without a preceding attempt
+    /// would make every later read look post-write. Pinned as a rule so the two
+    /// refusal variants cannot be folded back in by someone reaching for
+    /// `is_write_lifecycle` because the names look interchangeable.
+    #[test]
+    fn only_undertaken_writes_open_the_boundary() {
+        let opening: Vec<SpanType> = SpanType::ALL
+            .into_iter()
+            .filter(SpanType::opens_write_boundary)
+            .collect();
+        assert_eq!(
+            opening,
+            vec![
+                SpanType::WriteAttempt,
+                SpanType::WriteCommitted,
+                SpanType::WriteFailed,
+            ]
+        );
+        assert!(!SpanType::WriteBlocked.opens_write_boundary());
+        assert!(!SpanType::WriteDenied.opens_write_boundary());
+        assert!(!SpanType::FileRead.opens_write_boundary());
     }
 
     #[test]

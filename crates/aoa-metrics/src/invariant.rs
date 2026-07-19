@@ -2,18 +2,16 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use aoa_trace::SpanType;
-
 use crate::common::{is_read_span, span_artifact, ConditionedOn};
 use crate::input::{Confidence, MetricInputRef};
 
 /// Invariant-discoverability: whether the invariant set `I_t` was accessed via a
-/// file.read or symbol.lookup span before the first write.attempt.
+/// file.read or symbol.lookup span before the agent began writing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InvariantDiscoverability {
     /// True iff an anchored invariant artifact was read before the first write.
     pub accessed_before_first_write: bool,
-    /// `seq` of the first write.attempt, if any write was attempted.
+    /// `seq` of the span that opened the write boundary, if the agent wrote.
     pub first_write_seq: Option<u64>,
     /// The anchored invariant names used for matching.
     pub anchored_invariants: BTreeSet<String>,
@@ -22,8 +20,16 @@ pub struct InvariantDiscoverability {
     pub weight: f64,
 }
 
-/// Compute invariant-discoverability. When no write was attempted, any invariant
+/// Compute invariant-discoverability. When the agent never wrote, any invariant
 /// read at all counts as discovered-before-write (the write boundary is open).
+///
+/// The boundary comes from [`aoa_trace::SpanType::opens_write_boundary`] rather than from
+/// `write.attempt` alone. Matching the attempt was correct only on the hook
+/// path: the codeprobe shim settles a correlated write by rewriting the attempt
+/// *in place*, so a reconstructed transcript whose writes all landed retains no
+/// `write.attempt` at all. That left the boundary open on exactly the traces
+/// that did the most writing, and every post-edit read was then counted as
+/// discovered-before-write — a well-formed, silently wrong measurement.
 pub fn compute_invariant_discoverability(input: MetricInputRef<'_>) -> InvariantDiscoverability {
     let anchored: BTreeSet<String> = input.transform.anchor(input.invariant_set);
 
@@ -32,7 +38,7 @@ pub fn compute_invariant_discoverability(input: MetricInputRef<'_>) -> Invariant
 
     let first_write_seq = spans
         .iter()
-        .find(|s| s.span_type == SpanType::WriteAttempt)
+        .find(|s| s.span_type.opens_write_boundary())
         .map(|s| s.seq);
 
     let accessed_before = spans.iter().any(|s| {

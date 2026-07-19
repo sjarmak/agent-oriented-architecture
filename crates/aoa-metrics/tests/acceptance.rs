@@ -178,6 +178,107 @@ fn invariant_not_discovered_when_accessed_after_write() {
     assert!(!d.accessed_before_first_write);
 }
 
+/// A settled codeprobe trace carries NO `write.attempt`: the shim rewrites the
+/// correlated attempt in place once the tool result arrives. Deriving the
+/// boundary from `write.attempt` alone therefore left `first_write_seq` at
+/// `None` for every reconstructed transcript whose writes landed, which opened
+/// the boundary and counted post-edit reads as pre-write discovery.
+///
+/// Both spans here are deliberately non-attempt — with a `write.attempt`
+/// anywhere in the trace this test would pass against the old code too.
+#[test]
+fn committed_write_opens_the_boundary_without_an_attempt() {
+    let input = MetricInput {
+        invariant_set: set(&["invariants::orders"]),
+        trace: Trace {
+            spans: vec![
+                span(
+                    SpanType::WriteCommitted,
+                    1,
+                    serde_json::json!({ "path": "orders.rs" }),
+                ),
+                span(
+                    SpanType::SymbolLookup,
+                    2,
+                    serde_json::json!({ "symbol": "invariants::orders" }),
+                ),
+            ],
+        },
+        ..base_input()
+    };
+    let d = compute_invariant_discoverability(input.as_view());
+    assert_eq!(d.first_write_seq, Some(1));
+    assert!(
+        !d.accessed_before_first_write,
+        "a read after a landed write is not pre-write discovery"
+    );
+}
+
+/// The same trace shape promoted from attempt to committed must measure the
+/// same. Because the shim rewrites the span in place the `seq` is preserved, so
+/// the hook path and the reconstructed path agree by construction — this pins
+/// that they do, which is what makes the boundary change safe for the hook path.
+#[test]
+fn promotion_to_committed_does_not_move_the_boundary() {
+    let trace_with = |t: SpanType| Trace {
+        spans: vec![
+            span(t, 1, serde_json::json!({ "path": "orders.rs" })),
+            span(
+                SpanType::SymbolLookup,
+                2,
+                serde_json::json!({ "symbol": "invariants::orders" }),
+            ),
+        ],
+    };
+    let measure = |t: SpanType| {
+        let input = MetricInput {
+            invariant_set: set(&["invariants::orders"]),
+            trace: trace_with(t),
+            ..base_input()
+        };
+        let d = compute_invariant_discoverability(input.as_view());
+        (d.first_write_seq, d.accessed_before_first_write)
+    };
+    assert_eq!(
+        measure(SpanType::WriteAttempt),
+        measure(SpanType::WriteCommitted)
+    );
+}
+
+/// Refusals must NOT open the boundary. The policy gate emits `write.blocked`
+/// without a preceding attempt, so counting it would pin the boundary at the
+/// agent's first refused edit and make every later read look post-write —
+/// turning `--enforce` into a mechanism that depresses the metric the R7 gate
+/// exists to improve. Nothing was written, so the boundary stays open.
+#[test]
+fn refused_writes_leave_the_boundary_open() {
+    for refusal in [SpanType::WriteBlocked, SpanType::WriteDenied] {
+        let input = MetricInput {
+            invariant_set: set(&["invariants::orders"]),
+            trace: Trace {
+                spans: vec![
+                    span(refusal, 1, serde_json::json!({ "path": "orders.rs" })),
+                    span(
+                        SpanType::SymbolLookup,
+                        2,
+                        serde_json::json!({ "symbol": "invariants::orders" }),
+                    ),
+                ],
+            },
+            ..base_input()
+        };
+        let d = compute_invariant_discoverability(input.as_view());
+        assert_eq!(
+            d.first_write_seq, None,
+            "{refusal:?} must not open the boundary"
+        );
+        assert!(
+            d.accessed_before_first_write,
+            "{refusal:?} blocked the write, so the read that follows is still pre-write"
+        );
+    }
+}
+
 // Criterion 4: mutation-surface counts writable files reachable at depth <= k and
 // emits integer k and over_approximation: true.
 #[test]
