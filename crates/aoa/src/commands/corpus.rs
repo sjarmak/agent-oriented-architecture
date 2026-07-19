@@ -27,7 +27,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use aoa_audit::{structure_measurements, AuditConfig, AuditError, FindingKind, StructureMeasure};
 use aoa_bench::{is_task_dir, load_task};
 use aoa_gap::{
-    build_report_from_corpus, mine_reverts, Corpus, GatingThresholds, GitRunner, MinedCommit, Repo,
+    build_report_from_corpus, mine_reverts, Corpus, GatingThresholds, GitRunner, MetricName,
+    MinedCommit, Repo,
 };
 
 use crate::cli::MineCorpusArgs;
@@ -60,10 +61,9 @@ use crate::output::{print_human, print_json};
 /// new measure. The metric *name* itself is not retyped — it is sourced from
 /// the canonical [`FindingKind::metric_name`] map, so a rename lands in one
 /// place. This function contributes only the corpus-specific include/exclude
-/// *policy* on top of that map. Every `Some` name is asserted to be a
-/// registered gating candidate by
-/// [`tests::every_structure_metric_is_a_gating_candidate`].
-fn structure_metric(kind: FindingKind) -> Option<&'static str> {
+/// *policy* on top of that map. The typed [`MetricName`] return makes every
+/// `Some` name a registered gating candidate by construction.
+fn structure_metric(kind: FindingKind) -> Option<MetricName> {
     match kind {
         // Orientation-safe structure measures: the canonical metric name.
         FindingKind::NavigabilityAnchor
@@ -375,23 +375,7 @@ mod tests {
     use aoa_gap::GATING_CANDIDATES;
 
     fn is_gating_candidate(name: &str) -> bool {
-        GATING_CANDIDATES.iter().any(|(n, _)| *n == name)
-    }
-
-    #[test]
-    fn every_structure_metric_is_a_gating_candidate() {
-        // Drift guard, mirroring aoa-recommend's every_joined_metric_is_a_gating
-        // -candidate: a name here that is not a registered candidate would be
-        // silently skipped by the offline reducer, producing an empty column with
-        // no error. Fail loudly instead.
-        for kind in FindingKind::ALL {
-            if let Some(name) = structure_metric(*kind) {
-                assert!(
-                    is_gating_candidate(name),
-                    "{kind:?} maps to {name:?}, which is not a registered gating candidate"
-                );
-            }
-        }
+        GATING_CANDIDATES.iter().any(|(n, _)| n.as_str() == name)
     }
 
     #[test]

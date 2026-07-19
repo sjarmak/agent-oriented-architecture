@@ -530,18 +530,17 @@ fn criterion_6_end_to_end_from_observations() {
 
 // R9c structure-measure wiring (aoa-mnz.3): the code-structure measures are
 // registered as Advisory gating candidates, born advisory exactly like the
-// process metrics, and gain no special treatment.
+// process metrics, and gain no special treatment. Registration itself is
+// type-level now (a spec is keyed on MetricName, and every MetricName is a
+// GATING_CANDIDATES entry by construction) — what stays asserted is policy.
 #[test]
 fn structure_measures_are_registered_advisory_candidates() {
-    let registered: std::collections::HashMap<&str, MetricOrientation> =
-        GATING_CANDIDATES.iter().copied().collect();
-
     for (metric, _) in STRUCTURE_MEASURE_SPECS {
-        // Each structure measure is a registered candidate, and a count of a
-        // harm (absences / outliers / unused imports) is LowerIsBetter.
+        // A count of a harm (absences / outliers / unused imports) is
+        // LowerIsBetter.
         assert_eq!(
-            registered.get(metric),
-            Some(&MetricOrientation::LowerIsBetter),
+            metric.orientation(),
+            MetricOrientation::LowerIsBetter,
             "{metric} must be a LowerIsBetter gating candidate"
         );
     }
@@ -556,18 +555,12 @@ fn structure_measures_are_registered_advisory_candidates() {
 }
 
 // The pre-registered spec is a single source of truth on direction: every spec
-// metric names a real candidate (no drift between the two tables) and carries a
-// non-empty mechanical definition — the spec AOA verifies, not defines.
+// metric carries a non-empty mechanical definition — the spec AOA verifies,
+// not defines. (That each spec names a real candidate is enforced by the
+// MetricName key.)
 #[test]
-fn structure_measure_spec_matches_candidates_and_is_documented() {
-    let registered: std::collections::HashSet<&str> =
-        GATING_CANDIDATES.iter().map(|(m, _)| *m).collect();
-
+fn structure_measure_spec_is_documented() {
     for (metric, definition) in STRUCTURE_MEASURE_SPECS {
-        assert!(
-            registered.contains(metric),
-            "spec metric {metric} is not a registered gating candidate"
-        );
         assert!(
             !definition.trim().is_empty(),
             "spec metric {metric} has no pre-registered definition"
@@ -621,7 +614,7 @@ fn criterion_6_artifact_reproduces_and_all_advisory() {
     // Every gating candidate appears, and none gates absent external data.
     assert_eq!(artifact.metrics.len(), GATING_CANDIDATES.len());
     for (m, expected) in artifact.metrics.iter().zip(GATING_CANDIDATES) {
-        assert_eq!(m.metric, expected.0);
+        assert_eq!(m.metric, expected.0.as_str());
         assert_eq!(m.orientation, expected.1);
         assert!(m.correlations.is_empty());
         assert_eq!(

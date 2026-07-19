@@ -35,7 +35,7 @@ use thiserror::Error;
 use crate::checkbox_baseline::CheckboxBaseline;
 use crate::construct::{
     build_report, ConstructValidityReport, CorrelationReport, ExternalOutcome, GatingThresholds,
-    MetricOrientation, OutcomeCorrelation, GATING_CANDIDATES,
+    MetricName, MetricOrientation, OutcomeCorrelation, GATING_CANDIDATES,
 };
 use crate::correlation::{spearman, CorrelationError};
 use crate::error::GapError;
@@ -257,8 +257,8 @@ pub fn build_report_from_corpus(
     let mut reports = Vec::with_capacity(GATING_CANDIDATES.len());
     for (metric, orientation) in GATING_CANDIDATES {
         let report =
-            correlate_metric(metric, *orientation, corpus).map_err(|source| CorpusMetricError {
-                metric: (*metric).to_string(),
+            correlate_metric(metric, orientation, corpus).map_err(|source| CorpusMetricError {
+                metric: metric.to_string(),
                 source,
             })?;
         reports.push(report);
@@ -276,14 +276,14 @@ pub fn build_report_from_corpus(
 /// see; the benign "not computable" outcomes are absorbed by
 /// [`revert_correlations`].
 fn correlate_metric(
-    metric: &str,
+    metric: MetricName,
     orientation: MetricOrientation,
     corpus: &Corpus,
 ) -> Result<CorrelationReport, CorrelationError> {
     Ok(CorrelationReport {
         metric: metric.to_string(),
         orientation,
-        correlations: revert_correlations(&corpus.observation_pairs(metric))?,
+        correlations: revert_correlations(&corpus.observation_pairs(metric.as_str()))?,
     })
 }
 
@@ -785,7 +785,9 @@ mod tests {
         assert_eq!(report.construct.metrics.len(), GATING_CANDIDATES.len());
         for m in &report.construct.metrics {
             assert!(
-                GATING_CANDIDATES.iter().any(|(name, _)| *name == m.metric),
+                GATING_CANDIDATES
+                    .iter()
+                    .any(|(name, _)| name.as_str() == m.metric),
                 "{} is not a registered candidate",
                 m.metric
             );

@@ -37,7 +37,7 @@ use std::fmt::Write as _;
 use serde::{Deserialize, Serialize};
 
 use aoa_audit::{AuditReport, FindingKind, MeasuredCost, PunchItem, Tier};
-use aoa_gap::{ConstructValidityReport, InsufficientDataNote, MetricMode};
+use aoa_gap::{ConstructValidityReport, InsufficientDataNote, MetricMode, MetricName};
 use aoa_migrate::CodeFix;
 
 /// Whether AOA recommends acting on a finding now, or merely surfaces it.
@@ -151,7 +151,7 @@ fn recommend_one(
     let fix_id = fix.map(|f| f.id().to_string());
     let fix_eligibility = fix.map(|f| f.eligibility_note().to_string());
 
-    let metric_mode = metric_name.and_then(|name| mode_for(determination, name));
+    let metric_mode = metric_name.and_then(|name| mode_for(determination, name.as_str()));
 
     let is_gating = metric_mode == Some(MetricMode::Gating);
     let (actionability, advisory_reason) = classify(fix.is_some(), is_gating);
@@ -161,7 +161,7 @@ fn recommend_one(
         title: item.title.clone(),
         tier: item.tier,
         measured_cost: item.measured_cost.clone(),
-        metric: metric_name.map(str::to_string),
+        metric: metric_name.map(|m| m.to_string()),
         metric_mode,
         fix_id,
         fix_eligibility,
@@ -230,7 +230,7 @@ fn mode_for(determination: &ConstructValidityReport, metric: &str) -> Option<Met
 /// join their registered `*_absence` gating-candidate metric with no fix: no
 /// migration mechanically pins a build, declares an environment, or adopts a
 /// tracker, so they can promote past advisory only via their metric.
-fn join(kind: FindingKind) -> (Option<&'static str>, Option<&'static str>) {
+fn join(kind: FindingKind) -> (Option<MetricName>, Option<&'static str>) {
     // The metric column is the canonical `FindingKind::metric_name` map — one
     // source of truth for the names, shared with `aoa`'s corpus reducer. The fix
     // column is recommend's own policy and stays an exhaustive match here, so a
@@ -361,11 +361,11 @@ mod tests {
     /// A determination in which exactly `target` is `Gating` (via a confirming
     /// correlation) and every other gating candidate stays `Advisory`. Models a
     /// future in which an external-outcome corpus has promoted one metric.
-    fn determination_gating(target: &str) -> ConstructValidityReport {
+    fn determination_gating(target: MetricName) -> ConstructValidityReport {
         let reports: Vec<CorrelationReport> = GATING_CANDIDATES
             .iter()
             .map(|(metric, orientation)| CorrelationReport {
-                metric: (*metric).to_string(),
+                metric: metric.to_string(),
                 orientation: *orientation,
                 correlations: if *metric == target {
                     vec![confirming_correlation(*orientation)]
@@ -429,7 +429,7 @@ mod tests {
         // Gating, the SAME join flips the finding to actionable-now. (Exercised
         // with a synthetic determination because the real one is all-Advisory.)
         let audit = AuditReport::new(vec![nav_item()]);
-        let determination = determination_gating("navigability_anchor_absence");
+        let determination = determination_gating(MetricName::NavigabilityAnchorAbsence);
 
         let report = recommend(&audit, &determination, &all_fixes());
 
@@ -447,7 +447,7 @@ mod tests {
         // `aoa migrate --fix` invocation would silently break the one line that
         // tells the operator what to run. (Untested by the all-advisory path.)
         let audit = AuditReport::new(vec![nav_item()]);
-        let determination = determination_gating("navigability_anchor_absence");
+        let determination = determination_gating(MetricName::NavigabilityAnchorAbsence);
         let rendered = recommend(&audit, &determination, &all_fixes()).render_human();
         assert!(rendered.contains("actionable-now"));
         assert!(
@@ -491,7 +491,7 @@ mod tests {
             1,
             "outlier files",
         )]);
-        let determination = determination_gating("module_size_outliers");
+        let determination = determination_gating(MetricName::ModuleSizeOutliers);
 
         let rec = &recommend(&audit, &determination, &all_fixes()).items[0];
         assert_eq!(rec.metric_mode, Some(MetricMode::Gating));
@@ -605,7 +605,7 @@ mod tests {
         // campaign that excludes it (empty registry) must see no fix — the
         // recommendation reflects what can actually be applied.
         let audit = AuditReport::new(vec![nav_item()]);
-        let determination = determination_gating("navigability_anchor_absence");
+        let determination = determination_gating(MetricName::NavigabilityAnchorAbsence);
 
         let rec = &recommend(&audit, &determination, &[]).items[0];
         assert!(rec.fix_id.is_none(), "excluded fix is not reported");
@@ -643,7 +643,13 @@ mod tests {
 
         let note = report.insufficient_data.as_ref().expect("note present");
         assert_eq!(note.reason, aoa_gap::INSUFFICIENT_DATA_REASON);
-        assert_eq!(note.metrics, aoa_gap::BEHAVIORAL_METRICS);
+        assert_eq!(
+            note.metrics,
+            aoa_gap::BEHAVIORAL_METRICS
+                .iter()
+                .map(|m| m.to_string())
+                .collect::<Vec<_>>()
+        );
 
         let rendered = report.render_human();
         assert!(rendered.contains("InsufficientData"), "{rendered}");
@@ -685,19 +691,8 @@ mod tests {
     }
 
     // --- drift guards against the upstream registries -------------------------
-
-    #[test]
-    fn every_joined_metric_is_a_gating_candidate() {
-        let candidates: Vec<&str> = GATING_CANDIDATES.iter().map(|(m, _)| *m).collect();
-        for kind in FindingKind::ALL {
-            if let (Some(metric), _) = join(*kind) {
-                assert!(
-                    candidates.contains(&metric),
-                    "{kind:?} joins metric '{metric}' absent from GATING_CANDIDATES"
-                );
-            }
-        }
-    }
+    // (join's metric column is typed MetricName, so "every joined metric is a
+    // registered gating candidate" is enforced by the compiler, not a test.)
 
     #[test]
     fn every_joined_fix_exists() {

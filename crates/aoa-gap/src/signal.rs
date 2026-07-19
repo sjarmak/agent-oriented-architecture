@@ -20,18 +20,19 @@
 use serde::{Deserialize, Serialize};
 
 use crate::construct::{
-    current_determination, ConstructValidityReport, MetricClassification, MetricMode,
+    current_determination, ConstructValidityReport, MetricClassification, MetricMode, MetricName,
 };
 use crate::correlation::MAX_EXACT_N;
 
 /// The gating-candidate metrics that are *behavioral* — computable only from
 /// held-out task traces, never from repo structure alone. A subset of
-/// [`crate::GATING_CANDIDATES`] (asserted in tests).
-pub const BEHAVIORAL_METRICS: &[&str] = &[
-    "retrieval_locality",
-    "edit_locality",
-    "invariant_discoverability",
-    "mutation_surface",
+/// [`crate::GATING_CANDIDATES`] by type: every [`MetricName`] is a registered
+/// candidate by construction.
+pub const BEHAVIORAL_METRICS: &[MetricName] = &[
+    MetricName::RetrievalLocality,
+    MetricName::EditLocality,
+    MetricName::InvariantDiscoverability,
+    MetricName::MutationSurface,
 ];
 
 /// The reason stamped on every behavioral metric tagged
@@ -142,7 +143,7 @@ pub fn determination_with_signal(signal: &BehavioralSignal) -> ConstructValidity
         .metrics
         .into_iter()
         .map(|m| {
-            if BEHAVIORAL_METRICS.contains(&m.metric.as_str()) {
+            if BEHAVIORAL_METRICS.iter().any(|b| b.as_str() == m.metric) {
                 MetricClassification {
                     mode: MetricMode::InsufficientData,
                     reason: Some(INSUFFICIENT_DATA_REASON.to_string()),
@@ -187,15 +188,16 @@ mod tests {
     use super::*;
     use crate::construct::GATING_CANDIDATES;
 
+    /// The wire names of the behavioral family, for comparing against the
+    /// `Vec<String>` a note carries.
+    fn behavioral_names() -> Vec<String> {
+        BEHAVIORAL_METRICS.iter().map(|m| m.to_string()).collect()
+    }
+
     #[test]
-    fn behavioral_metrics_are_registered_gating_candidates() {
-        let candidates: Vec<&str> = GATING_CANDIDATES.iter().map(|(m, _)| *m).collect();
-        for metric in BEHAVIORAL_METRICS {
-            assert!(
-                candidates.contains(metric),
-                "behavioral metric '{metric}' absent from GATING_CANDIDATES"
-            );
-        }
+    fn behavioral_family_is_exactly_the_four_locality_metrics() {
+        // Membership in GATING_CANDIDATES is type-level (every MetricName is a
+        // registered candidate); the family SIZE is policy and stays asserted.
         assert_eq!(
             BEHAVIORAL_METRICS.len(),
             4,
@@ -215,7 +217,7 @@ mod tests {
 
         let note = below.insufficient_data().expect("below window");
         assert_eq!(note.reason, INSUFFICIENT_DATA_REASON);
-        assert_eq!(note.metrics, BEHAVIORAL_METRICS);
+        assert_eq!(note.metrics, behavioral_names());
     }
 
     #[test]
@@ -223,7 +225,7 @@ mod tests {
         let report = determination_with_signal(&BehavioralSignal::from_observations(0));
         assert_eq!(report.metrics.len(), GATING_CANDIDATES.len());
         for m in &report.metrics {
-            if BEHAVIORAL_METRICS.contains(&m.metric.as_str()) {
+            if BEHAVIORAL_METRICS.iter().any(|b| b.as_str() == m.metric) {
                 assert_eq!(
                     m.mode,
                     MetricMode::InsufficientData,
@@ -257,7 +259,7 @@ mod tests {
     fn report_note_names_the_tagged_metrics_and_reason() {
         let report = determination_with_signal(&BehavioralSignal::from_observations(3));
         let note = report.insufficient_data().expect("insufficient");
-        assert_eq!(note.metrics, BEHAVIORAL_METRICS);
+        assert_eq!(note.metrics, behavioral_names());
         assert_eq!(note.reason, INSUFFICIENT_DATA_REASON);
     }
 

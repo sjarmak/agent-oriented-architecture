@@ -42,8 +42,8 @@ pub use compare::{compare, CompareOutcome, CompareWarning, Label};
 pub use construct::{
     build_report, classify_metric, current_determination, ConstructValidityReport,
     CorrelationReport, ExternalOutcome, GatingThresholds, MetricClassification, MetricMode,
-    MetricOrientation, OutcomeCorrelation, GATING_CANDIDATES, NO_EXTERNAL_OUTCOME_SOURCE,
-    STRUCTURE_MEASURE_SPECS,
+    MetricName, MetricOrientation, OutcomeCorrelation, GATING_CANDIDATES,
+    NO_EXTERNAL_OUTCOME_SOURCE, STRUCTURE_MEASURE_SPECS,
 };
 pub use correlation::{spearman, CorrelationError, RankCorrelation, MAX_EXACT_N};
 pub use error::GapError;
