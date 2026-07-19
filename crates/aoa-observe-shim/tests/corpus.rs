@@ -7,10 +7,18 @@ use aoa_observe_shim::{held_out_edits, load_corpus, ObserveShimError};
 use tempfile::TempDir;
 
 const SPAN_TEST_RUN: &str = r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#;
+/// Intent, logged before the tool runs. On its own it proves nothing landed.
 const SPAN_WRITE: &str =
     r#"{"type":"write.attempt","source":"native","seq":1,"attributes":{"path":"src/lib.rs"}}"#;
+/// The post-execution success that makes the edit above ground truth.
+const SPAN_COMMITTED: &str =
+    r#"{"type":"write.committed","source":"native","seq":2,"attributes":{"path":"src/lib.rs"}}"#;
 const SPAN_BLOCKED: &str =
-    r#"{"type":"write.blocked","source":"native","seq":2,"attributes":{"path":"deny.rs"}}"#;
+    r#"{"type":"write.blocked","source":"native","seq":3,"attributes":{"path":"deny.rs"}}"#;
+const SPAN_FAILED: &str =
+    r#"{"type":"write.failed","source":"native","seq":4,"attributes":{"path":"boom.rs"}}"#;
+const SPAN_DENIED: &str =
+    r#"{"type":"write.denied","source":"native","seq":5,"attributes":{"path":"refused.rs"}}"#;
 
 fn traces_dir(repo: &Path) -> std::path::PathBuf {
     let dir = repo.join(".aoa").join("traces");
@@ -37,7 +45,11 @@ fn only_sessions_carrying_held_out_edits_count_as_observations() {
     let repo = TempDir::new().expect("tempdir");
     // Two live sessions from the enforce hooks: one landed an edit, one only
     // ran tests...
-    write_live_log(repo.path(), "s1", &[SPAN_TEST_RUN, SPAN_WRITE]);
+    write_live_log(
+        repo.path(),
+        "s1",
+        &[SPAN_TEST_RUN, SPAN_WRITE, SPAN_COMMITTED],
+    );
     write_live_log(repo.path(), "s2", &[SPAN_TEST_RUN]);
     // ...plus one whole trace landed via the write_trace path, edit-free.
     let trace_json = format!(r#"{{"spans":[{SPAN_TEST_RUN}]}}"#);
@@ -60,7 +72,7 @@ fn only_sessions_carrying_held_out_edits_count_as_observations() {
 
     // The live-session trace carries the dev's real edit as held-out truth.
     let s1 = &corpus.sessions[0];
-    assert_eq!(s1.trace.spans.len(), 2);
+    assert_eq!(s1.trace.spans.len(), 3);
     let edits = held_out_edits(&s1.trace);
     assert_eq!(edits.into_iter().collect::<Vec<_>>(), vec!["src/lib.rs"]);
 }
@@ -85,23 +97,60 @@ fn contentless_live_logs_supply_zero_observations() {
     );
 }
 
+/// The acceptance criterion in one test: of the write outcomes a session can
+/// record, exactly one is ground truth. The other four stay in the trace and
+/// stay observable, but none of them may be counted as an edit.
 #[test]
-fn held_out_edits_exclude_blocked_writes() {
+fn held_out_edits_admit_only_confirmed_successful_mutations() {
     let repo = TempDir::new().expect("tempdir");
-    write_live_log(repo.path(), "s", &[SPAN_TEST_RUN, SPAN_WRITE, SPAN_BLOCKED]);
-    let corpus = load_corpus(repo.path()).expect("parseable");
-    let edits = held_out_edits(&corpus.sessions[0].trace);
-    assert!(edits.contains("src/lib.rs"));
-    assert!(
-        !edits.contains("deny.rs"),
-        "a denied write never landed; it is not ground truth"
+    write_live_log(
+        repo.path(),
+        "s",
+        &[
+            SPAN_TEST_RUN,
+            SPAN_WRITE,
+            SPAN_COMMITTED,
+            SPAN_BLOCKED,
+            SPAN_FAILED,
+            SPAN_DENIED,
+        ],
     );
+    let corpus = load_corpus(repo.path()).expect("parseable");
+    let trace = &corpus.sessions[0].trace;
+
+    let edits: Vec<String> = held_out_edits(trace).into_iter().collect();
+    assert_eq!(
+        edits,
+        vec!["src/lib.rs"],
+        "only the committed write is ground truth"
+    );
+
+    // Each non-landing outcome is named individually so a regression says which
+    // one leaked rather than just that the set grew.
+    for (path, outcome) in [
+        ("deny.rs", "a write the policy gate blocked"),
+        ("boom.rs", "a write that ran and errored"),
+        ("refused.rs", "a write the host refused"),
+    ] {
+        assert!(
+            !held_out_edits(trace).contains(path),
+            "{outcome} never landed; it is not ground truth"
+        );
+    }
+
+    // ...and all six spans survive ingestion: excluded from ground truth is not
+    // the same as discarded. The failure modes stay auditable.
+    assert_eq!(trace.spans.len(), 6, "no span is dropped on ingest");
 }
 
 #[test]
 fn non_corpus_entries_are_recorded_not_silently_ignored() {
     let repo = TempDir::new().expect("tempdir");
-    write_live_log(repo.path(), "s", &[SPAN_TEST_RUN, SPAN_WRITE]);
+    write_live_log(
+        repo.path(),
+        "s",
+        &[SPAN_TEST_RUN, SPAN_WRITE, SPAN_COMMITTED],
+    );
     let dir = traces_dir(repo.path());
     std::fs::write(dir.join("notes.txt"), "not a trace").expect("write stray file");
     std::fs::create_dir(dir.join("subdir")).expect("create stray dir");

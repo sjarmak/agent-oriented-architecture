@@ -208,27 +208,47 @@ pub(crate) fn parse_transcript_bounded(raw: &str, limits: Limits) -> Result<Shim
                     }
                 }
             }
+            // A tool result settles the outcome of the write it correlates to.
+            // Until one arrives the span stays `write.attempt`, so a transcript
+            // truncated mid-call leaves an unresolved attempt rather than
+            // fabricating either outcome.
+            //
+            // An errored result maps to `write.blocked` rather than
+            // `write.failed` on purpose. A reconstructed transcript exposes only
+            // the `is_error` boolean; separating a policy denial from an
+            // execution error would mean classifying the human-readable message
+            // beside it (the fixtures carry "Permission denied ... blocked by
+            // policy" as prose), and reading meaning out of prose is exactly
+            // what this parser must not do. The narrower distinction is
+            // available on the hook path, where the host reports each outcome as
+            // its own event. Both provenances agree on what matters here:
+            // neither `write.blocked` nor `write.failed` is a landed edit.
             Some("user") => {
                 for block in content_blocks(&event) {
                     if block.get("type").and_then(Value::as_str) != Some("tool_result") {
-                        continue;
-                    }
-                    if !block
-                        .get("is_error")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                    {
                         continue;
                     }
                     let id = match block.get("tool_use_id").and_then(Value::as_str) {
                         Some(id) => id,
                         None => continue,
                     };
-                    if let Some(&idx) = span_index_by_tool_id.get(id) {
-                        if spans[idx].span_type == SpanType::WriteAttempt {
-                            spans[idx].span_type = SpanType::WriteBlocked;
-                        }
+                    let Some(&idx) = span_index_by_tool_id.get(id) else {
+                        continue;
+                    };
+                    // Only an unresolved attempt is settled here; a span that
+                    // already carries an outcome is never re-decided.
+                    if spans[idx].span_type != SpanType::WriteAttempt {
+                        continue;
                     }
+                    let errored = block
+                        .get("is_error")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    spans[idx].span_type = if errored {
+                        SpanType::WriteBlocked
+                    } else {
+                        SpanType::WriteCommitted
+                    };
                 }
             }
             _ => {}

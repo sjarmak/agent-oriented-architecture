@@ -103,6 +103,12 @@ pub struct EnforceArgs {
     pub command: EnforceCommand,
 }
 
+/// One subcommand per hook event AOA registers.
+///
+/// The write outcomes are separate subcommands rather than one command that
+/// inspects the payload, because the host already reports each outcome as its
+/// own event. Which command ran *is* the outcome, so nothing has to interpret a
+/// tool response to find out whether the write landed.
 #[derive(Debug, Clone, Copy, Subcommand)]
 pub enum EnforceCommand {
     /// PostToolUse: append a `test.run` span when a Bash command runs tests.
@@ -110,6 +116,17 @@ pub enum EnforceCommand {
 
     /// PreToolUse: block a pending write unless reproduction precedes it.
     Check,
+
+    /// PostToolUse on a mutation tool: append a `write.committed` span. The
+    /// host fires this event only after the tool succeeds, so reaching it is
+    /// itself the confirmation that the edit landed.
+    Commit,
+
+    /// PostToolUseFailure on a mutation tool: append a `write.failed` span.
+    Fail,
+
+    /// PermissionDenied on a mutation tool: append a `write.denied` span.
+    Deny,
 }
 
 #[derive(Debug, Args)]

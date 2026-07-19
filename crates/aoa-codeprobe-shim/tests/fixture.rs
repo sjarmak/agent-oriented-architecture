@@ -53,7 +53,10 @@ fn fixture_covers_each_mapping_case_in_order() {
     let spans = &result.trace.spans;
 
     // Expected span types in transcript order. The unknown tool + non-test Bash
-    // produce no span; the denied Write becomes write.blocked.
+    // produce no span. Each write is settled by its correlated tool_result: the
+    // denied Write becomes write.blocked, and the Edit that reported success
+    // becomes write.committed — an attempt alone would not have proved the edit
+    // landed.
     let types: Vec<SpanType> = spans.iter().map(|s| s.span_type).collect();
     assert_eq!(
         types,
@@ -62,7 +65,7 @@ fn fixture_covers_each_mapping_case_in_order() {
             SpanType::FileRead,        // Read
             SpanType::GatewayInvoke,   // mcp__codegraph__codegraph_search
             SpanType::WriteBlocked,    // Write -> denied
-            SpanType::WriteAttempt,    // Edit
+            SpanType::WriteCommitted,  // Edit -> succeeded
             SpanType::TestRun,         // Bash pytest
         ],
         "mapping/order mismatch: {types:?}"

@@ -24,7 +24,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use aoa_codeprobe_shim::read_capped;
-use aoa_trace::{validate_trace_value, SpanType, Trace};
+use aoa_trace::{validate_trace_value, Trace};
 use serde_json::Value;
 
 use crate::backend::parse_live_log;
@@ -67,9 +67,11 @@ impl TraceCorpus {
     ///
     /// The count feeds the greenfield/cold-start precondition
     /// (`aoa_gap::BehavioralSignal`), which measures *available signal*, not
-    /// session-file count: a session with no `write.attempt` span (or an
+    /// session-file count: a session with no `write.committed` span (or an
     /// empty file) parses and accumulates on [`TraceCorpus::sessions`], but
-    /// holds nothing out and must not satisfy the window (aoa-d6t.23).
+    /// holds nothing out and must not satisfy the window (aoa-d6t.23). A
+    /// session that only *attempted* a write holds nothing out either — the
+    /// attempt is intent, not a landed edit.
     pub fn observations(&self) -> usize {
         self.sessions
             .iter()
@@ -187,17 +189,24 @@ fn ingest(
     })
 }
 
-/// The dev's real edits in an observed session: the `write.attempt` span
+/// The dev's real edits in an observed session: the `write.committed` span
 /// targets. This is the contamination-free held-out ground truth the live
 /// corpus exists to accumulate — the observed session captures the *present*
 /// work, and the edit the dev actually landed is the hidden truth a later
 /// evaluation scores against (codeprobe mines the same truth from *past*
-/// commits). `write.blocked` spans are excluded: a denied write never landed.
+/// commits).
+///
+/// Only a confirmed post-execution success qualifies. Every other write span is
+/// excluded because none of them attests that anything landed: `write.attempt`
+/// is intent recorded *before* the tool ran, and `write.failed`,
+/// `write.denied`, and `write.blocked` are all explicit non-landings. Reading
+/// intent as outcome is precisely how failed and cancelled mutations used to
+/// contaminate this set.
 pub fn held_out_edits(trace: &Trace) -> BTreeSet<String> {
     trace
         .spans
         .iter()
-        .filter(|s| s.span_type == SpanType::WriteAttempt)
+        .filter(|s| s.span_type.is_confirmed_mutation())
         .filter_map(|s| s.attributes.get("path").and_then(Value::as_str))
         .map(str::to_string)
         .collect()

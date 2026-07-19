@@ -447,10 +447,15 @@ fn audit_degrades_to_repo_wide_when_workspace_manifest_is_a_symlink() {
 fn seed_edit_sessions(repo: &Path, n: usize) {
     let traces = repo.join(".aoa").join("traces");
     std::fs::create_dir_all(&traces).expect("create traces dir");
+    // The attempt records intent before the tool runs; the committed span is
+    // what attests the edit landed. Only the latter makes the session count as
+    // a held-out observation.
     let spans = concat!(
         r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#,
         "\n",
         r#"{"type":"write.attempt","source":"native","seq":1,"attributes":{"path":"src/lib.rs"}}"#,
+        "\n",
+        r#"{"type":"write.committed","source":"native","seq":2,"attributes":{"path":"src/lib.rs"}}"#,
         "\n",
     );
     for i in 0..n {

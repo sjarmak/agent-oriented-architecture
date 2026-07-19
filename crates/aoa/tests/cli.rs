@@ -1554,18 +1554,77 @@ const INSUFFICIENT_REASON: &str = "no held-out behavioral signal for this repo y
 /// Accumulate `n` observe-captured live sessions under `<repo>/.aoa/traces/`,
 /// each carrying a landed edit — a session counts as a held-out behavioral
 /// observation only when it holds a real edit out.
+///
+/// Each session records the full write lifecycle the hooks emit: the
+/// `write.attempt` logged before the tool runs, then the `write.committed`
+/// logged once it succeeds. The attempt alone would not do, because an attempt
+/// is not a landed edit.
 fn seed_live_sessions(repo: &Path, n: usize) {
+    seed_live_sessions_with_spans(
+        repo,
+        n,
+        concat!(
+            r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#,
+            "\n",
+            r#"{"type":"write.attempt","source":"native","seq":1,"attributes":{"path":"src/app.py"}}"#,
+            "\n",
+            r#"{"type":"write.committed","source":"native","seq":2,"attributes":{"path":"src/app.py"}}"#,
+            "\n",
+        ),
+    );
+}
+
+fn seed_live_sessions_with_spans(repo: &Path, n: usize, spans: &str) {
     let traces = repo.join(".aoa").join("traces");
     std::fs::create_dir_all(&traces).expect("create traces dir");
-    let spans = concat!(
-        r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#,
-        "\n",
-        r#"{"type":"write.attempt","source":"native","seq":1,"attributes":{"path":"src/app.py"}}"#,
-        "\n",
-    );
     for i in 0..n {
         std::fs::write(traces.join(format!("live-s{i}.jsonl")), spans).expect("write live log");
     }
+}
+
+// Sessions captured before the outcome hooks existed hold attempts and nothing
+// else. None of them proves an edit landed, so they must not be counted as
+// held-out observations — and the shortfall has to surface as the explicit
+// InsufficientData reason rather than as a confident score over zero evidence.
+// This is the upgrade path: a binary with the new hooks reading a repo whose
+// `.claude/settings.json` still only registers the old ones sees exactly this.
+#[test]
+fn attempt_only_sessions_are_not_counted_as_landed_edits() {
+    let repo = TempDir::new().expect("tempdir");
+    seed_live_sessions_with_spans(
+        repo.path(),
+        10,
+        concat!(
+            r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#,
+            "\n",
+            r#"{"type":"write.attempt","source":"native","seq":1,"attributes":{"path":"src/app.py"}}"#,
+            "\n",
+        ),
+    );
+
+    let output = aoa()
+        .args(["audit", "--json", "--repo"])
+        .arg(repo.path())
+        .output()
+        .expect("run");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+
+    assert_eq!(
+        parsed["behavioral_signal"]["observations"], 0,
+        "an attempt with no committed outcome is not a landed edit"
+    );
+    assert_eq!(
+        parsed["insufficient_data"]["reason"], INSUFFICIENT_REASON,
+        "the shortfall must be stated, not silently scored as zero"
+    );
+    assert!(
+        !parsed["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .any(|i| i["kind"] == "mutation_surface"),
+        "no behavioral score may be fabricated from attempt-only sessions"
+    );
 }
 
 // A repo with no observe-captured held-out signal: audit reports
@@ -1783,6 +1842,101 @@ fn hook_payload(tool: &str, command: Option<&str>, cwd: &Path) -> String {
         "cwd": cwd.to_str().unwrap(),
     }))
     .unwrap()
+}
+
+/// Read the live log the enforce hooks append to for `hook_payload`'s session.
+fn live_log(repo: &Path) -> String {
+    std::fs::read_to_string(repo.join(".aoa/traces/live-it-session.jsonl"))
+        .expect("hooks created a live log")
+}
+
+/// The acceptance criterion, driven through the real CLI: each of the four
+/// non-landing outcomes is recorded and observable, and none of them is the
+/// span that edit ground truth is derived from.
+///
+/// Every outcome is a separate hook subcommand because the host raises a
+/// separate event for each. Nothing here inspects a tool response.
+#[test]
+fn enforce_records_each_write_outcome_under_its_own_span() {
+    for (subcommand, expected) in [
+        ("commit", "write.committed"),
+        ("fail", "write.failed"),
+        ("deny", "write.denied"),
+    ] {
+        let repo = TempDir::new().unwrap();
+        aoa_stdin()
+            .args(["enforce", subcommand])
+            .write_stdin(hook_payload("Edit", None, repo.path()))
+            .assert()
+            .success();
+
+        let contents = live_log(repo.path());
+        assert!(
+            contents.contains(&format!(r#""type":"{expected}""#)),
+            "`enforce {subcommand}` must record {expected}: {contents}"
+        );
+        assert!(
+            contents.contains("src/lib.rs"),
+            "{expected} carries its target path: {contents}"
+        );
+    }
+}
+
+/// An outcome hook reports history. It must never fail the tool call after the
+/// fact, and it must ignore a tool it does not guard even if a stale or
+/// hand-edited settings.json routes one to it.
+#[test]
+fn enforce_outcome_hooks_never_block_and_ignore_unguarded_tools() {
+    let repo = TempDir::new().unwrap();
+    aoa_stdin()
+        .args(["enforce", "commit"])
+        .write_stdin(hook_payload("Bash", Some("ls"), repo.path()))
+        .assert()
+        .success();
+
+    assert!(
+        !repo
+            .path()
+            .join(".aoa/traces/live-it-session.jsonl")
+            .exists(),
+        "a non-mutation tool records no write outcome"
+    );
+}
+
+/// The full lifecycle of one edit: the gate allows it and logs intent, then the
+/// host's success event lands the confirmation. Both spans coexist — the
+/// attempt is kept for the intent-versus-outcome signal, while only the
+/// committed span is ground truth.
+#[test]
+fn allowed_write_records_intent_then_confirmation() {
+    let repo = TempDir::new().unwrap();
+    // A reproduction first, so the R7 gate permits the write.
+    aoa_stdin()
+        .args(["enforce", "record"])
+        .write_stdin(hook_payload("Bash", Some("pytest -q"), repo.path()))
+        .assert()
+        .success();
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(hook_payload("Edit", None, repo.path()))
+        .assert()
+        .success();
+    aoa_stdin()
+        .args(["enforce", "commit"])
+        .write_stdin(hook_payload("Edit", None, repo.path()))
+        .assert()
+        .success();
+
+    let contents = live_log(repo.path());
+    assert!(contents.contains(r#""type":"write.attempt""#), "{contents}");
+    assert!(
+        contents.contains(r#""type":"write.committed""#),
+        "{contents}"
+    );
+    assert!(
+        contents.find(r#""write.attempt""#) < contents.find(r#""write.committed""#),
+        "intent is recorded before the outcome that settles it: {contents}"
+    );
 }
 
 #[test]

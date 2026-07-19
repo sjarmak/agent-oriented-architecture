@@ -101,10 +101,15 @@ pub struct TraceFootprint {
 }
 
 /// The trace footprint `T`: the distinct repo files the agent's instrumented
-/// trace read or touched (`file.read`, `write.attempt`, `write.blocked` span
-/// `path` targets), resolved onto the repo universe. Paths that resolve to no
-/// universe file are dropped — they are workspace/protocol artifacts, not repo
+/// trace read or touched (`file.read` plus every write-lifecycle span's `path`
+/// target), resolved onto the repo universe. Paths that resolve to no universe
+/// file are dropped — they are workspace/protocol artifacts, not repo
 /// navigation.
+///
+/// Footprint counts the write lifecycle in full, landed or not: a file the
+/// agent tried and failed to write is still a file it navigated to. This is the
+/// deliberate opposite of edit ground truth, which admits only
+/// `write.committed` — see [`SpanType::is_confirmed_mutation`].
 ///
 /// Resolution is deliberately ASYMMETRIC to the oracle-chain resolver
 /// (`aoa_bench`'s `resolve_repo_file`). Oracle references are miner-authored
@@ -121,12 +126,7 @@ pub fn trace_footprint(trace: &Trace, universe: &BTreeSet<String>) -> TraceFootp
     let paths = trace
         .spans
         .iter()
-        .filter(|s| {
-            matches!(
-                s.span_type,
-                SpanType::FileRead | SpanType::WriteAttempt | SpanType::WriteBlocked
-            )
-        })
+        .filter(|s| s.span_type == SpanType::FileRead || s.span_type.is_write_lifecycle())
         .filter_map(|s| s.attributes.get("path").and_then(|v| v.as_str()));
     for path in paths {
         if let Some(resolved) = match_repo_relative(path, universe) {

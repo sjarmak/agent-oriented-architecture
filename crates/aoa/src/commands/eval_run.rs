@@ -12,9 +12,11 @@
 //! # Honest degradation (MVP boundaries)
 //!
 //! A codeprobe run retains neither the agent's patch nor a repo checkout, so:
-//! - **`F_edit`** is reconstructed from `write.attempt`/`write.blocked` span
-//!   targets in the trace. A prose-only trial has no writes, so edit-locality is
-//!   degenerate — never fabricated.
+//! - **`F_edit`** is reconstructed from `write.committed` span targets in the
+//!   trace — the writes the transcript confirms actually landed. A prose-only
+//!   trial has no writes, so edit-locality is degenerate — never fabricated.
+//!   Attempted, failed, denied, and blocked writes stay in the trace but are
+//!   not edits, so none of them inflates `F_edit`.
 //! - **the symbol graph** needs an explicit `--scip-index` or `--repo`; absent
 //!   one it degrades to zero weight (R0-ineligible), recorded in
 //!   `graph_degrade_reason` rather than failing silently.
@@ -48,7 +50,7 @@ use aoa_metrics::{
     WorkspaceSource,
 };
 use aoa_scip_graph::{build_symbol_graph, degraded, IndexSource, IndexedRepo};
-use aoa_trace::{SpanType, Trace};
+use aoa_trace::Trace;
 
 use crate::cli::EvalRunArgs;
 use crate::commands::codeprobe::discover_tasks;
@@ -384,13 +386,19 @@ fn process_task(
     })
 }
 
-/// `F_edit`: the files the agent wrote, from `write.attempt`/`write.blocked`
-/// span `path` targets. A trial with no writes yields an empty set.
+/// `F_edit`: the files the agent actually edited, from `write.committed` span
+/// `path` targets. A trial with no landed writes yields an empty set.
+///
+/// Counts only confirmed successful mutations. `write.blocked` used to be
+/// included here, which was plainly wrong — a write the policy gate denied
+/// never touched the file, so it inflated `F_edit` and depressed the edit
+/// -locality inflation ratios that derive from it. `write.attempt` is excluded
+/// for the same reason one step earlier: it records intent before execution.
 fn edited_files_from_trace(trace: &Trace) -> BTreeSet<String> {
     trace
         .spans
         .iter()
-        .filter(|s| matches!(s.span_type, SpanType::WriteAttempt | SpanType::WriteBlocked))
+        .filter(|s| s.span_type.is_confirmed_mutation())
         .filter_map(|s| s.attributes.get("path").and_then(|v| v.as_str()))
         .map(|p| p.to_string())
         .collect()
@@ -481,4 +489,74 @@ fn render_human(report: &EvalRunReport) -> String {
         let _ = writeln!(out, "{}", note.render_line(&report.behavioral_signal));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aoa_trace::{Span, SpanSource, SpanType};
+    use serde_json::Value;
+
+    /// `F_edit` must stay non-empty for a transcript whose write succeeded.
+    ///
+    /// This is the guard on the repoint to `write.committed`. Nothing else
+    /// would catch getting it wrong: an empty `F_edit` does not error, it flows
+    /// into `compute_edit_locality` and reports `floor_inflation: 0.0` — a
+    /// well-formed measurement claiming perfect edit locality for every trial.
+    /// A silent, plausible, entirely wrong number is the worst failure this
+    /// pipeline can produce, so the assertion is pinned against a real
+    /// codeprobe artifact rather than a synthesized trace.
+    #[test]
+    fn f_edit_counts_the_landed_edit_in_a_real_codeprobe_transcript() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/codeprobe_run/native-consensus-001/agent_output.txt");
+        let parsed = aoa_codeprobe_shim::parse_transcript_file(&fixture).expect("fixture parses");
+
+        let edited = edited_files_from_trace(&parsed.trace);
+        assert_eq!(
+            edited.into_iter().collect::<Vec<_>>(),
+            vec!["src/widget/config.py"],
+            "the transcript's successful Edit must reach F_edit"
+        );
+    }
+
+    /// The other half of the same guard: a write the transcript reports as
+    /// errored is not an edit. `write.blocked` used to be counted here, which
+    /// inflated `F_edit` with files that were never touched.
+    #[test]
+    fn f_edit_excludes_writes_that_did_not_land() {
+        let trace = Trace {
+            spans: vec![
+                Span {
+                    span_type: SpanType::WriteAttempt,
+                    source: SpanSource::Native,
+                    seq: 0,
+                    attributes: [("path".to_string(), Value::String("intent.rs".into()))]
+                        .into_iter()
+                        .collect(),
+                },
+                Span {
+                    span_type: SpanType::WriteBlocked,
+                    source: SpanSource::Native,
+                    seq: 1,
+                    attributes: [("path".to_string(), Value::String("denied.rs".into()))]
+                        .into_iter()
+                        .collect(),
+                },
+                Span {
+                    span_type: SpanType::WriteFailed,
+                    source: SpanSource::Native,
+                    seq: 2,
+                    attributes: [("path".to_string(), Value::String("errored.rs".into()))]
+                        .into_iter()
+                        .collect(),
+                },
+            ],
+        };
+
+        assert!(
+            edited_files_from_trace(&trace).is_empty(),
+            "no write in this trace landed, so F_edit is empty"
+        );
+    }
 }

@@ -24,13 +24,16 @@
       "additionalProperties": false,
       "properties": {
         "type": {
-          "description": "The kind of span. One of the eight stable discriminants.",
+          "description": "The kind of span. One of the eleven stable discriminants. Only write.committed attests a mutation that landed; write.attempt is intent recorded before execution, and write.failed/write.denied/write.blocked all mean the write did not land.",
           "type": "string",
           "enum": [
             "retrieval.search",
             "file.read",
             "symbol.lookup",
             "write.attempt",
+            "write.committed",
+            "write.failed",
+            "write.denied",
             "write.blocked",
             "test.run",
             "gateway.invoke",

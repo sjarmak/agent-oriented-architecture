@@ -10,7 +10,8 @@ use crate::model::{Span, Trace};
 /// mis-parsing. AOA ingests traces reconstructed from external codeprobe
 /// transcripts; without a version a codeprobe-side change to the wire shape
 /// would parse into subtly wrong spans with no error. A reader that finds a
-/// version it does not support rejects the file (see [`check_format_version`]).
+/// version it does not support rejects the file (see
+/// [`into_trace`](TraceEnvelope::into_trace)).
 ///
 /// This is deliberately distinct from `aoa_codeprobe_shim::CONTRACT_VERSION`,
 /// which versions the *backend conformance contract* (the `TraceBackend` shape),
