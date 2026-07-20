@@ -2909,6 +2909,51 @@ fn report_json_omits_insufficient_data_with_a_sufficient_corpus() {
     );
 }
 
+// aoa-d6t.41: `report` must audit through the same repo-aware config as `audit`
+// and `recommend`. Building an `AuditConfig::default()` here hands the audit an
+// empty symbol graph, which silently withholds the measured mutation-surface
+// item — the operator-facing readiness view under-reporting the very findings
+// the other two surfaces report for the same repo.
+//
+// The repo needs BOTH a sufficient corpus and indexable source: without the
+// corpus this is the InsufficientData path, and without a .py file the graph is
+// empty for every command, so neither alone would catch the divergence.
+#[test]
+fn report_and_audit_agree_on_findings_for_an_indexable_repo() {
+    let repo = TempDir::new().expect("tempdir");
+    seed_live_sessions(repo.path(), MIN_HELD_OUT_OBSERVATIONS);
+    std::fs::write(
+        repo.path().join("app.py"),
+        "def handle(x):\n    return store(x)\n\ndef store(x):\n    return x\n",
+    )
+    .expect("write indexable source");
+
+    let kinds = |args: &[&str]| -> Vec<String> {
+        let output = aoa().args(args).arg(repo.path()).output().expect("run");
+        let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+        let items = match parsed.get("audit") {
+            Some(audit) => audit["items"].as_array().expect("items").clone(),
+            None => parsed["items"].as_array().expect("items").clone(),
+        };
+        items
+            .iter()
+            .map(|i| i["kind"].as_str().expect("kind").to_string())
+            .collect()
+    };
+
+    let from_audit = kinds(&["audit", "--json", "--repo"]);
+    let from_report = kinds(&["report", "--json", "--repo"]);
+
+    assert!(
+        from_audit.iter().any(|k| k == "mutation_surface"),
+        "precondition: the fixture repo indexes into a real graph: {from_audit:?}"
+    );
+    assert_eq!(
+        from_report, from_audit,
+        "`report` must not drop findings `audit` reports for the same repo"
+    );
+}
+
 #[test]
 fn report_proceed_verdict_marks_the_migrate_pillar_live() {
     let repo = TempDir::new().expect("tempdir");

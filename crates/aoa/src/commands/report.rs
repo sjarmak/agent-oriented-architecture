@@ -82,7 +82,7 @@ struct ReadinessView {
 
 /// Compose the readiness view and render it in the requested register.
 pub fn run(args: &ReportArgs) -> Result<i32> {
-    let cfg = aoa_audit::AuditConfig::default();
+    let cfg = crate::commands::audit::repo_audit_config(&args.repo)?;
     let audit = aoa_audit::audit(&args.repo, &cfg)
         .with_context(|| format!("failed to audit {}", args.repo.display()))?;
     // Condition on the signal the audit just measured, as `aoa recommend`
