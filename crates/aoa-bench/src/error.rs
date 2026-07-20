@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -65,8 +66,8 @@ pub enum BenchError {
 
     // ---- codeprobe run-dir contract (see `crate::codeprobe_run`) ----
     //
-    // `task_id`, `found` and `message` carry untrusted text (a directory name,
-    // values lifted from a `scoring.json`). They are stored RAW and escaped at
+    // `task_id`, `found`, `message` and `name` carry untrusted text (a directory
+    // name, values lifted from a `scoring.json`). They are stored RAW and escaped at
     // render time by the `#[error]` attributes below — same rule as the paths
     // above, so the enum has exactly one escaping story and no construct-time
     // invariant for a maintainer to forget on the next field.
@@ -113,6 +114,24 @@ pub enum BenchError {
         run_dir: PathBuf,
         #[source]
         source: std::io::Error,
+    },
+
+    /// A directory that keys as a trial carries a name that is not valid UTF-8,
+    /// so its id cannot round-trip through `String`. Fail loud: skipping it
+    /// would shrink the admitted trial set without a word, and admitting it
+    /// lossily would let two distinct dirents collapse onto one id.
+    #[error(
+        "trial dir name {:?} under {} is not valid UTF-8: task ids must round-trip \
+         as UTF-8 to address the trial",
+        .name, escaped_path(.run_dir)
+    )]
+    TrialNameNotUtf8 {
+        run_dir: PathBuf,
+        /// Rendered with `{:?}`, like [`Self::NotDualComposite::found`]: `Debug`
+        /// for `OsStr` escapes both control characters and the invalid bytes,
+        /// so the operator sees which directory this is. A lossy rendering
+        /// would not — that is the whole reason this is an error.
+        name: OsString,
     },
 
     /// The run dir held no recognizable trial subdirectories.

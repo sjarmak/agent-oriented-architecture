@@ -178,6 +178,61 @@ fn eval_run_emits_records_and_fails_loud_per_trial() {
     }
 }
 
+// A trial dir whose NAME is not valid UTF-8 aborts the command instead of being
+// silently skipped. This is the operator-visible half of the aoa-w0o fix: the
+// walk cannot address such a trial (and a lossy id can alias a different one),
+// so it refuses the whole run rather than quietly admitting fewer trials than
+// codeprobe produced. `eval run` isolates per-TRIAL failures (see
+// `eval_run_emits_records_and_fails_loud_per_trial`), but this failure is in
+// discovery, upstream of that isolation — pinned here so a future refactor
+// cannot regress it back to a skip. See aoa-m8rb for whether it should isolate.
+#[cfg(unix)]
+#[test]
+fn eval_run_aborts_on_a_non_utf8_trial_dir_name() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let dir = TempDir::new().expect("tempdir");
+    let run = dir.path().join("run");
+    std::fs::create_dir_all(&run).expect("run dir");
+    // One real trial copied from the fixture, so the run dir is otherwise valid
+    // and a skip would look like success with one fewer record.
+    let good = run.join("native-consensus-001");
+    std::fs::create_dir_all(&good).expect("good trial");
+    for artifact in ["scoring.json", "agent_output.txt"] {
+        std::fs::copy(
+            run_dir().join("native-consensus-001").join(artifact),
+            good.join(artifact),
+        )
+        .expect("copy artifact");
+    }
+    let bad = run.join(std::ffi::OsString::from_vec(b"task-\xffbad".to_vec()));
+    std::fs::create_dir_all(&bad).expect("bad trial");
+    std::fs::copy(good.join("scoring.json"), bad.join("scoring.json")).expect("copy scoring");
+
+    let output = aoa()
+        .args(["eval", "run", "--json", "--codeprobe-run"])
+        .arg(&run)
+        .arg("--tasks")
+        .arg(tasks_dir())
+        .output()
+        .expect("run");
+
+    assert!(
+        !output.status.success(),
+        "a non-UTF-8 trial dir name must not be silently skipped"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not valid UTF-8"),
+        "error must name the cause: {stderr}"
+    );
+    // The offending name reaches stderr escaped, never as raw bytes.
+    assert!(
+        !output.stderr.contains(&0xff),
+        "raw invalid byte survived into stderr: {stderr}"
+    );
+}
+
 // AC3: held-out drives counted_as_success; a held-out fail is not a success.
 #[test]
 fn eval_run_held_out_fail_not_counted_as_success() {
