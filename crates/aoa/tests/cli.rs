@@ -1197,6 +1197,80 @@ fn experiment_manifest_accepts_documented_calibrated_basis_key() {
     .stderr(predicate::str::contains("unknown field").not());
 }
 
+// aoa-g2g5: R0 determinism evidence is only valid across INDEPENDENT,
+// identity-aligned runs. The builder's old run-count/min-max-count checks let
+// three integrity violations through; each must now fail loud.
+
+// A repo whose runs reuse a seed is K copies of one draw, not K independent
+// replications — reject it before any evidence is assembled. (Bails pre-read,
+// so the run dirs need not exist.)
+#[test]
+fn experiment_rejects_duplicate_seed_across_runs() {
+    experiment_manifest_failure(
+        r#"{
+          "k_runs": 3, "min_holdout_size": 1,
+          "repos": [{
+            "repo_id": "sample/dup-seed", "confidence": "high", "calibrated": true,
+            "runs": [
+              { "seed": 1, "repo_arm": "seed1/repo_arm", "harness_arm": "seed1/harness_arm" },
+              { "seed": 1, "repo_arm": "seed2/repo_arm", "harness_arm": "seed2/harness_arm" },
+              { "seed": 3, "repo_arm": "seed3/repo_arm", "harness_arm": "seed3/harness_arm" }
+            ]
+          }]
+        }"#,
+    )
+    .stderr(predicate::str::contains(
+        "seed 1 is used by more than one run",
+    ));
+}
+
+// Reusing an arm run directory across runs reads that arm's outcomes from
+// identical files — again not an independent replication. (Distinct seeds here,
+// so the seed gate passes and the directory gate is what fires.)
+#[test]
+fn experiment_rejects_reused_run_directory() {
+    experiment_manifest_failure(
+        r#"{
+          "k_runs": 3, "min_holdout_size": 1,
+          "repos": [{
+            "repo_id": "sample/dup-dir", "confidence": "high", "calibrated": true,
+            "runs": [
+              { "seed": 1, "repo_arm": "seed1/repo_arm", "harness_arm": "seed1/harness_arm" },
+              { "seed": 2, "repo_arm": "seed1/repo_arm", "harness_arm": "seed2/harness_arm" },
+              { "seed": 3, "repo_arm": "seed3/repo_arm", "harness_arm": "seed3/harness_arm" }
+            ]
+          }]
+        }"#,
+    )
+    .stderr(predicate::str::contains("run directory"))
+    .stderr(predicate::str::contains("used by more than one run/arm"));
+}
+
+// The core aoa-g2g5 case: two runs admit the SAME NUMBER of identical pairs but
+// DIFFERENT task identities (run 0/2 admit `alpha`, run 1 admits `beta`). The
+// old min/max-count check passed this (counts all equal 1); the identity check
+// must fail it, naming the missing/extra ids, because the positional PairTask
+// ids and run-indexed determinism check would otherwise compare mismatched
+// tasks.
+#[test]
+fn experiment_rejects_equal_count_different_task_identities() {
+    let dir = TempDir::new().expect("tempdir");
+    aoa()
+        .args(["eval", "experiment", "--manifest"])
+        .arg(fixture("experiment_divergent/manifest.json"))
+        .arg("--tasks")
+        .arg(fixture("experiment_divergent"))
+        .arg("--out")
+        .arg(dir.path().join("falsify_input.json"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "admits a different identical-pair set than run 0",
+        ))
+        .stderr(predicate::str::contains("\"alpha\""))
+        .stderr(predicate::str::contains("\"beta\""));
+}
+
 // H2/AC4: given a real >=5-repo input but a build report flagging degraded
 // convention inputs, the gate abstains to `inconclusive` with the
 // `convention_inputs_degraded` precondition rather than asserting a verdict the

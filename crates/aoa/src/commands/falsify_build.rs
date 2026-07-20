@@ -182,9 +182,6 @@ struct RepoBuild {
     /// native-composed + calibrated). Informational — the gate re-derives it.
     eligible: bool,
     excluded_tasks: Vec<ExcludedTask>,
-    /// Per-repo build notes (e.g. seed-to-seed identical-pair instability).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    notes: Vec<String>,
 }
 
 /// The build report. `convention_inputs_degraded` is the load-bearing flag
@@ -290,15 +287,43 @@ fn build_repo(
         );
     }
 
+    // R0 determinism evidence is only meaningful across K INDEPENDENT runs.
+    // Reject a manifest that reuses a seed or an arm run directory across runs:
+    // a reused seed or dir reads the same draw twice, so "stable across K runs"
+    // would be vacuously true rather than real replication evidence (aoa-g2g5).
+    let mut seen_seeds: BTreeSet<u64> = BTreeSet::new();
+    let mut seen_dirs: BTreeSet<&Path> = BTreeSet::new();
+    for run in &repo.runs {
+        if !seen_seeds.insert(run.seed) {
+            bail!(
+                "repo {}: seed {} is used by more than one run; each of the k_runs \
+                 replications must use a distinct seed",
+                repo.repo_id,
+                run.seed
+            );
+        }
+        for dir in [run.repo_arm.as_path(), run.harness_arm.as_path()] {
+            if !seen_dirs.insert(dir) {
+                bail!(
+                    "repo {}: run directory {} is used by more than one run/arm; each \
+                     replication must read a distinct run directory",
+                    repo.repo_id,
+                    dir.display()
+                );
+            }
+        }
+    }
+
     let mut runs = Vec::with_capacity(repo.runs.len());
     // Exclusions are accumulated across ALL runs, deduped by task id (a task that
     // drops out in any seed is recorded once), so a seed-specific mismatch is
     // never silently swallowed.
     let mut excluded: BTreeMap<String, String> = BTreeMap::new();
-    let mut representative_ids: Vec<String> = Vec::new();
-    let mut pair_counts: Vec<usize> = Vec::with_capacity(repo.runs.len());
+    // Each run's admitted identical-pair ids (already sorted). Retained for EVERY
+    // run, not just run 0, so the cross-run identity check below can compare them.
+    let mut admitted_per_run: Vec<Vec<String>> = Vec::with_capacity(repo.runs.len());
 
-    for (run_index, run) in repo.runs.iter().enumerate() {
+    for run in &repo.runs {
         // Arm paths in the manifest are resolved relative to the manifest file's
         // directory (an absolute path passes through `join` unchanged).
         let repo_arm_dir = base_dir.join(&run.repo_arm);
@@ -373,23 +398,21 @@ fn build_repo(
             admitted_ids.push(id);
         }
 
-        pair_counts.push(tasks.len());
-        if run_index == 0 {
-            representative_ids = admitted_ids;
-        }
+        admitted_per_run.push(admitted_ids);
         runs.push(RepoRun {
             seed: run.seed,
             tasks,
         });
     }
 
-    let min_pairs = pair_counts.iter().copied().min().unwrap_or(0);
-    let max_pairs = pair_counts.iter().copied().max().unwrap_or(0);
+    let min_pairs = admitted_per_run.iter().map(Vec::len).min().unwrap_or(0);
 
     // A repo with no identical pairs in some run cannot supply consistent
     // evidence; drop it (loudly noted, per-task reasons preserved) rather than
-    // emit empty runs that score as zero-delta.
-    if min_pairs == 0 || representative_ids.is_empty() {
+    // emit empty runs that score as zero-delta. This precedes the identity check
+    // below: a zero-pair run is an ABSENCE of evidence, handled by dropping the
+    // repo, not a misaligned-identity integrity failure.
+    if min_pairs == 0 {
         return Ok(RepoOutcome::Dropped(DroppedRepo {
             repo_id: repo.repo_id.clone(),
             excluded_tasks: excluded
@@ -399,19 +422,37 @@ fn build_repo(
         }));
     }
 
-    let mut repo_notes = Vec::new();
-    if min_pairs != max_pairs {
-        repo_notes.push(format!(
-            "identical-pair count varies across seeds ({min_pairs}..{max_pairs}); \
-             holdout_size uses the minimum and the determinism check may flag instability"
-        ));
+    // Every run must admit the SAME identical-pair task identities, not merely
+    // the same count. Positional `PairTask.task_id`s and the run-indexed
+    // determinism check (aoa_falsify::verdict) both assume run i's task j is
+    // run 0's task j; equal-count-but-different-membership runs silently break
+    // that alignment, so the determinism evidence would compare mismatched
+    // tasks. Fail loud with the missing/extra ids (aoa-g2g5).
+    let representative = &admitted_per_run[0];
+    for (run_index, ids) in admitted_per_run.iter().enumerate().skip(1) {
+        if ids != representative {
+            let reference: BTreeSet<&String> = representative.iter().collect();
+            let this: BTreeSet<&String> = ids.iter().collect();
+            let missing: Vec<&String> = reference.difference(&this).copied().collect();
+            let extra: Vec<&String> = this.difference(&reference).copied().collect();
+            bail!(
+                "repo {}: run {} (seed {}) admits a different identical-pair set than run 0 \
+                 (missing {:?}, extra {:?}); determinism across runs requires identical task \
+                 identities, not just equal counts",
+                repo.repo_id,
+                run_index,
+                repo.runs[run_index].seed,
+                missing,
+                extra
+            );
+        }
     }
 
     // Repo-level held-out provenance from the representative run's identical-pair
     // task oracles. The tasks dir is shared across arms (same mined tasks), so
     // provenance is a task property, identical across arms by construction.
-    let mut provenances = Vec::with_capacity(representative_ids.len());
-    for id in &representative_ids {
+    let mut provenances = Vec::with_capacity(representative.len());
+    for id in representative {
         let task = load_task(tasks_dir.join(id)).with_context(|| {
             format!(
                 "failed to load task {id} oracle from {}",
@@ -447,7 +488,6 @@ fn build_repo(
         calibrated: repo.calibrated,
         eligible,
         excluded_tasks,
-        notes: repo_notes,
     };
     let result = RepoResult {
         repo_id: repo.repo_id.clone(),
@@ -629,9 +669,6 @@ fn render_human(report: &BuildReport, report_path: &Path) -> String {
             r.calibrated,
             r.eligible,
         );
-        for note in &r.notes {
-            let _ = writeln!(out, "      note: {note}");
-        }
         for ex in &r.excluded_tasks {
             let _ = writeln!(
                 out,
