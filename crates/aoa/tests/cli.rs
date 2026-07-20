@@ -2937,9 +2937,9 @@ fn report_and_audit_agree_on_findings_for_an_indexable_repo() {
             None => parsed["items"].as_array(),
         }
         .expect("items")
-            .iter()
-            .map(|i| i["kind"].as_str().expect("kind").to_string())
-            .collect()
+        .iter()
+        .map(|i| i["kind"].as_str().expect("kind").to_string())
+        .collect()
     };
 
     let from_audit = kinds(&["audit", "--json", "--repo"]);
