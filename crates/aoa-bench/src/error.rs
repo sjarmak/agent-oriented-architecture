@@ -127,10 +127,8 @@ pub enum BenchError {
     )]
     TrialNameNotUtf8 {
         run_dir: PathBuf,
-        /// Rendered with `{:?}`, like [`Self::NotDualComposite::found`]: `Debug`
-        /// for `OsStr` escapes both control characters and the invalid bytes,
-        /// so the operator sees which directory this is. A lossy rendering
-        /// would not — that is the whole reason this is an error.
+        /// `Debug` for `OsStr` escapes the invalid bytes too, not just the
+        /// control characters, so the operator sees which directory this is.
         name: OsString,
     },
 

@@ -179,13 +179,9 @@ fn eval_run_emits_records_and_fails_loud_per_trial() {
 }
 
 // A trial dir whose NAME is not valid UTF-8 aborts the command instead of being
-// silently skipped. This is the operator-visible half of the aoa-w0o fix: the
-// walk cannot address such a trial (and a lossy id can alias a different one),
-// so it refuses the whole run rather than quietly admitting fewer trials than
-// codeprobe produced. `eval run` isolates per-TRIAL failures (see
-// `eval_run_emits_records_and_fails_loud_per_trial`), but this failure is in
-// discovery, upstream of that isolation — pinned here so a future refactor
-// cannot regress it back to a skip. See aoa-m8rb for whether it should isolate.
+// silently skipped. Discovery sits upstream of this command's per-trial
+// isolation, so the whole batch fails — pinned here so a future refactor cannot
+// return it to a skip. See aoa-m8rb for whether it should isolate instead.
 #[cfg(unix)]
 #[test]
 fn eval_run_aborts_on_a_non_utf8_trial_dir_name() {

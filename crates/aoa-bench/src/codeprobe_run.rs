@@ -143,27 +143,33 @@ impl DualScoring {
     }
 }
 
-/// Path to a trial's scoring file. The run-dir layout lives here, not in callers.
+const SCORING_FILE: &str = "scoring.json";
+const TRANSCRIPT_FILE: &str = "agent_output.txt";
+
+/// A trial's directory. The run-dir layout lives here, not in callers.
 ///
-/// Takes the id as `AsRef<Path>` rather than `&str` so the discovery walk can
-/// probe with a raw `OsStr` dirent name. Keeping the walk on this accessor is
-/// what stops the layout from being restated at the one call site that cannot
-/// hold a `String` yet.
-pub fn scoring_path(run_dir: &Path, task_id: impl AsRef<Path>) -> PathBuf {
-    run_dir.join(task_id).join("scoring.json")
+/// Takes `AsRef<Path>` because the discovery walk holds a raw dirent name that
+/// has not yet earned the right to be a task id. The public accessors below
+/// stay on `&str` so no caller can address a trial with one.
+fn trial_dir(run_dir: &Path, task_id: impl AsRef<Path>) -> PathBuf {
+    run_dir.join(task_id)
+}
+
+/// Path to a trial's scoring file.
+pub fn scoring_path(run_dir: &Path, task_id: &str) -> PathBuf {
+    trial_dir(run_dir, task_id).join(SCORING_FILE)
 }
 
 /// Path to a trial's agent transcript. Written only when the agent produced
 /// stdout, so callers must tolerate its absence.
-pub fn transcript_path(run_dir: &Path, task_id: impl AsRef<Path>) -> PathBuf {
-    run_dir.join(task_id).join("agent_output.txt")
+pub fn transcript_path(run_dir: &Path, task_id: &str) -> PathBuf {
+    trial_dir(run_dir, task_id).join(TRANSCRIPT_FILE)
 }
 
 /// Validate a trial directory name as an addressable task id.
 ///
-/// Split out from the walk so the rule is testable without a filesystem, and on
-/// every platform — the only way to *build* a non-UTF-8 dir name in a test is
-/// unix-specific, but the rule itself is not.
+/// Split out from the walk so the rule is testable without a filesystem, on
+/// every platform.
 fn trial_id(run_dir: &Path, name: std::ffi::OsString) -> Result<String, BenchError> {
     name.into_string()
         .map_err(|name| BenchError::TrialNameNotUtf8 {
@@ -217,13 +223,11 @@ pub fn discover_tasks(run_dir: &Path) -> Result<Vec<String>, BenchError> {
         // not qualify a dir, or a crafted run dir could point the later capped
         // read at an out-of-tree file. `Path::is_file` follows symlinks; the
         // dir-level guard above does not, and these must match it.
-        // Probed with the RAW dirent name, never with a lossy rendering of it: a
-        // name that is not valid UTF-8 renders to a path that does not exist, so
-        // the trial would drop out of the walk with no error at all.
+        // A lossy rendering of the name would probe a path that does not exist,
+        // dropping the trial out of the walk with no error at all.
         let name = entry.file_name();
-        if is_regular_file(&scoring_path(run_dir, &name))
-            || is_regular_file(&transcript_path(run_dir, &name))
-        {
+        let dir = trial_dir(run_dir, &name);
+        if is_regular_file(&dir.join(SCORING_FILE)) || is_regular_file(&dir.join(TRANSCRIPT_FILE)) {
             // The entry IS a trial, so its name has to serve as an addressable
             // id. Validated only after the probe, so a non-UTF-8 name that is
             // not a trial at all stays as ignorable as any other junk dir.
@@ -518,10 +522,10 @@ mod tests {
         }
     }
 
-    /// Build a run dir holding one good trial plus the caller's extra dirents,
-    /// each `(name, sentinel)` where a `None` sentinel means "not a trial".
+    /// A run dir holding the valid trial `task-a` plus one more dirent. A `None`
+    /// sentinel makes that dirent a non-trial.
     #[cfg(unix)]
-    fn run_dir_with(tag: &str, extra: &[(&[u8], Option<&str>)]) -> PathBuf {
+    fn run_dir_with(tag: &str, name: &[u8], sentinel: Option<&str>) -> PathBuf {
         use std::os::unix::ffi::OsStringExt;
 
         let base = std::env::temp_dir().join(format!("aoa-{tag}-{}", std::process::id()));
@@ -530,12 +534,10 @@ mod tests {
         std::fs::create_dir_all(&good).unwrap();
         std::fs::write(good.join("scoring.json"), "{}").unwrap();
 
-        for (name, sentinel) in extra {
-            let dir = base.join(std::ffi::OsString::from_vec(name.to_vec()));
-            std::fs::create_dir_all(&dir).unwrap();
-            if let Some(file) = sentinel {
-                std::fs::write(dir.join(file), "{}").unwrap();
-            }
+        let extra = base.join(std::ffi::OsString::from_vec(name.to_vec()));
+        std::fs::create_dir_all(&extra).unwrap();
+        if let Some(file) = sentinel {
+            std::fs::write(extra.join(file), "{}").unwrap();
         }
         base
     }
@@ -548,15 +550,11 @@ mod tests {
         // merely a different error variant. A held-out suite that quietly
         // admits fewer trials than the run produced is the one outcome this
         // walk exists to prevent, and the walk is fail-closed: an unusable name
-        // aborts rather than returning the partial set.
-        //
-        // This also covers the lossy-collision hazard the doc comment describes,
-        // and there is deliberately no separate test for it: the rejection rule
-        // is per-name and unconditional, so two names that both survive it keep
-        // their own bytes and cannot collide. A test that distinguished
-        // "reject because invalid" from "reject to prevent a collision" is
-        // unconstructible once the rule is in place.
-        let base = run_dir_with("nonutf8", &[(b"task-\xffbad", Some("scoring.json"))]);
+        // aborts rather than returning the partial set. This covers the
+        // lossy-collision hazard too: the rule is per-name and unconditional, so
+        // two names that both survive it keep their own bytes and cannot
+        // collide.
+        let base = run_dir_with("nonutf8", b"task-\xffbad", Some("scoring.json"));
 
         let err = discover_tasks(&base).unwrap_err();
         assert!(
@@ -574,7 +572,7 @@ mod tests {
         // it: validating the name before probing the sentinels would turn every
         // stray non-UTF-8 junk dir in an otherwise valid run dir into a hard
         // failure — a behavior change the original never had.
-        let base = run_dir_with("nonutf8-junk", &[(b"junk-\xff", None)]);
+        let base = run_dir_with("nonutf8-junk", b"junk-\xff", None);
 
         assert_eq!(discover_tasks(&base).unwrap(), vec!["task-a".to_string()]);
 
