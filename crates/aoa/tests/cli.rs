@@ -2931,11 +2931,12 @@ fn report_and_audit_agree_on_findings_for_an_indexable_repo() {
     let kinds = |args: &[&str]| -> Vec<String> {
         let output = aoa().args(args).arg(repo.path()).output().expect("run");
         let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
-        let items = match parsed.get("audit") {
-            Some(audit) => audit["items"].as_array().expect("items").clone(),
-            None => parsed["items"].as_array().expect("items").clone(),
-        };
-        items
+        // `audit --json` is the AuditReport itself; `report --json` nests it.
+        match parsed.get("audit") {
+            Some(audit) => audit["items"].as_array(),
+            None => parsed["items"].as_array(),
+        }
+        .expect("items")
             .iter()
             .map(|i| i["kind"].as_str().expect("kind").to_string())
             .collect()
