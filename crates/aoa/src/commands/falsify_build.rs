@@ -292,7 +292,7 @@ fn build_repo(
     // a reused seed or dir reads the same draw twice, so "stable across K runs"
     // would be vacuously true rather than real replication evidence (aoa-g2g5).
     let mut seen_seeds: BTreeSet<u64> = BTreeSet::new();
-    let mut seen_dirs: BTreeSet<&Path> = BTreeSet::new();
+    let mut seen_dirs: BTreeSet<PathBuf> = BTreeSet::new();
     for run in &repo.runs {
         if !seen_seeds.insert(run.seed) {
             bail!(
@@ -302,8 +302,17 @@ fn build_repo(
                 run.seed
             );
         }
-        for dir in [run.repo_arm.as_path(), run.harness_arm.as_path()] {
-            if !seen_dirs.insert(dir) {
+        for dir in [&run.repo_arm, &run.harness_arm] {
+            // Compare RESOLVED directories, not raw manifest spellings: two runs
+            // that name the same physical dir via `.`/`..`/symlink aliases would
+            // otherwise pass this guard and read identical outcomes, restoring the
+            // vacuous replication it exists to reject. The dir is read via
+            // `base_dir.join` below, so resolve the same way; canonicalize needs
+            // the dir to exist, so fall back to the lexical join when it does not
+            // (a missing dir fails loudly later in read_arm).
+            let resolved = base_dir.join(dir);
+            let key = resolved.canonicalize().unwrap_or(resolved);
+            if !seen_dirs.insert(key) {
                 bail!(
                     "repo {}: run directory {} is used by more than one run/arm; each \
                      replication must read a distinct run directory",

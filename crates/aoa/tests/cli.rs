@@ -1246,6 +1246,31 @@ fn experiment_rejects_reused_run_directory() {
     .stderr(predicate::str::contains("used by more than one run/arm"));
 }
 
+// Directory distinctness resolves ./.. (and symlinks): two runs naming the SAME
+// physical dir via different spellings must still be rejected, or distinct seeds
+// could read identical outcomes (vacuous replication). Uses absolute paths into
+// an existing fixture so canonicalize() actually resolves the `..` alias.
+#[test]
+fn experiment_rejects_aliased_run_directory() {
+    let smoke = fixture("experiment_smoke");
+    let smoke = smoke.to_str().unwrap();
+    let manifest = format!(
+        r#"{{
+          "k_runs": 3, "min_holdout_size": 1,
+          "repos": [{{
+            "repo_id": "sample/alias", "confidence": "high", "calibrated": true,
+            "runs": [
+              {{ "seed": 1, "repo_arm": "{smoke}/seed1/repo_arm", "harness_arm": "{smoke}/seed1/harness_arm" }},
+              {{ "seed": 2, "repo_arm": "{smoke}/seed2/../seed1/repo_arm", "harness_arm": "{smoke}/seed2/harness_arm" }},
+              {{ "seed": 3, "repo_arm": "{smoke}/seed3/repo_arm", "harness_arm": "{smoke}/seed3/harness_arm" }}
+            ]
+          }}]
+        }}"#
+    );
+    experiment_manifest_failure(&manifest)
+        .stderr(predicate::str::contains("used by more than one run/arm"));
+}
+
 // The core aoa-g2g5 case: two runs admit the SAME NUMBER of identical pairs but
 // DIFFERENT task identities (run 0/2 admit `alpha`, run 1 admits `beta`). The
 // old min/max-count check passed this (counts all equal 1); the identity check
