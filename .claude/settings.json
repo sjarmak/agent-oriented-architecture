@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "PermissionDenied": [
+      {
+        "hooks": [
+          {
+            "command": "aoa enforce deny",
+            "type": "command"
+          }
+        ],
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit"
+      }
+    ],
     "PostToolUse": [
       {
         "hooks": [
@@ -9,6 +20,26 @@
           }
         ],
         "matcher": "Bash"
+      },
+      {
+        "hooks": [
+          {
+            "command": "aoa enforce commit",
+            "type": "command"
+          }
+        ],
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit"
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "command": "aoa enforce fail",
+            "type": "command"
+          }
+        ],
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit"
       }
     ],
     "PreToolUse": [
