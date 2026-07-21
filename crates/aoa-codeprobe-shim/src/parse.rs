@@ -120,10 +120,19 @@ fn read_capped_bytes(path: &Path, max: u64) -> Result<Vec<u8>, ShimError> {
 
 /// Decode a capped read, reporting invalid UTF-8 through the same [`ShimError`]
 /// variant `read_to_string` would have produced.
+///
+/// Only [`FromUtf8Error::utf8_error`] is carried into the error, never the
+/// `FromUtf8Error` itself: that type owns the whole buffer it failed to decode,
+/// so attaching it would put the file's bytes inside a value whose `Debug` (one
+/// `tracing::error!(?err)` away) prints them. The files reaching here are the
+/// attacker-adjacent ones this module's cap exists for — agent transcripts and
+/// live logs, which carry commands and paths. `read_to_string` discards its
+/// buffer on failure, so retaining it would have been a regression against the
+/// call this replaced. [`std::str::Utf8Error`] is position metadata only.
 fn decode_utf8(raw: Vec<u8>, path: &Path) -> Result<String, ShimError> {
     String::from_utf8(raw).map_err(|err| ShimError::Read {
         path: path.to_path_buf(),
-        source: std::io::Error::new(std::io::ErrorKind::InvalidData, err),
+        source: std::io::Error::new(std::io::ErrorKind::InvalidData, err.utf8_error()),
     })
 }
 
@@ -387,6 +396,50 @@ mod tests {
         assert!(matches!(err, ShimError::TranscriptTooLarge { max: 4, .. }));
         // ...while a cap at exactly the file size is accepted.
         assert_eq!(read_capped(&path, 10).unwrap().len(), 10);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A failed decode must not carry the bytes it failed to decode.
+    ///
+    /// `Debug` is the exposure, not `Display`: `{err}` renders only the position,
+    /// but a `FromUtf8Error` attached as the source owns the entire buffer, and
+    /// `{err:?}` prints it. Asserted against `Debug` on the whole [`ShimError`]
+    /// because that is the value callers hold and log.
+    #[test]
+    fn an_undecodable_file_does_not_carry_its_bytes_into_the_error() {
+        const SECRET: &str = "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI";
+
+        let dir = std::env::temp_dir().join(format!("aoa-shim-utf8-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("transcript.txt");
+        let mut bytes = SECRET.as_bytes().to_vec();
+        bytes.push(0xff); // never valid UTF-8, in any position
+                          // Terminated, so the framed read keeps the bad byte rather than cutting
+                          // it off as an in-flight tail — otherwise that lane would decode an
+                          // empty string and never reach the error path under test.
+        bytes.push(b'\n');
+        std::fs::write(&path, &bytes).unwrap();
+
+        for rendered in [
+            format!("{:?}", read_capped(&path, 1024).unwrap_err()),
+            format!("{:?}", read_capped_framed(&path, 1024).unwrap_err()),
+        ] {
+            assert!(
+                !rendered.contains(SECRET),
+                "error must not carry the file's text: {rendered}"
+            );
+            // The bytes must not survive in numeric form either, which is how a
+            // derived `Debug` on a `Vec<u8>` would render them.
+            assert!(
+                !rendered.contains(&format!("{}", SECRET.as_bytes()[0])),
+                "error must not carry the file's bytes: {rendered}"
+            );
+            assert!(
+                rendered.contains("InvalidData"),
+                "the failure must still be legible: {rendered}"
+            );
+        }
 
         std::fs::remove_dir_all(&dir).ok();
     }
