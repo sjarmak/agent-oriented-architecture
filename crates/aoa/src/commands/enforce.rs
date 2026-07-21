@@ -11,7 +11,9 @@
 //!   pending write, append a `write.blocked` span and exit 2 (the Claude Code
 //!   signal that blocks the tool call), surfacing the reason on stderr. An
 //!   *allowed* write is recorded as a `write.attempt` span carrying its target
-//!   path — intent, not outcome.
+//!   path — intent, not outcome. Checking fails **closed**: a check that cannot
+//!   run at all still exits 2 rather than waving the write through (see
+//!   [`run`]).
 //! - **`commit`** / **`fail`** / **`deny`** (PostToolUse, PostToolUseFailure,
 //!   and PermissionDenied on the mutation tools): append `write.committed`,
 //!   `write.failed`, or `write.denied` respectively.
@@ -74,6 +76,10 @@ use crate::commands::generated::generated_rules;
 /// mutation and must be preceded by a reproduction (`test.run`) span.
 const MUTATION_TOOLS: [&str; 4] = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
 
+/// The exit code Claude Code reads as "deny this tool call"; every other
+/// non-zero exit is only a non-blocking warning.
+const BLOCK_EXIT_CODE: i32 = 2;
+
 /// The Claude Code matcher selecting exactly [`MUTATION_TOOLS`]. Derived from
 /// that list rather than spelled out again, so adding a guarded tool cannot
 /// leave the hooks matching the old set. Every mutation hook AOA installs
@@ -129,21 +135,72 @@ struct HookEvent {
 
 /// Entry point wired into the CLI. Reads the hook payload from stdin and routes
 /// to the record or check path.
+///
+/// `check` fails **closed**: any error reaching this point means the gate could
+/// not evaluate the pending write, and an unevaluated write is denied. Returning
+/// the error instead would exit 1, which the host reads as a non-blocking
+/// warning — so a log it cannot open (a directory or FIFO squatting the path, an
+/// unwritable file, a lock that never frees) would disable R5, R6 and R7 for the
+/// whole session while the tool call sailed through.
+///
+/// Every other subcommand keeps failing open, and that asymmetry is the point:
+/// they report history after the host has already settled the outcome, so there
+/// is nothing left to deny and blocking on a bookkeeping error would fail a call
+/// the gate itself allowed.
+///
+/// The accepted cost: anything that can durably break the live log — a full
+/// disk, a stripped permission, another process holding the lock past
+/// [`LOCK_TIMEOUT`] — now denies every write for the rest of the session instead
+/// of degrading quietly. That is a real availability lever, and it is the one we
+/// want: it takes write access to `.aoa/traces/` under the agent's own user, so
+/// whoever can pull it could already edit the repo directly, and a loud
+/// session-wide stop is recoverable by a human where a silently disabled gate is
+/// not.
 pub fn run(args: &EnforceArgs) -> Result<i32> {
-    let mut raw = String::new();
-    std::io::stdin()
-        .read_to_string(&mut raw)
-        .context("failed to read hook payload from stdin")?;
-    let event: HookEvent = serde_json::from_str(&raw)
-        .context("hook payload was not valid JSON with the expected fields")?;
-
-    match args.command {
+    let outcome = read_event().and_then(|event| match args.command {
         EnforceCommand::Record => run_record(&event),
         EnforceCommand::Check => run_check(&event),
         EnforceCommand::Commit => run_outcome(&event, SpanType::WriteCommitted),
         EnforceCommand::Fail => run_outcome(&event, SpanType::WriteFailed),
         EnforceCommand::Deny => run_outcome(&event, SpanType::WriteDenied),
+    });
+
+    match outcome {
+        Err(err) if denies_on_failure(args.command) => {
+            // The tool name lives in the payload, which may be the thing that
+            // failed to parse, so the message names the gate rather than the
+            // call it is denying.
+            eprintln!("aoa: blocked — the write gate could not evaluate this call: {err:#}");
+            Ok(BLOCK_EXIT_CODE)
+        }
+        outcome => outcome,
     }
+}
+
+/// Whether a failure in this hook must deny the pending tool call.
+///
+/// Spelled out per variant rather than as `Check` plus a default, so a
+/// subcommand added later has to state its posture here. A catch-all would hand
+/// every future hook the fail-open answer by omission — the wrong direction for
+/// anything that gates a write, and the exact defect this function exists to
+/// keep from recurring.
+fn denies_on_failure(command: EnforceCommand) -> bool {
+    match command {
+        EnforceCommand::Check => true,
+        EnforceCommand::Record
+        | EnforceCommand::Commit
+        | EnforceCommand::Fail
+        | EnforceCommand::Deny => false,
+    }
+}
+
+/// Read and parse the hook payload the host writes to stdin.
+fn read_event() -> Result<HookEvent> {
+    let mut raw = String::new();
+    std::io::stdin()
+        .read_to_string(&mut raw)
+        .context("failed to read hook payload from stdin")?;
+    serde_json::from_str(&raw).context("hook payload was not valid JSON with the expected fields")
 }
 
 /// Record the settled outcome of a mutation, one span type per hook event.
@@ -255,7 +312,7 @@ fn block(event: &HookEvent, reason: BlockReason) -> Result<i32> {
     let message = reason.to_string();
     append_span_with(&log, |seq| blocked_span(seq, reason))?;
     eprintln!("aoa: blocked {} — {message}", event.tool_name);
-    Ok(2)
+    Ok(BLOCK_EXIT_CODE)
 }
 
 /// The repo-relative path a write event targets, if any (`file_path` for the
@@ -338,6 +395,43 @@ fn sanitize_session(raw: &str) -> String {
     }
 }
 
+/// Reject anything but a regular file at the live-log path, before either the
+/// read or the append opens it.
+///
+/// This is not belt-and-braces around the open. A FIFO squatting the path makes
+/// `open` *block* until a counterpart appears, so no error is ever produced and
+/// the fail-closed conversion in [`run`] never runs — the hook hangs instead,
+/// and a hook the host eventually abandons is not a denied write. The bounded
+/// lock wait cannot cover this either: it only begins once the open has already
+/// returned. A directory or a device node likewise has no business here.
+///
+/// A missing path stays fine — that is simply a session with no spans yet. A
+/// symlink is not: the gate's own log has no reason to be one, and following it
+/// would hand the decision about what gets written to whatever planted it.
+fn ensure_regular_log(log: &Path) -> Result<()> {
+    let meta = match std::fs::symlink_metadata(log) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(anyhow!(err)).with_context(|| format!("failed to stat {}", log.display()))
+        }
+    };
+    if meta.is_file() {
+        return Ok(());
+    }
+    let kind = if meta.is_dir() {
+        "a directory"
+    } else if meta.file_type().is_symlink() {
+        "a symlink"
+    } else {
+        "a special file (FIFO, socket, or device)"
+    };
+    Err(anyhow!(
+        "the span log {} is {kind}, not a regular file",
+        log.display()
+    ))
+}
+
 /// Read the live log into spans, tolerating a missing file (no reproduction yet)
 /// but failing loud on a corrupt line — a malformed log is a real defect, not
 /// something to silently skip.
@@ -357,6 +451,7 @@ fn read_spans(log: &Path) -> Result<Vec<Span>> {
 /// including that it acquires the lock boundedly, without waiting a full
 /// [`LOCK_TIMEOUT`].
 fn read_spans_within(log: &Path, lock_timeout: Duration) -> Result<Vec<Span>> {
+    ensure_regular_log(log)?;
     let mut file = match File::open(log) {
         Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -447,6 +542,7 @@ fn append_span_within(
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
+    ensure_regular_log(log)?;
     // Bound to a named local, never a temporary: dropping the `File` closes the
     // descriptor and releases the lock, so a temporary would unlock immediately
     // and leave the read-modify-write below unguarded.

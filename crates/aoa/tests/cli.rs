@@ -2195,6 +2195,114 @@ fn enforce_check_blocks_write_without_reproduction() {
         .stderr(predicate::str::contains("blocked Write"));
 }
 
+/// A live log the gate cannot use must DENY the pending write, not let it
+/// through. `run_check` has to read the log before it can decide at all, and
+/// `block` has to append its `write.blocked` span before it can return exit 2,
+/// so any I/O error on that path reaches the gate's own failure handling.
+#[test]
+fn enforce_check_fails_closed_when_the_span_log_is_unusable() {
+    let repo = TempDir::new().unwrap();
+    // A directory squatting the log path is unopenable as a file, standing in
+    // for every other route to the same state (a FIFO, an unwritable file, a
+    // lock that never frees).
+    std::fs::create_dir_all(live_log_path(repo.path())).unwrap();
+
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(hook_payload("Write", None, repo.path()))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("blocked"));
+}
+
+/// A FIFO at the log path is the one squatter that does not simply error: `open`
+/// blocks on it until a counterpart appears, so without an explicit file-type
+/// check the hook hangs rather than failing, never reaches the fail-closed
+/// conversion, and is eventually abandoned by the host — which is the same
+/// permitted write the directory case used to produce.
+///
+/// The timeout is the assertion's teeth: a regression that drops the file-type
+/// check fails here instead of wedging the test binary.
+#[cfg(unix)]
+#[test]
+fn enforce_check_fails_closed_on_a_fifo_span_log() {
+    let repo = TempDir::new().unwrap();
+    let log = live_log_path(repo.path());
+    std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+    let made = std::process::Command::new("mkfifo")
+        .arg(&log)
+        .status()
+        .expect("mkfifo is available");
+    assert!(made.success(), "mkfifo failed");
+
+    aoa_stdin()
+        .timeout(std::time::Duration::from_secs(20))
+        .args(["enforce", "check"])
+        .write_stdin(hook_payload("Write", None, repo.path()))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("blocked"));
+}
+
+/// The posture holds for the policy the gate is enforcing, not just for its log.
+/// A policy it cannot parse is the case that most directly disables R5: the
+/// protected-path check is the first thing `run_check` does with a policy, so an
+/// unreadable one used to leave every protected path writable for the session.
+#[test]
+fn enforce_check_fails_closed_on_a_malformed_policy() {
+    let repo = TempDir::new().unwrap();
+    std::fs::write(repo.path().join("aoa-policy.yaml"), "protected_paths: [\n").unwrap();
+
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(hook_payload("Write", None, repo.path()))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("blocked"));
+}
+
+/// The same posture one step earlier: a payload the gate cannot parse leaves it
+/// unable to evaluate anything, so it denies rather than waving the write past.
+#[test]
+fn enforce_check_fails_closed_on_an_unparseable_payload() {
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin("{not json")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("blocked"));
+}
+
+/// Fail-closed is scoped to the gate. The recording hooks report history and
+/// have no write to deny, so an unusable log surfaces as a plain error (exit 1)
+/// — never exit 2, which would let a bookkeeping failure block an edit the gate
+/// already allowed.
+///
+/// Every recording subcommand is exercised, not just one: they are what the
+/// posture decision in `denies_on_failure` classifies together, so a change that
+/// swept one of them into the deny side would otherwise go unnoticed. The stderr
+/// assertion pins the failure to the unusable log rather than to any path that
+/// happens to return an error.
+#[test]
+fn enforce_recording_hooks_stay_fail_open_when_the_span_log_is_unusable() {
+    for (subcommand, tool, command) in [
+        ("record", "Bash", Some("cargo test --all")),
+        ("commit", "Edit", None),
+        ("fail", "Edit", None),
+        ("deny", "Edit", None),
+    ] {
+        let repo = TempDir::new().unwrap();
+        std::fs::create_dir_all(live_log_path(repo.path())).unwrap();
+
+        aoa_stdin()
+            .args(["enforce", subcommand])
+            .write_stdin(hook_payload(tool, command, repo.path()))
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("live-it-session.jsonl"));
+    }
+}
+
 #[test]
 fn enforce_allows_write_after_a_test_run_is_recorded() {
     let repo = TempDir::new().unwrap();
