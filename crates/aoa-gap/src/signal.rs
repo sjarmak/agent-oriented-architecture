@@ -369,9 +369,22 @@ mod tests {
         assert!(!forged.is_sufficient());
 
         // The impact the precondition exists to prevent: the four locality
-        // metrics must stay InsufficientData under the forged signal.
+        // metrics must stay InsufficientData under the forged signal. Count
+        // the matches first — a filter that stops matching (renamed wire name,
+        // shrunken family) would otherwise leave this loop asserting nothing
+        // and still report green.
         let report = determination_with_signal(&forged);
-        for m in report.metrics.iter().filter(|m| is_behavioral(&m.metric)) {
+        let behavioral: Vec<&MetricClassification> = report
+            .metrics
+            .iter()
+            .filter(|m| is_behavioral(&m.metric))
+            .collect();
+        assert_eq!(
+            behavioral.len(),
+            BEHAVIORAL_METRICS.len(),
+            "the assertions below must not pass vacuously"
+        );
+        for m in behavioral {
             assert_eq!(
                 m.mode,
                 MetricMode::InsufficientData,
