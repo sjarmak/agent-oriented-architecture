@@ -23,7 +23,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use aoa_codeprobe_shim::read_capped;
+use aoa_codeprobe_shim::{read_capped, read_capped_framed};
 use aoa_trace::{validate_trace_value, Trace};
 use serde_json::Value;
 
@@ -149,12 +149,17 @@ fn ingest(
     session_id: String,
     name: &str,
 ) -> Result<ObservedSession, ObserveShimError> {
-    let raw =
-        read_capped(path, MAX_CORPUS_FILE_BYTES).map_err(|source| ObserveShimError::Ingest {
-            path: path.to_path_buf(),
-            source,
-        })?;
     let trace = if name.ends_with(".jsonl") {
+        // The live log is read *framed*: the enforce hooks append to it while an
+        // audit walks the corpus, so its last line can be half written. Framing
+        // is confined to this lane — a whole-trace `.json` file is one JSON
+        // document with no line structure to cut on.
+        let raw = read_capped_framed(path, MAX_CORPUS_FILE_BYTES).map_err(|source| {
+            ObserveShimError::Ingest {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
         parse_live_log(&raw)
             .map_err(|source| ObserveShimError::Ingest {
                 path: path.to_path_buf(),
@@ -162,6 +167,12 @@ fn ingest(
             })?
             .trace
     } else {
+        let raw = read_capped(path, MAX_CORPUS_FILE_BYTES).map_err(|source| {
+            ObserveShimError::Ingest {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
         // Whole-trace `.json` files carry a versioned envelope. Parse it (a
         // malformed file stays a Schema error, as before), then `into_trace`
         // version-checks before unwrapping the spans — this is the codeprobe

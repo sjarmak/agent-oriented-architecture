@@ -321,14 +321,43 @@ fn sanitize_session(raw: &str) -> String {
 /// Read the live log into spans, tolerating a missing file (no reproduction yet)
 /// but failing loud on a corrupt line — a malformed log is a real defect, not
 /// something to silently skip.
+///
+/// Taken under a bounded **shared** lock, so the read never overlaps an in-flight
+/// [`append_span_with`]. Without it a reader could observe a half-written final
+/// line, and both ways of handling that are wrong: parsing it fails the hook on
+/// input that is merely in flight, while skipping it feeds [`reproduction_gate`]
+/// a log missing the very `test.run` being recorded, which blocks the agent's
+/// write for a reason that is not true (aoa-wew0).
 fn read_spans(log: &Path) -> Result<Vec<Span>> {
-    let raw = match std::fs::read_to_string(log) {
-        Ok(contents) => contents,
+    read_spans_within(log, LOCK_TIMEOUT)
+}
+
+/// [`read_spans`], with the lock timeout supplied. Exists for the same reason
+/// [`append_span_within`] does: a test must exercise the real read path,
+/// including that it acquires the lock boundedly, without waiting a full
+/// [`LOCK_TIMEOUT`].
+fn read_spans_within(log: &Path, lock_timeout: Duration) -> Result<Vec<Span>> {
+    let mut file = match File::open(log) {
+        Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(err) => {
             return Err(anyhow!(err)).with_context(|| format!("failed to read {}", log.display()))
         }
     };
+    lock_shared_bounded(&file, log, lock_timeout)?;
+    read_spans_from(&mut file, log)
+}
+
+/// Read an already-open, already-locked log handle into spans, failing loud on
+/// any corrupt line.
+///
+/// Takes the handle rather than the path so the append path can reuse it against
+/// the descriptor it already holds the exclusive lock on, rather than opening a
+/// second descriptor to re-read the same bytes.
+fn read_spans_from(file: &mut File, log: &Path) -> Result<Vec<Span>> {
+    let mut raw = String::new();
+    file.read_to_string(&mut raw)
+        .with_context(|| format!("failed to read {}", log.display()))?;
     raw.lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
@@ -363,17 +392,19 @@ fn append_span(log: &Path, span_type: SpanType, attributes: Map<String, Value>) 
 /// its span before calling would reintroduce exactly that race.
 ///
 /// The lock must be one held per *open file description*, which is what
-/// [`File::try_lock`] gives us. [`read_spans`] opens a **second** descriptor on
-/// the same path via `read_to_string` inside the critical section, and a classic
-/// POSIX record lock (`fcntl(F_SETLK)`) is per-process-per-inode, so closing
-/// that second descriptor would drop the lock mid-update. Modern OFD locks
-/// (`fcntl(F_OFD_SETLK)`) would be equivalent; plain `F_SETLK` would not.
+/// [`File::try_lock`] gives us. Modern OFD locks (`fcntl(F_OFD_SETLK)`) would be
+/// equivalent; a classic POSIX record lock (`fcntl(F_SETLK)`) is
+/// per-process-per-inode and would not be.
 ///
-/// Readers outside this function still take no lock. That is deliberate and
-/// bounded: an advisory lock only binds parties that opt in, so this serializes
-/// writer against writer, which is what produced the corrupt `seq`. A reader
-/// racing an in-flight append can still see a torn final line, which fails loudly
-/// as a parse error rather than corrupting anything (tracked in aoa-wew0).
+/// That per-description property is also why the `seq` count is derived by
+/// reading **this** handle rather than reopening the path: a second descriptor
+/// would be a separate lock holder, and [`read_spans`] takes a shared lock
+/// (aoa-wew0), so counting through it would contend with the exclusive lock this
+/// function already holds and die at [`LOCK_TIMEOUT`].
+///
+/// Readers take a shared lock, so writer-vs-writer and reader-vs-writer are both
+/// serialized here; see [`read_spans`] for why an unlocked read was not merely
+/// noisy but could produce a wrong gate decision.
 fn append_span_with(log: &Path, build: impl FnOnce(u64) -> Span) -> Result<()> {
     append_span_within(log, LOCK_TIMEOUT, build)
 }
@@ -397,14 +428,18 @@ fn append_span_within(
     // Bound to a named local, never a temporary: dropping the `File` closes the
     // descriptor and releases the lock, so a temporary would unlock immediately
     // and leave the read-modify-write below unguarded.
+    //
+    // Opened for reading as well as appending so the `seq` count comes from this
+    // same locked description — see the note on descriptor identity above.
     let mut file = std::fs::OpenOptions::new()
+        .read(true)
         .create(true)
         .append(true)
         .open(log)
         .with_context(|| format!("failed to open {}", log.display()))?;
     lock_exclusive_bounded(&file, log, lock_timeout)?;
 
-    let span = build(read_spans(log)?.len() as u64);
+    let span = build(read_spans_from(&mut file, log)?.len() as u64);
     let mut line = serde_json::to_string(&span).context("failed to serialize span")?;
     line.push('\n');
     file.write_all(line.as_bytes())
@@ -427,9 +462,29 @@ fn append_span_within(
 /// that would trade a visible failure for the corrupt `seq` this lock exists to
 /// prevent.
 fn lock_exclusive_bounded(file: &File, log: &Path, timeout: Duration) -> Result<()> {
+    lock_bounded(file, log, timeout, File::try_lock)
+}
+
+/// [`lock_exclusive_bounded`] for a reader: takes the log's shared lock, so
+/// concurrent readers do not exclude each other but none of them overlaps an
+/// in-flight append. Bounded for the same reason the exclusive acquisition is —
+/// a reader that inherits a wedged writer's stall freezes the session just as
+/// thoroughly as a writer that does.
+fn lock_shared_bounded(file: &File, log: &Path, timeout: Duration) -> Result<()> {
+    lock_bounded(file, log, timeout, File::try_lock_shared)
+}
+
+/// The bounded-acquisition loop both lock modes share; `try_acquire` is the only
+/// difference between them.
+fn lock_bounded(
+    file: &File,
+    log: &Path,
+    timeout: Duration,
+    try_acquire: fn(&File) -> std::result::Result<(), TryLockError>,
+) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
-        match file.try_lock() {
+        match try_acquire(file) {
             Ok(()) => return Ok(()),
             Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
                 std::thread::sleep(LOCK_RETRY_INTERVAL);
@@ -910,13 +965,75 @@ mod tests {
             "must report the timeout, got: {err}"
         );
         // Nothing was written: failing to lock must never fall through to an
-        // unlocked append, which would reintroduce the corrupt seq.
+        // unlocked append, which would reintroduce the corrupt seq. The holder
+        // is released first because the reader takes the same lock (aoa-wew0);
+        // asserting while it is still held would time out instead of inspecting
+        // the file.
+        drop(holder);
         assert!(
             read_spans(&log).unwrap().is_empty(),
             "a failed acquisition must not append"
         );
     }
 
+    /// A reader must never observe a half-written final line.
+    ///
+    /// Claude Code dispatches parallel tool calls, so two hook subprocesses
+    /// genuinely run at once and the R7 gate's read races an append. Before
+    /// aoa-wew0 that read took no lock: it could parse a torn line, which fails
+    /// the hook on input that is merely *in flight*. Tolerating the fragment
+    /// instead would be worse — [`reproduction_gate`] blocks when no `test.run`
+    /// is present, so dropping the very span being written turns a loud error
+    /// into a silent, wrong `ReproductionRequired` block.
+    #[test]
+    fn a_reader_waits_for_an_in_flight_append_instead_of_tearing_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join(".aoa/traces/live-inflight.jsonl");
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+
+        // An appender caught mid-write: holds the exclusive lock, and only part
+        // of its line has reached the file.
+        let mut writer = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log)
+            .unwrap();
+        writer.lock().unwrap();
+        let line = serde_json::to_string(&Span {
+            span_type: SpanType::TestRun,
+            source: SpanSource::Native,
+            seq: 0,
+            attributes: Map::new(),
+        })
+        .unwrap();
+        let (head, tail) = line.split_at(line.len() / 2);
+        writer.write_all(head.as_bytes()).unwrap();
+
+        let timeout = Duration::from_millis(50);
+        let err = read_spans_within(&log, timeout)
+            .expect_err("the reader must refuse the torn state, not parse it");
+        assert!(
+            err.to_string().contains("timed out"),
+            "must report waiting for the writer, got: {err}"
+        );
+
+        // The appender finishes and releases; the committed state reads cleanly.
+        writer.write_all(tail.as_bytes()).unwrap();
+        writer.write_all(b"\n").unwrap();
+        drop(writer);
+
+        let spans = read_spans_within(&log, timeout).expect("committed state reads cleanly");
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].span_type, SpanType::TestRun);
+    }
+
+    /// Also the regression guard for the writer deadlocking against itself.
+    ///
+    /// `read_spans` locks, and [`append_span_within`] derives `seq` by reading
+    /// the log inside its own exclusive critical section. `flock` is held per
+    /// *open file description*, so deriving that count through a second
+    /// descriptor would make every append contend with the lock it already
+    /// holds and die at [`LOCK_TIMEOUT`]. The append below must simply succeed.
     #[test]
     fn append_then_read_round_trips_spans_monotonically() {
         let dir = tempfile::tempdir().unwrap();

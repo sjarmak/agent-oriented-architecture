@@ -37,8 +37,16 @@ impl TraceBackend for ObserveLiveLog {
 /// The log format is owned by AOA's own enforce hooks, so a malformed line is
 /// upstream corruption: it fails loud with [`ShimError::MalformedSpan`] naming
 /// the 1-based line — never skipped, which would under-count the session and
-/// corrupt span ordering. Blank lines are tolerated (a partial final append
-/// leaves one). Warnings are always empty: this format has no lenient lane.
+/// corrupt span ordering. Blank lines are tolerated. Warnings are always empty:
+/// this format has no lenient lane.
+///
+/// Strict over the *whole* string it is given, including the last line. This is
+/// [`TraceBackend::parse`], a pure function over a complete document, so it has
+/// no way to tell a truncated tail from a corrupt one. Callers reading a log that
+/// is still being appended to must hand it only the committed prefix — see
+/// `aoa_codeprobe_shim::read_capped_framed`, which is what the corpus reader
+/// uses. A partial append leaves a JSON *fragment*, not a blank line, so the
+/// blank-line tolerance above is no help against it.
 pub fn parse_live_log(raw: &str) -> Result<ShimResult, ShimError> {
     let spans: Vec<Span> = raw
         .lines()

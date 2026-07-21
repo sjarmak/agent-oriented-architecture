@@ -67,5 +67,7 @@ pub use backend::{
 };
 pub use error::ShimError;
 pub use mapping::bash_runs_tests;
-pub use parse::{parse_transcript, parse_transcript_file, read_capped, ShimResult};
+pub use parse::{
+    parse_transcript, parse_transcript_file, read_capped, read_capped_framed, ShimResult,
+};
 pub use reconstructed::GenericLogBackend;
