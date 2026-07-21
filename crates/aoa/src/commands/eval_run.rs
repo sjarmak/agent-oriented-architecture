@@ -28,6 +28,10 @@
 //!   vacuous.
 //! - **edit-locality** requires ≥2 accepted solutions; with fewer it is reported
 //!   `null` with a reason (`InsufficientAcceptedSolutions`), never invented.
+//! - **a trial whose `scoring.json` carries neither `passed` nor `score`** has
+//!   no held-out signal, so it is reported as a per-trial error and excluded
+//!   from `records` — never counted as a held-out failure, which would bias the
+//!   run's `behavioral_signal` toward pessimism.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -68,18 +72,19 @@ const DEFAULT_K: u32 = 2;
 /// of the same file on purpose; the pass *rule* is shared so they cannot drift.
 #[derive(Debug, Deserialize)]
 struct Scoring {
-    #[serde(default)]
-    score: f64,
+    /// `None` when the field is absent or null — a trial reporting no outcome,
+    /// which is not the same thing as reporting `0.0`.
+    score: Option<f64>,
     /// Present for binary scorers; preferred over the score threshold.
     passed: Option<bool>,
 }
 
 impl Scoring {
-    fn held_out_success(&self) -> bool {
-        // `#[serde(default)]` on `score` makes the no-signal case
-        // indistinguishable from a genuine 0.0, so `leg_pass` never returns
-        // `None` here. Making that absence loud is tracked as aoa-vme7.
-        leg_pass(self.passed, Some(self.score)).unwrap_or(false)
+    /// `None` when the file carries neither outcome field, i.e. no held-out
+    /// signal at all. Kept a pure decoder: the diagnostic is raised at the call
+    /// site, which holds the path.
+    fn held_out_success(&self) -> Option<bool> {
+        leg_pass(self.passed, self.score)
     }
 }
 
@@ -291,7 +296,15 @@ fn process_task(
 
     let scoring_path = scoring_path(&args.codeprobe_run, task_id);
     let scoring: Scoring = load_json_capped(&scoring_path, "scoring")?;
-    let held_out_success = scoring.held_out_success();
+    // No outcome field at all means this trial measured nothing. Reporting it as
+    // a held-out failure would feed a malformed trial into the run's behavioral
+    // signal, so it errors out and is excluded instead (aoa-vme7).
+    let held_out_success = scoring.held_out_success().with_context(|| {
+        format!(
+            "{} carries neither `passed` nor `score`: no held-out signal",
+            scoring_path.display()
+        )
+    })?;
 
     // Oracle: when `--tasks` is given the task dir MUST load (fail loud); without
     // it we proceed oracle-less (empty gold set, no held-out provenance -> gap
@@ -497,6 +510,27 @@ mod tests {
     use super::*;
     use aoa_trace::{Span, SpanSource, SpanType};
     use serde_json::Value;
+
+    fn scoring(json: &str) -> Scoring {
+        serde_json::from_str(json).expect("scoring parses")
+    }
+
+    /// A trial reporting no outcome at all is distinct from one reporting
+    /// failure (aoa-vme7). Only the two real signals may decide a pass; the
+    /// absent case yields `None` so the caller can exclude the trial.
+    #[test]
+    fn held_out_success_separates_no_signal_from_failure() {
+        assert_eq!(scoring(r#"{"reward":0.0}"#).held_out_success(), None);
+        assert_eq!(scoring(r#"{"score":null}"#).held_out_success(), None);
+        assert_eq!(scoring(r#"{"score":0.0}"#).held_out_success(), Some(false));
+        assert_eq!(scoring(r#"{"score":1.0}"#).held_out_success(), Some(true));
+        assert_eq!(scoring(r#"{"passed":true}"#).held_out_success(), Some(true));
+        // An explicit `passed` wins over the score, as on the dual path.
+        assert_eq!(
+            scoring(r#"{"score":1.0,"passed":false}"#).held_out_success(),
+            Some(false)
+        );
+    }
 
     /// `F_edit` must stay non-empty for a transcript whose write succeeded.
     ///

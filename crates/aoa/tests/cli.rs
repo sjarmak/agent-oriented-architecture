@@ -178,6 +178,81 @@ fn eval_run_emits_records_and_fails_loud_per_trial() {
     }
 }
 
+// aoa-vme7: a scoring.json carrying NEITHER `score` nor `passed` is a trial with
+// no held-out signal at all. It must be excluded and reported, not scored as a
+// genuine failure — otherwise a malformed trial silently biases the run's
+// behavioral signal toward pessimism. The trial gets a REAL transcript so the
+// failure can only come from the scoring decode: with a missing agent_output.txt
+// the trace-shim would error first and this test would pass without ever
+// reaching the code it pins.
+#[test]
+fn eval_run_excludes_a_trial_whose_scoring_carries_no_signal() {
+    // Both trials are copies of real fixture trials — same transcripts, same
+    // task ids so both oracles load. The ONLY difference is the no-signal
+    // trial's scoring.json, so nothing else can be what fails.
+    let dir = TempDir::new().expect("tempdir");
+    let run = dir.path().join("run");
+    for id in ["native-consensus-001", "external-filelist-000"] {
+        let trial = run.join(id);
+        std::fs::create_dir_all(&trial).expect("trial dir");
+        std::fs::copy(
+            run_dir().join(id).join("agent_output.txt"),
+            trial.join("agent_output.txt"),
+        )
+        .expect("copy transcript");
+        std::fs::copy(
+            run_dir().join(id).join("scoring.json"),
+            trial.join("scoring.json"),
+        )
+        .expect("copy scoring");
+    }
+    let no_signal = run.join("external-filelist-000");
+    // Well-formed JSON, plausible codeprobe shape — just no outcome field.
+    std::fs::write(
+        no_signal.join("scoring.json"),
+        br#"{"reward":0.0,"status":"completed"}"#,
+    )
+    .expect("write scoring");
+
+    let output = aoa()
+        .args(["eval", "run", "--json", "--codeprobe-run"])
+        .arg(&run)
+        .arg("--tasks")
+        .arg(tasks_dir())
+        .output()
+        .expect("run");
+
+    assert!(
+        !output.status.success(),
+        "a trial with no held-out signal must fail loud"
+    );
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert_eq!(parsed["record_count"], 1, "only the good trial records");
+    assert_eq!(parsed["error_count"], 1);
+    // The harm this pins: the no-signal trial must not reach the run's
+    // behavioral signal as an observation of a real held-out failure.
+    assert_eq!(parsed["behavioral_signal"]["observations"], 1);
+    assert!(
+        parsed["records"]
+            .as_array()
+            .expect("records array")
+            .iter()
+            .all(|r| r["task_id"] == "native-consensus-001"),
+        "the no-signal trial must not produce a record"
+    );
+
+    let errors = parsed["errors"].as_array().expect("errors array");
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0]["task_id"], "external-filelist-000");
+    let message = errors[0]["error"].as_str().expect("error string");
+    for expected in ["scoring.json", "passed", "score"] {
+        assert!(
+            message.contains(expected),
+            "error must name {expected}: {message}"
+        );
+    }
+}
+
 // A trial dir whose NAME is not valid UTF-8 aborts the command instead of being
 // silently skipped. Discovery sits upstream of this command's per-trial
 // isolation, so the whole batch fails — pinned here so a future refactor cannot
