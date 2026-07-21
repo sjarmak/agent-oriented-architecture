@@ -673,6 +673,18 @@ fn add_hook(
 mod tests {
     use super::*;
 
+    /// A span of the given type and sequence, with the fields the lock tests
+    /// never vary. They assert on ordering and on whether a write landed at
+    /// all, so `source` and `attributes` are noise in every one of them.
+    fn span(span_type: SpanType, seq: u64) -> Span {
+        Span {
+            span_type,
+            source: SpanSource::Native,
+            seq,
+            attributes: Map::new(),
+        }
+    }
+
     fn event(tool: &str, command: Option<&str>) -> HookEvent {
         let mut tool_input = Map::new();
         if let Some(c) = command {
@@ -946,12 +958,8 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         let target = log.clone();
         std::thread::spawn(move || {
-            let outcome = append_span_within(&target, timeout, |seq| Span {
-                span_type: SpanType::WriteCommitted,
-                source: SpanSource::Native,
-                seq,
-                attributes: Map::new(),
-            });
+            let outcome =
+                append_span_within(&target, timeout, |seq| span(SpanType::WriteCommitted, seq));
             let _ = tx.send(outcome);
         });
 
@@ -999,13 +1007,7 @@ mod tests {
             .open(&log)
             .unwrap();
         writer.lock().unwrap();
-        let line = serde_json::to_string(&Span {
-            span_type: SpanType::TestRun,
-            source: SpanSource::Native,
-            seq: 0,
-            attributes: Map::new(),
-        })
-        .unwrap();
+        let line = serde_json::to_string(&span(SpanType::TestRun, 0)).unwrap();
         let (head, tail) = line.split_at(line.len() / 2);
         writer.write_all(head.as_bytes()).unwrap();
 
@@ -1047,13 +1049,8 @@ mod tests {
         let log = dir.path().join(".aoa/traces/live-x.jsonl");
         let timeout = Duration::from_millis(50);
         for span_type in [SpanType::TestRun, SpanType::WriteAttempt] {
-            append_span_within(&log, timeout, |seq| Span {
-                span_type,
-                source: SpanSource::Native,
-                seq,
-                attributes: Map::new(),
-            })
-            .expect("an uncontended append must not wait on itself");
+            append_span_within(&log, timeout, |seq| span(span_type, seq))
+                .expect("an uncontended append must not wait on itself");
         }
         let spans = read_spans_within(&log, timeout).unwrap();
         assert_eq!(spans.len(), 2);

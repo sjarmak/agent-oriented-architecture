@@ -149,17 +149,29 @@ fn ingest(
     session_id: String,
     name: &str,
 ) -> Result<ObservedSession, ObserveShimError> {
-    let trace = if name.ends_with(".jsonl") {
-        // The live log is read *framed*: the enforce hooks append to it while an
-        // audit walks the corpus, so its last line can be half written. Framing
-        // is confined to this lane — a whole-trace `.json` file is one JSON
-        // document with no line structure to cut on.
-        let raw = read_capped_framed(path, MAX_CORPUS_FILE_BYTES).map_err(|source| {
-            ObserveShimError::Ingest {
-                path: path.to_path_buf(),
-                source,
-            }
-        })?;
+    let live_log = name.ends_with(".jsonl");
+    // The live log is read *framed*: the enforce hooks append to it while an
+    // audit walks the corpus, so its last line can be half written. Framing is
+    // confined to this lane — a whole-trace `.json` file is one JSON document
+    // with no line structure to cut on.
+    //
+    // Framing rather than the shared lock `aoa enforce` takes on the same log:
+    // an audit is a batch walk with nothing gated on it, so a snapshot that
+    // stops one record short is correct and the next run picks the record up.
+    // Waiting would put a whole-corpus traversal in front of the latency-
+    // sensitive hooks writing that log, to buy a freshness this caller has no
+    // use for.
+    let read = if live_log {
+        read_capped_framed
+    } else {
+        read_capped
+    };
+    let raw = read(path, MAX_CORPUS_FILE_BYTES).map_err(|source| ObserveShimError::Ingest {
+        path: path.to_path_buf(),
+        source,
+    })?;
+
+    let trace = if live_log {
         parse_live_log(&raw)
             .map_err(|source| ObserveShimError::Ingest {
                 path: path.to_path_buf(),
@@ -167,12 +179,6 @@ fn ingest(
             })?
             .trace
     } else {
-        let raw = read_capped(path, MAX_CORPUS_FILE_BYTES).map_err(|source| {
-            ObserveShimError::Ingest {
-                path: path.to_path_buf(),
-                source,
-            }
-        })?;
         // Whole-trace `.json` files carry a versioned envelope. Parse it (a
         // malformed file stays a Schema error, as before), then `into_trace`
         // version-checks before unwrapping the spans — this is the codeprobe
