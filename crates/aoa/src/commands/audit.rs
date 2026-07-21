@@ -8,9 +8,6 @@ use crate::output::{print_human, print_json};
 /// register. The exit code is driven by `--fail-on tier1`. With `--self` the
 /// audit turns on the toolkit itself instead (R14 lint-thyself).
 pub fn run(args: &AuditArgs) -> Result<i32> {
-    // Before the audit, not after: `--self` measures the toolkit's own manifest
-    // and never indexes a repo, so it must not start paying that cost — or
-    // start failing on a repo the indexer cannot see into.
     if args.self_audit {
         return self_audit::run(args);
     }

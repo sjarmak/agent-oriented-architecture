@@ -1811,13 +1811,7 @@ fn audit_reports_insufficient_data_without_observe_captured_signal() {
 // fabricated) cost.
 #[test]
 fn audit_lights_up_behavioral_metrics_once_corpus_is_sufficient() {
-    let repo = TempDir::new().expect("tempdir");
-    seed_live_sessions(repo.path(), MIN_HELD_OUT_OBSERVATIONS);
-    std::fs::write(
-        repo.path().join("app.py"),
-        "def handle(x):\n    return store(x)\n\ndef store(x):\n    return x\n",
-    )
-    .expect("write indexable source");
+    let repo = seeded_indexable_repo();
 
     let output = aoa()
         .args(["audit", "--json", "--repo"])
@@ -3169,14 +3163,21 @@ fn report_and_recommend_agree_on_recommendations() {
             .any(|m| m["mode"] == "insufficient_data")
     };
 
-    assert!(
-        has_mutation_surface(&indexable_view) && !has_mutation_surface(&greenfield_view),
-        "precondition: only the indexable fixture measures a real symbol graph"
-    );
-    assert!(
-        has_insufficient_data(&greenfield_view) && !has_insufficient_data(&indexable_view),
-        "precondition: only the greenfield fixture leaves metrics in insufficient_data"
-    );
+    for (name, view, graph, insufficient) in [
+        ("greenfield", &greenfield_view, false, true),
+        ("indexable", &indexable_view, true, false),
+    ] {
+        assert_eq!(
+            has_mutation_surface(view),
+            graph,
+            "precondition: only the indexable fixture measures a real symbol graph ({name})"
+        );
+        assert_eq!(
+            has_insufficient_data(view),
+            insufficient,
+            "precondition: only the greenfield fixture leaves metrics in insufficient_data ({name})"
+        );
+    }
 }
 
 // aoa-ghwi: the third leg of the same agreement — the three commands must fail
@@ -3198,19 +3199,12 @@ fn audit_recommend_and_report_all_fail_on_an_unreadable_repo() {
     .expect("write non-utf8 source");
 
     for command in ["audit", "recommend", "report"] {
-        let output = aoa()
+        aoa()
             .args([command, "--repo"])
             .arg(repo.path())
-            .output()
-            .expect("run");
-        assert!(
-            !output.status.success(),
-            "`aoa {command}` must not report on a repo it could not index"
-        );
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains("failed to index"),
-            "`aoa {command}` must name the index failure as the cause"
-        );
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("failed to index"));
     }
 }
 

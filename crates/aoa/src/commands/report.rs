@@ -85,7 +85,7 @@ struct ReadinessView {
 pub fn run(args: &ReportArgs) -> Result<i32> {
     // The same chain `aoa recommend` runs, from the same seam: `report` ships
     // both halves in one document, so any step it computed for itself could
-    // drift from the surface it claims to agree with (aoa-d6t.35, aoa-d6t.41).
+    // drift from the surface it claims to agree with. See `commands::pipeline`.
     let Readiness {
         audit,
         determination,
