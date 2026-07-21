@@ -35,6 +35,28 @@ use aoa_recommend::RecommendationReport;
 /// Private on purpose. Exposing it would leave the fork one copy-paste away:
 /// pairing it with a hand-written `aoa_audit::audit` call is exactly the
 /// five-line duplication `audited` exists to absorb.
+///
+/// An index failure is FATAL here, deliberately, and uniformly for all three
+/// commands. `aoa_scip_graph::build_symbol_graph` offers the other policy —
+/// degrade to an empty graph, keep `degrade_reason`, never abort — and that is
+/// right for the scoring path it was built for, where one broken repo should
+/// lose its R0 vote rather than sink the run. It is wrong here. These commands
+/// answer a go/no-go question about a single repo, and an empty graph makes the
+/// audit withhold the mutation-surface item; degrading would print a clean
+/// punch-list for a repo nobody managed to read. That is the same "exits 0 and
+/// under-reports" failure this seam exists to prevent, arrived at from the
+/// other direction. An operator whose repo cannot be indexed needs to be told,
+/// not handed a shorter list.
+///
+/// The seam is what makes the choice honest: it holds for `audit`, `recommend`,
+/// and `report` at once. Applying it to one command alone is how aoa-d6t.35 and
+/// aoa-d6t.41 both shipped.
+///
+/// Known tension, not resolved here: `aoa-audit` reads source as raw bytes for
+/// its structural scan, so a non-UTF-8 `.py` file is survivable there while the
+/// SCIP indexer treats it as fatal. The two halves of the same audit disagree
+/// about that file. Worth reconciling in the indexer, where the asymmetry
+/// lives — not by splitting the policy back across the callers.
 fn repo_audit_config(repo: &Path) -> Result<aoa_audit::AuditConfig> {
     let indexed = aoa_scip_graph::index_best_effort(repo)
         .with_context(|| format!("failed to index {}", repo.display()))?;

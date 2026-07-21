@@ -3179,6 +3179,41 @@ fn report_and_recommend_agree_on_recommendations() {
     );
 }
 
+// aoa-ghwi: the third leg of the same agreement — the three commands must fail
+// the same way, not just succeed the same way. A repo the indexer cannot read is
+// fatal for all of them (the policy is argued at `pipeline::repo_audit_config`),
+// and before the seam existed `report` alone exited 0 here, printing a punch-list
+// that silently omitted every graph-derived item. Degrading in one command and
+// not the others is how aoa-d6t.35 and aoa-d6t.41 both shipped, so the guard is
+// agreement rather than any particular exit code.
+#[test]
+fn audit_recommend_and_report_all_fail_on_an_unreadable_repo() {
+    let repo = TempDir::new().expect("tempdir");
+    // Invalid UTF-8 in a `.py` file: the SCIP indexer insists on UTF-8, so this
+    // is the cheapest repo it genuinely cannot read.
+    std::fs::write(
+        repo.path().join("app.py"),
+        b"def f():\n    x = \"\xff\xfe\"\n",
+    )
+    .expect("write non-utf8 source");
+
+    for command in ["audit", "recommend", "report"] {
+        let output = aoa()
+            .args([command, "--repo"])
+            .arg(repo.path())
+            .output()
+            .expect("run");
+        assert!(
+            !output.status.success(),
+            "`aoa {command}` must not report on a repo it could not index"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("failed to index"),
+            "`aoa {command}` must name the index failure as the cause"
+        );
+    }
+}
+
 #[test]
 fn report_proceed_verdict_marks_the_migrate_pillar_live() {
     let repo = TempDir::new().expect("tempdir");
