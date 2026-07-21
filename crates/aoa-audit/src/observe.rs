@@ -54,22 +54,20 @@ fn validate_trace_name(name: &str) -> Result<(), AuditError> {
     }
 }
 
-/// Refuse a single install-path node that already exists as a symlink.
+/// Is `node` a symlink, without following it? The single spelling of that
+/// question in this module — every symlink guard below goes through here.
 ///
-/// Spelled with `symlink_metadata` rather than [`Path::is_symlink`] on purpose:
-/// that helper folds *every* lstat failure into `false`, so a guard built on it
-/// fails OPEN on `EACCES`/`ENOTDIR`/`ELOOP`. Nothing is currently exploitable
-/// through that gap — the `create_dir_all`/`fs::write` that follows hits the same
-/// condition and errors — but a security check whose fallthrough is invisible is
-/// one refactor away from being a real hole. Here, only `NotFound` means
-/// "absent, safe to create"; any other error surfaces as [`AuditError::Io`].
-fn reject_symlink(node: &Path) -> Result<(), AuditError> {
+/// Deliberately not [`Path::is_symlink`]: that helper folds *every* lstat
+/// failure into `false`, so a guard built on it fails OPEN on
+/// `EACCES`/`ENOTDIR`/`ELOOP`. Nothing is currently exploitable through that gap
+/// — the `create_dir_all`/`fs::write` that follows hits the same condition and
+/// errors — but a security check whose fallthrough is invisible is one refactor
+/// away from being a real hole. Here, only `NotFound` means "absent, safe to
+/// create"; any other error surfaces as [`AuditError::Io`].
+fn is_symlink_nofollow(node: &Path) -> Result<bool, AuditError> {
     match std::fs::symlink_metadata(node) {
-        Ok(meta) if meta.file_type().is_symlink() => Err(AuditError::UnsafeInstallPath {
-            path: node.to_path_buf(),
-        }),
-        Ok(_) => Ok(()),
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(meta) => Ok(meta.file_type().is_symlink()),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(source) => Err(AuditError::Io {
             path: node.to_path_buf(),
             source,
@@ -77,13 +75,21 @@ fn reject_symlink(node: &Path) -> Result<(), AuditError> {
     }
 }
 
+/// Refuse a single install-path node that already exists as a symlink.
+fn reject_symlink(node: &Path) -> Result<(), AuditError> {
+    if is_symlink_nofollow(node)? {
+        return Err(AuditError::UnsafeInstallPath {
+            path: node.to_path_buf(),
+        });
+    }
+    Ok(())
+}
+
 /// Refuse when any node of the installed `.aoa/traces` path already exists as a
 /// symlink.
 ///
-/// This is the install-path half of the containment invariant. `create_dir_all`
-/// and `fs::write` both FOLLOW symlinks, so a `.aoa` or `.aoa/traces` planted as
-/// a link relocates every subsequent write outside the repo while each trace
-/// name still passes [`validate_trace_name`] as a legal single component.
+/// The install-path half of the containment invariant; see
+/// [`AuditError::UnsafeInstallPath`] for what it defends against.
 ///
 /// `Path::ancestors` yields `.aoa/traces` then `.aoa` then the repo root, so
 /// taking as many as `TRACES_SUBDIR` has components covers exactly the nodes
@@ -153,9 +159,12 @@ pub fn write_trace(
 ) -> Result<(PathBuf, TraceReport), AuditError> {
     let path = outcome.trace_path(name)?;
 
-    // Serialize BEFORE the symlink checks, not between them and the write. The
-    // guard is check-then-act either way (see `reject_symlinked_install_path`),
-    // but interposing this work would stretch the race window by however long
+    // Encode through the versioned envelope so the file carries the wire-format
+    // version and survives the read-side version check below.
+    //
+    // Done BEFORE the symlink checks, not between them and the write. The guard
+    // is check-then-act either way (see `reject_symlinked_install_path`), but
+    // interposing this work would stretch the race window by however long
     // encoding takes. Keep the checks adjacent to the `fs::write` they protect.
     let json = aoa_trace::to_envelope_json_pretty(trace).map_err(|source| AuditError::Io {
         path: path.clone(),
@@ -174,7 +183,7 @@ pub fn write_trace(
     // follows symlinks, so writing through one would clobber whatever it targets.
     // Reported as an unsafe NAME, not an unsafe install path: the offending node
     // is the caller's `name`, and callers already handle that variant.
-    if path.is_symlink() {
+    if is_symlink_nofollow(&path)? {
         return Err(AuditError::UnsafeTraceName {
             name: name.to_string(),
         });
