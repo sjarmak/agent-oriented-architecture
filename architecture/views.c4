@@ -90,8 +90,8 @@ views {
     aoa.substrate.codeprobeShim -> codeprobe 'parses the claude -p stream-json transcript'
     aoa.substrate.codeprobeShim -> aoa.substrate.trace 'normalizes into the native trace'
     aoa.substrate.metrics -> aoa.substrate.trace 'scores retrieval / edit locality, invariant discoverability, mutation surface'
-    aoa.measure.gap -> aoa.substrate.metrics 'checks for reward-hacking and construct-validity failure'
-    aoa.measure.recommend -> aoa.measure.gap 'joins construct-validity mode into the recommendation'
+    aoa.measure.gap -> aoa.substrate.metrics 'checks for reward-hacking'
+    aoa.measure.recommend -> aoa.measure.construct 'joins construct-validity mode into the recommendation'
   }
 
   // Flow 3 — the falsification gate deciding whether migrate can be trusted.

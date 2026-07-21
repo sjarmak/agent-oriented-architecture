@@ -116,8 +116,18 @@ model {
       }
       gap = component 'aoa-gap' {
         #built
-        description 'Reward-hacking gap (R9), held-out integrity canary (R0b), construct-validity gating (R9c) — guards against a metric that games itself'
+        description 'Reward-hacking gap (R9) and held-out integrity canary (R0b) — the visible-vs-hidden success gap and its leakage guard'
         link ../crates/aoa-gap 'crates/aoa-gap/'
+      }
+      construct = component 'aoa-construct' {
+        #built
+        description 'Metric-trust determination (R9c): which metrics may gate, and the behavioral-signal precondition'
+        link ../crates/aoa-construct 'crates/aoa-construct/'
+      }
+      corpus = component 'aoa-corpus' {
+        #built
+        description 'External-outcome corpus: revert mining, the Factory checkbox baseline, and rank correlation'
+        link ../crates/aoa-corpus 'crates/aoa-corpus/'
       }
       recommend = component 'aoa-recommend' {
         #built
@@ -185,9 +195,10 @@ model {
   aoa.measure.audit -> repoUnderTest 'installs zero-write telemetry (observe)'
   aoa.measure.lint -> aoa.measure.budget 'composes config-smell detection with the context-budget closure'
   aoa.measure.budget -> repoUnderTest 'reads the transitive closure of context files'
-  aoa.measure.gap -> aoa.substrate.metrics 'checks for reward-hacking and construct-validity failures in the scored metrics'
+  aoa.measure.gap -> aoa.substrate.metrics 'checks for reward-hacking in the scored metrics'
+  aoa.measure.corpus -> aoa.measure.construct 'correlates mined external outcomes against the gating candidates'
   aoa.measure.recommend -> aoa.measure.audit 'joins audit findings'
-  aoa.measure.recommend -> aoa.measure.gap 'joins construct-validity mode'
+  aoa.measure.recommend -> aoa.measure.construct 'joins construct-validity mode'
   aoa.measure.recommend -> aoa.migrate.migrator 'joins migration availability per finding'
 
   // Trust gates.

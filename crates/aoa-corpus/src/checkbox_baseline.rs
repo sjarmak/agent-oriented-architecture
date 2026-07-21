@@ -32,7 +32,7 @@
 //! # Deliberately NOT a gating candidate
 //!
 //! The checkbox level is a *study baseline*, not a candidate metric: it is kept
-//! out of `GATING_CANDIDATES` (src/construct.rs) on purpose. Promoting it there
+//! out of `aoa_construct::GATING_CANDIDATES` on purpose. Promoting it there
 //! would let a checkbox score gate decisions, which is exactly the practice the
 //! study interrogates.
 //!
