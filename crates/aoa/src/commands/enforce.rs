@@ -1033,14 +1033,29 @@ mod tests {
     /// the log inside its own exclusive critical section. `flock` is held per
     /// *open file description*, so deriving that count through a second
     /// descriptor would make every append contend with the lock it already
-    /// holds and die at [`LOCK_TIMEOUT`]. The append below must simply succeed.
+    /// holds and die at [`LOCK_TIMEOUT`]. The appends below must simply succeed.
+    ///
+    /// Driven through the bounded variants so that regression fails in
+    /// milliseconds rather than after the full production timeout — a guard that
+    /// takes 5s per append to report is one people stop running. The unbounded
+    /// [`append_span`] and [`read_spans`] wrappers are covered by
+    /// `concurrent_appends_assign_distinct_sequence_numbers` and
+    /// `read_spans_missing_file_is_empty_not_error`.
     #[test]
     fn append_then_read_round_trips_spans_monotonically() {
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join(".aoa/traces/live-x.jsonl");
-        append_span(&log, SpanType::TestRun, Map::new()).unwrap();
-        append_span(&log, SpanType::WriteAttempt, Map::new()).unwrap();
-        let spans = read_spans(&log).unwrap();
+        let timeout = Duration::from_millis(50);
+        for span_type in [SpanType::TestRun, SpanType::WriteAttempt] {
+            append_span_within(&log, timeout, |seq| Span {
+                span_type,
+                source: SpanSource::Native,
+                seq,
+                attributes: Map::new(),
+            })
+            .expect("an uncontended append must not wait on itself");
+        }
+        let spans = read_spans_within(&log, timeout).unwrap();
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].seq, 0);
         assert_eq!(spans[1].seq, 1);

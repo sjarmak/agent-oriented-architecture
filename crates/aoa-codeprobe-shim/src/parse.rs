@@ -96,6 +96,10 @@ pub fn read_capped_framed(path: &Path, max: u64) -> Result<String, ShimError> {
 /// Yields bytes rather than a `String` so the framed variant can cut the tail
 /// before decoding. The cap therefore applies to what was read from disk, ahead
 /// of any framing: it exists to bound the memory held, not the result returned.
+///
+/// Checking the size before decoding also fixes the precedence for a file that
+/// is both over the cap and undecodable: it reports the cap. The size is the
+/// resource fact and the actionable one.
 fn read_capped_bytes(path: &Path, max: u64) -> Result<Vec<u8>, ShimError> {
     let file = std::fs::File::open(path).map_err(|source| ShimError::Read {
         path: path.to_path_buf(),
@@ -396,6 +400,17 @@ mod tests {
         assert!(matches!(err, ShimError::TranscriptTooLarge { max: 4, .. }));
         // ...while a cap at exactly the file size is accepted.
         assert_eq!(read_capped(&path, 10).unwrap().len(), 10);
+
+        // A file that is both over the cap AND undecodable reports the cap. The
+        // size is the resource fact and the actionable one; whether the excess
+        // bytes would have decoded is a question about input nobody should be
+        // holding in memory. This precedence is a property of the read/decode
+        // split, so it is pinned rather than left to the order of two `?`s.
+        std::fs::write(&path, [0xff_u8; 10]).unwrap();
+        assert!(matches!(
+            read_capped(&path, 4).unwrap_err(),
+            ShimError::TranscriptTooLarge { max: 4, .. }
+        ));
 
         std::fs::remove_dir_all(&dir).ok();
     }
