@@ -81,8 +81,9 @@ fn validate_trace_version_error_names_the_file_once() {
 
 /// The same convention one seam over, now covering every command that loads JSON
 /// through `load_json_capped` (aoa-empz). `eval compare` is the representative
-/// caller. The file class must survive: `label` is all the helper adds over a bare
-/// `read_to_string_capped`.
+/// caller. This has to stay a CLI test: the doubled path shows up only under the
+/// `{err:#}` chain rendering `main` uses, which a `to_string()` unit test on the
+/// helper would never see.
 #[test]
 fn missing_run_file_error_names_the_path_once() {
     let missing = "/nonexistent/aoa-empz-baseline.json";
