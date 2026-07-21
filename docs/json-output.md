@@ -24,7 +24,7 @@ removed without a major version note. Field types are given as JSON types.
 |---|---|---|
 | `aoa audit --json` | `items` (array of punch items: `title`, `kind`, `tier`, `measured_cost`, `plane`) | `aoa_audit::AuditReport` |
 | `aoa recommend --json` | `items` (array: finding + fix + mode join), `actionable_now` (number), `advisory_only` (number) | `aoa_recommend::RecommendationReport` |
-| `aoa gap --json` | `data_source` (string), `thresholds` (object), `metrics` (array of per-metric classifications) | `aoa_gap::ConstructValidityReport` |
+| `aoa gap --json` | `data_source` (string), `thresholds` (object), `metrics` (array of per-metric classifications) | `aoa_construct::ConstructValidityReport` |
 | `aoa migrate --json` | dry-run: `grounding_navigability_sites`, `fix_ids`, `changes`, `eligibility_notes`, `provenance`; `--apply`: `fixes_applied`, `files_written`, `navigability_sites_remaining`, `manifest_path`, `eligibility_notes`, `provenance`; `--rollback`: `files_reverted` | `MigrateView` in `crates/aoa/src/commands/migrate.rs` |
 | `aoa lint-context --json` | `findings` (array: `file`, `category`, `message`), `suppressed` (array: `file`, `reason`) | `LintView` in `crates/aoa/src/commands/lint.rs` |
 | `aoa falsify --json` | the `falsification.json` document: `verdict`, `precondition_unmet?`, `repo_delta?`, `harness_delta?`, `eligible_repos?`, `excluded_repos?`, `conventions_tried?`, `notes`, `bias_warnings?`, `bias_gate_invalidating` | `FalsificationOutput` in `crates/aoa/src/commands/falsify.rs` |

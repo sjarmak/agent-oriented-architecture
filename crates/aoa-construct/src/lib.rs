@@ -9,8 +9,8 @@
 //!
 //! This crate holds the classification rules and the behavioral signal that
 //! qualifies a determination when held-out observations are too few. It depends
-//! on nothing: mining the outcomes that could confirm a correlation is the job of
-//! `aoa-corpus`, which depends on this crate rather than the reverse.
+//! on no other AOA crate: mining the outcomes that could confirm a correlation is
+//! the job of `aoa-corpus`, which depends on this crate rather than the reverse.
 
 mod construct;
 mod signal;

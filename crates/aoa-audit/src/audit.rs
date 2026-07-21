@@ -31,7 +31,8 @@ const DEFAULT_MUTATION_K: u32 = 2;
 /// times the repo's *own* median source-file line count is counted as an
 /// outlier. Self-calibrating against the repo's distribution rather than an
 /// absolute size, so it asserts no external best-practice. Overridable per run,
-/// mirroring the inspectable-defaults discipline of `aoa-gap`'s thresholds.
+/// mirroring the inspectable-defaults discipline of `aoa-construct`'s gating
+/// thresholds.
 const DEFAULT_SIZE_OUTLIER_K: f64 = 4.0;
 
 /// Configuration for a read-only audit run. Every field is data the caller

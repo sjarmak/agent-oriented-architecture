@@ -30,7 +30,8 @@
 //! ([`join`]), set-membership against the live fix registry, dictionary lookup of
 //! the metric mode, and a boolean actionability predicate. No semantic scoring,
 //! no hardcoded thresholds — the gating decision is delegated wholly to
-//! `aoa-gap`. `recommend` reads only a metric's *mode*, never its orientation.
+//! `aoa-construct`. `recommend` reads only a metric's *mode*, never its
+//! orientation.
 
 use std::fmt::Write as _;
 

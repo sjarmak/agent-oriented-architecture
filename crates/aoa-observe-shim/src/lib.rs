@@ -18,7 +18,7 @@
 //! A session counts as one held-out behavioral observation only when it
 //! carries a landed edit ([`held_out_edits`]); edit-free sessions accumulate
 //! but supply no signal. The observation count feeds the greenfield/cold-start
-//! precondition (`aoa_gap::BehavioralSignal`): below the behavioral-signal
+//! precondition (`aoa_construct::BehavioralSignal`): below the behavioral-signal
 //! window the behavioral metrics report insufficient-data; once enough
 //! edit-carrying sessions accumulate they light up.
 //!

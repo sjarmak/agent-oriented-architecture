@@ -106,7 +106,9 @@ The workspace is split so each crate owns one responsibility.
 | `aoa-scip-graph` | Indexes a repo into a symbol graph (SCIP, with an AST fallback) and labels its confidence. |
 | `aoa-budget` | The context-budget check: transitive closure of context files, real tokenizer, ceiling. |
 | `aoa-lint` | Config-file smell detectors composed with the budget closure. |
-| `aoa-gap` | The visible-vs-hidden success gap, its leakage guard, and the metric-trust determination. |
+| `aoa-gap` | The visible-vs-hidden success gap and its leakage guard. |
+| `aoa-construct` | The metric-trust determination (R9c): which metrics may gate, and the behavioral-signal precondition. |
+| `aoa-corpus` | The external-outcome corpus: revert mining, the Factory checkbox baseline, and rank correlation. |
 | `aoa-falsify` | The deciding repo-vs-harness experiment and its robustness checks. |
 | `aoa-audit` | The zero-write telemetry install and the read-only audit. |
 | `aoa-migrate` | Reversible, code-layer migrations with dry-run preview and rollback. |

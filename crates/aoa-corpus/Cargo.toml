@@ -7,9 +7,8 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-# The corpus joins mined outcomes onto the construct-validity report, so it
-# depends on aoa-construct. The dependency is one-directional: aoa-construct
-# knows nothing about corpora.
+# One-directional: the corpus joins mined outcomes onto the construct-validity
+# report; aoa-construct knows nothing about corpora.
 aoa-construct = { path = "../aoa-construct" }
 serde = { workspace = true }
 thiserror = { workspace = true }

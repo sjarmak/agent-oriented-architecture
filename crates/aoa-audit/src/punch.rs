@@ -83,7 +83,7 @@ impl FindingKind {
     /// include/exclude policy, so a rename lands in one place. The typed
     /// [`MetricName`] return makes a misspelled or unknown metric name a
     /// compile error — what the old stringly-typed drift guard asserted at
-    /// runtime across the crate boundary (`aoa-gap` sits below `aoa-audit` and
+    /// runtime across the crate boundary (`aoa-construct` sits below `aoa-audit` and
     /// cannot key on `FindingKind`, so the association lives here). The one
     /// residue the type cannot carry — the named variant being listed in
     /// `MetricName::ALL`, hence in the derived `GATING_CANDIDATES` — is

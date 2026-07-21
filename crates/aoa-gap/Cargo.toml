@@ -1,6 +1,6 @@
 [package]
 name = "aoa-gap"
-description = "Reward-hacking gap (R9), held-out integrity canary (R0b), and construct validity gating (R9c) for the AOA Toolkit"
+description = "Reward-hacking gap (R9) and held-out integrity canary (R0b) for the AOA Toolkit"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,10 +8,4 @@ license.workspace = true
 
 [dependencies]
 serde = { workspace = true }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
-
-[dev-dependencies]
-# tempfile: checkbox_baseline fixture tests build synthetic repo trees in
-# tempdirs to exercise Factory-level boundaries (same pin as aoa-audit).
-tempfile = "3.10.1"

@@ -9,10 +9,10 @@
 //! Every check here is born [`Tier::Tier3`] (asserted-but-unsupported). A
 //! structure measure is a *fact*, not an evidence-backed best-practice: it does
 //! not become gating until external-outcome correlation (revert / incident /
-//! review-acceptance, the R9c discipline in `aoa-gap`) promotes it. We therefore
-//! report only neutral, measured counts — never an opinion-bearing "deficiency"
-//! — so the audit *verifies* a pre-registered spec rather than *defining* one
-//! (anti-Goodhart; see `docs/r0_runbook.md`).
+//! review-acceptance, the R9c discipline in `aoa-construct`) promotes it. We
+//! therefore report only neutral, measured counts — never an opinion-bearing
+//! "deficiency" — so the audit *verifies* a pre-registered spec rather than
+//! *defining* one (anti-Goodhart; see `docs/r0_runbook.md`).
 //!
 //! # Factory agent-readiness pillar disposition (aoa-d6t.24)
 //!

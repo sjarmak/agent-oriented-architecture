@@ -66,7 +66,7 @@ impl TraceCorpus {
     /// whose trace carries at least one landed edit ([`held_out_edits`]).
     ///
     /// The count feeds the greenfield/cold-start precondition
-    /// (`aoa_gap::BehavioralSignal`), which measures *available signal*, not
+    /// (`aoa_construct::BehavioralSignal`), which measures *available signal*, not
     /// session-file count: a session with no `write.committed` span (or an
     /// empty file) parses and accumulates on [`TraceCorpus::sessions`], but
     /// holds nothing out and must not satisfy the window (aoa-d6t.23). A
