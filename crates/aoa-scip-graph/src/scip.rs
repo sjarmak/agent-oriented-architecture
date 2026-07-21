@@ -140,12 +140,10 @@ mod tests {
         );
     }
 
-    /// The tolerance documented on `ScipIndex` is a decision, so it is pinned
-    /// here rather than only asserted in prose: a real SCIP export carries
-    /// top-level keys this subset ignores (`metadata`, `external_symbols`), and
-    /// adding `deny_unknown_fields` would reject every one of them. Fails the
-    /// day someone "hardens" this struct; the operator-authored extension keys
-    /// are the part that wants strictness, and that split is aoa-t49j.
+    /// Pins the unknown-field tolerance documented on `ScipIndex`, so the
+    /// decision fails CI rather than only asserting itself in prose. Covers
+    /// only the tool-emitted half, so aoa-t49j's strict-extension split — the
+    /// part that *wants* rejection — lands without touching this test.
     #[test]
     fn scip_index_tolerates_unknown_tool_emitted_fields() {
         let dir = std::env::temp_dir().join(format!("aoa-scip-tolerant-{}", std::process::id()));

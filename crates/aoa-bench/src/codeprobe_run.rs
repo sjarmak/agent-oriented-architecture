@@ -56,6 +56,10 @@ pub fn leg_pass(passed: Option<bool>, score: Option<f64>) -> Option<bool> {
 ///
 /// Shared by `eval r0b` (run-level leakage) and `eval experiment` (R0 paired-arm
 /// build) so the two cannot drift on what a clean dual result is.
+///
+/// Being a declared subset, it must tolerate unknown fields: `deny_unknown_fields`
+/// would reject every real file, whose `details` merge leaves further keys at the
+/// top level. `dual_scoring_tolerates_unknown_codeprobe_fields` pins that.
 #[derive(Debug, Deserialize)]
 pub struct DualScoring {
     /// The trial this was read from. Not part of codeprobe's wire shape — it is
@@ -310,11 +314,8 @@ pub fn aggregate_provenance(
 mod tests {
     use super::*;
 
-    /// `DualScoring` is a declared SUBSET of codeprobe's flattened
-    /// `scoring.json` (see its doc), so tolerating unknown fields is the
-    /// decision, not an oversight: `deny_unknown_fields` would reject every
-    /// real file, whose dual-verifier `details` merge leaves further keys at
-    /// the top level. This pins that decision mechanically.
+    /// Pins the unknown-field tolerance documented on `DualScoring`, so the
+    /// decision fails CI rather than only asserting itself in prose.
     #[test]
     fn dual_scoring_tolerates_unknown_codeprobe_fields() {
         let scoring: DualScoring = serde_json::from_str(

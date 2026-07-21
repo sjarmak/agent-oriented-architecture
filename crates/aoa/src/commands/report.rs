@@ -230,10 +230,8 @@ fn render_falsification(falsification: &FalsificationView) -> String {
 mod tests {
     use super::*;
 
-    /// The tolerance documented on `FalsificationSlice` is a decision, so it is
-    /// pinned here rather than only asserted in prose: a real `falsification.json`
-    /// carries the rest of `FalsificationOutput` beside the two fields this slice
-    /// reads, and `deny_unknown_fields` would reject every one of them.
+    /// Pins the unknown-field tolerance documented on `FalsificationSlice`, so
+    /// the decision fails CI rather than only asserting itself in prose.
     #[test]
     fn falsification_slice_tolerates_the_rest_of_the_report() {
         let slice: FalsificationSlice = serde_json::from_str(

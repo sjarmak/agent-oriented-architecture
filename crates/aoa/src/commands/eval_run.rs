@@ -64,6 +64,10 @@ const DEFAULT_K: u32 = 2;
 /// `eval run` accepts any codeprobe scorer and reads the top-level composite
 /// (see the module doc on `visible_unobserved`). The two decode different fields
 /// of the same file on purpose; the pass *rule* is shared so they cannot drift.
+///
+/// Being a declared subset, it must tolerate unknown fields: `deny_unknown_fields`
+/// would reject every real codeprobe file. `scoring_tolerates_unknown_codeprobe_fields`
+/// pins that. Orthogonal to the known-bad `#[serde(default)]` on `score` (aoa-vme7).
 #[derive(Debug, Deserialize)]
 struct Scoring {
     #[serde(default)]
@@ -496,14 +500,8 @@ mod tests {
     use aoa_trace::{Span, SpanSource, SpanType};
     use serde_json::Value;
 
-    /// `Scoring` is a declared SUBSET of codeprobe's `scoring.json` (see its
-    /// doc), so tolerating unknown fields is the decision, not an oversight:
-    /// `deny_unknown_fields` here would reject every real codeprobe file. This
-    /// pins that decision mechanically — a comment does not fail CI.
-    ///
-    /// Scope: the UNKNOWN-FIELD tolerance is deliberate. The `#[serde(default)]`
-    /// on `score` is a separate, known-bad default tracked as aoa-vme7; this
-    /// test takes no position on it.
+    /// Pins the unknown-field tolerance documented on `Scoring`, so the
+    /// decision fails CI rather than only asserting itself in prose.
     #[test]
     fn scoring_tolerates_unknown_codeprobe_fields() {
         let scoring: Scoring = serde_json::from_str(
