@@ -79,6 +79,31 @@ fn validate_trace_version_error_names_the_file_once() {
     assert_trace_error_names_file_once("bad_version_trace.json", "unsupported wire-format version");
 }
 
+/// The same convention one seam over, now covering every command that loads JSON
+/// through `load_json_capped` (aoa-empz). `eval compare` is the representative
+/// caller. The file class must survive: `label` is all the helper adds over a bare
+/// `read_to_string_capped`.
+#[test]
+fn missing_run_file_error_names_the_path_once() {
+    let missing = "/nonexistent/aoa-empz-baseline.json";
+    let output = aoa()
+        .args(["eval", "compare", missing, missing])
+        .output()
+        .expect("run");
+    assert!(!output.status.success());
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        stderr.matches(missing).count(),
+        1,
+        "diagnostic must name the offending file exactly once: {stderr}"
+    );
+    assert!(
+        stderr.contains("failed to read run file"),
+        "diagnostic must still name the file class: {stderr}"
+    );
+}
+
 // Criterion 9 (eval half): --json yields parseable JSON; default yields human text.
 #[test]
 fn validate_trace_json_is_parseable() {

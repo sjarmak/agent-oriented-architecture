@@ -243,8 +243,8 @@ fn load_build_meta(path: &Path) -> Result<BuildMeta> {
 }
 
 fn load_bias_warnings(path: &Path) -> Result<Vec<BiasWarning>> {
-    let raw = read_to_string_capped(path, MAX_JSON_BYTES)
-        .with_context(|| format!("failed to read bias-warnings file {}", path.display()))?;
+    let raw =
+        read_to_string_capped(path, MAX_JSON_BYTES).context("failed to read bias-warnings file")?;
     let aggregate: AggregateFile = serde_json::from_str(&raw).with_context(|| {
         format!(
             "failed to parse codeprobe aggregate.json {} (expected a bias_warnings array)",

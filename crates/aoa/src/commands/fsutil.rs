@@ -31,6 +31,10 @@ pub(crate) const MAX_TASK_DIRS: usize = 100_000;
 
 /// Read `path` into a `String`, rejecting anything past `max` bytes.
 ///
+/// Names `path` in all three failure modes, and `main` renders `{err:#}`, so a
+/// caller that adds its own path-naming context prints the path twice. Name the
+/// file class ("run file") if it adds something; leave the path to this function.
+///
 /// Bounded via [`Read::take`] rather than a pre-read `metadata().len()` check: a
 /// file that grows (or a symlink whose target swaps) between stat and read cannot
 /// blow past the cap. One byte past `max` is read so an exactly-`max` file is
@@ -55,15 +59,16 @@ pub(crate) fn read_to_string_capped(path: &Path, max: u64) -> Result<String> {
 /// trio that every JSON-loading command otherwise hand-rolls: the [`MAX_JSON_BYTES`]
 /// DoS guard is applied structurally rather than re-remembered per author
 /// (arch-review Finding #5). `label` names the file class (e.g. `"run file"`,
-/// `"canary manifest"`) and appears in both the read and parse error contexts,
-/// alongside the path — the path is `Display`, never interpolated attacker text.
+/// `"canary manifest"`) in both error contexts. Only the parse leg adds the path,
+/// per [`read_to_string_capped`]'s contract — serde's error carries none. The path
+/// is `Display`, never interpolated attacker text.
 ///
 /// Sites whose parse error carries a bespoke diagnostic (e.g. "expected a
 /// bias_warnings array") intentionally stay hand-rolled; this helper is for the
 /// symmetric read/parse pair.
 pub(crate) fn load_json_capped<T: DeserializeOwned>(path: &Path, label: &str) -> Result<T> {
     let raw = read_to_string_capped(path, MAX_JSON_BYTES)
-        .with_context(|| format!("failed to read {label} {}", path.display()))?;
+        .with_context(|| format!("failed to read {label}"))?;
     serde_json::from_str(&raw)
         .with_context(|| format!("failed to parse {label} {}", path.display()))
 }
