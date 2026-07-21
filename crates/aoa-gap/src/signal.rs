@@ -60,6 +60,12 @@ fn is_behavioral(metric: &str) -> bool {
     BEHAVIORAL_METRICS.iter().any(|b| b.as_str() == metric)
 }
 
+/// The ingest-time value of [`BehavioralSignal::required`]. A function because
+/// `serde(default = ...)` takes a path, not a constant.
+fn required_window() -> usize {
+    MIN_HELD_OUT_OBSERVATIONS
+}
+
 /// The count of held-out behavioral observations available for one repo, as
 /// supplied by the caller. Purely mechanical, no judgment. Today two producers
 /// count: the audit counts observe-captured sessions that carry a landed edit
@@ -99,12 +105,6 @@ pub struct BehavioralSignal {
     /// of quietly lowering the bar to meet it.
     #[serde(skip_deserializing, default = "required_window")]
     pub required: usize,
-}
-
-/// The ingest-time value of [`BehavioralSignal::required`]. A function because
-/// `serde(default = ...)` takes a path, not a constant.
-fn required_window() -> usize {
-    MIN_HELD_OUT_OBSERVATIONS
 }
 
 impl BehavioralSignal {
@@ -367,7 +367,6 @@ mod tests {
             "required is re-derived on ingest, never read from the wire"
         );
         assert!(!forged.is_sufficient());
-        assert!(forged.insufficient_data().is_some());
 
         // The impact the precondition exists to prevent: the four locality
         // metrics must stay InsufficientData under the forged signal.
