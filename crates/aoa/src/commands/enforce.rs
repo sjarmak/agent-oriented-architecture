@@ -430,11 +430,39 @@ fn append_span_within(
         .with_context(|| format!("failed to open {}", log.display()))?;
     lock_exclusive_bounded(&file, log, lock_timeout)?;
 
+    let end = file
+        .metadata()
+        .with_context(|| format!("failed to stat {}", log.display()))?
+        .len();
     let span = build(next_seq(&mut file, log, MAX_SEQ_TAIL_BYTES)?);
     let mut line = serde_json::to_string(&span).context("failed to serialize span")?;
     line.push('\n');
-    file.write_all(line.as_bytes())
-        .with_context(|| format!("failed to append to {}", log.display()))?;
+
+    // Never write a line this log cannot read back. `next_seq` resolves the last
+    // line by widening its tail read to at most `MAX_SEQ_TAIL_BYTES`, so a
+    // longer line would append once and then refuse every later append for the
+    // rest of the session — the log poisoning itself. Reachable because
+    // `write_target` takes `file_path` straight from the hook payload, which
+    // nothing bounds.
+    if line.len() as u64 > MAX_SEQ_TAIL_BYTES {
+        return Err(anyhow!(
+            "refusing to append a {}-byte span line to {}: it exceeds the \
+             {MAX_SEQ_TAIL_BYTES}-byte tail read, so no later append could \
+             derive its sequence number",
+            line.len(),
+            log.display()
+        ));
+    }
+
+    // A failed `write_all` may still have written a prefix — `ENOSPC` mid-line
+    // is the ordinary case. That prefix is a torn tail, which `next_seq` then
+    // refuses forever, so a transient disk-full would permanently stop
+    // recording. Roll back to the pre-append length while the lock is still
+    // held; the append is all-or-nothing from any other writer's view.
+    if let Err(err) = file.write_all(line.as_bytes()) {
+        let _ = file.set_len(end);
+        return Err(anyhow!(err)).with_context(|| format!("failed to append to {}", log.display()));
+    }
     Ok(())
 }
 
@@ -498,13 +526,13 @@ fn next_seq(file: &mut File, log: &Path, max_tail: u64) -> Result<u64> {
         // non-empty line — the same blank tolerance `read_spans` has.
         let trimmed = buf.trim_ascii_end();
         match trimmed.iter().rposition(|byte| *byte == b'\n') {
-            Some(cut) => return Ok(parse_seq(&trimmed[cut + 1..], log)? + 1),
+            Some(cut) => return succ(parse_seq(&trimmed[cut + 1..], log)?, log),
             // Nothing before the window: the log is nothing but blanks, or
             // else it is a single line.
             None if start == 0 => {
                 return match trimmed.is_empty() {
                     true => Ok(0),
-                    false => Ok(parse_seq(trimmed, log)? + 1),
+                    false => succ(parse_seq(trimmed, log)?, log),
                 }
             }
             // The last line straddles the window's start; widen and retry
@@ -538,6 +566,24 @@ fn read_at(file: &mut File, log: &Path, offset: u64, len: u64) -> Result<Vec<u8>
 /// The `seq` of one serialized span line.
 fn parse_seq(line: &[u8], log: &Path) -> Result<u64> {
     Ok(parse_span_line(line, log)?.seq)
+}
+
+/// One past `seq`, refusing to wrap.
+///
+/// A plain `+ 1` panics on overflow only in debug builds; release builds wrap
+/// `u64::MAX` to `0`, which appends a *decreasing* `seq` — the one outcome this
+/// whole locked read-modify-write exists to prevent, and unrepairable on an
+/// append-only log. Exhaustion is not reachable by counting (it would take more
+/// appends than the disk could hold) but a single corrupt or hand-written line
+/// carrying `u64::MAX` reaches it immediately.
+fn succ(seq: u64, log: &Path) -> Result<u64> {
+    seq.checked_add(1).ok_or_else(|| {
+        anyhow!(
+            "the last span in {} carries seq {seq}, the maximum; the next \
+             sequence number would wrap to zero and make the log decreasing",
+            log.display()
+        )
+    })
 }
 
 /// Deserialize one span line, failing loud on a corrupt one.
@@ -1267,6 +1313,54 @@ mod tests {
         assert!(
             err.to_string().contains("exceeds"),
             "must name the exceeded tail read, got: {err}"
+        );
+    }
+
+    /// The append path must never write a line it could not later read back.
+    ///
+    /// `next_seq` widens to at most [`MAX_SEQ_TAIL_BYTES`], so a longer line
+    /// would append once and then refuse every subsequent append for the rest
+    /// of the session — the log poisoning itself with a line it wrote. Reachable
+    /// without any external corruption: `write_target` takes `file_path`
+    /// straight from the hook payload, and nothing bounds its length.
+    #[test]
+    fn append_refuses_a_span_line_it_could_not_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = log_path(&dir, "live-huge.jsonl");
+        let mut attributes = Map::new();
+        attributes.insert(
+            "path".to_string(),
+            Value::String("p".repeat(MAX_SEQ_TAIL_BYTES as usize + 1)),
+        );
+
+        let err = append_span(&log, SpanType::WriteCommitted, attributes).unwrap_err();
+        assert!(
+            err.to_string().contains("refusing to append"),
+            "must refuse before writing, got: {err}"
+        );
+        assert!(
+            !log.exists() || std::fs::metadata(&log).unwrap().len() == 0,
+            "the unreadable line must not have landed"
+        );
+    }
+
+    /// `seq` must never wrap. A release build's `u64::MAX + 1` is `0`, which
+    /// appends a *decreasing* `seq` — the corruption the whole locked
+    /// read-modify-write exists to prevent, on a log with no repair path.
+    #[test]
+    fn append_refuses_to_wrap_the_sequence_number() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = seed_log(&dir, &span_line(u64::MAX));
+
+        let err = append_span(&log, SpanType::TestRun, Map::new()).unwrap_err();
+        assert!(
+            err.to_string().contains("wrap to zero"),
+            "must name the exhaustion, got: {err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            span_line(u64::MAX),
+            "refusing must leave the log byte-identical"
         );
     }
 
