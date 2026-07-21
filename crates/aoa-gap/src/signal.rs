@@ -71,13 +71,40 @@ fn is_behavioral(metric: &str) -> bool {
 ///
 /// `required` is carried as data (inspectable-thresholds discipline) and is
 /// [`MIN_HELD_OUT_OBSERVATIONS`]: below that window a repo cannot supply enough
-/// held-out signal for its behavioral metrics to mean anything.
+/// held-out signal for its behavioral metrics to mean anything. It is written
+/// to the wire but never read back from it — see the field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BehavioralSignal {
     /// Held-out behavioral observations counted for the repo.
     pub observations: usize,
     /// Observations needed before the behavioral metrics light up.
+    ///
+    /// Serialized for inspection, never deserialized: this is the *reader's*
+    /// calibration floor, not producer data, so it is re-derived from
+    /// [`MIN_HELD_OUT_OBSERVATIONS`] on every ingest. Trusting the wire here
+    /// let a hand-edited `{"observations":1,"required":1}` report a greenfield
+    /// repo as sufficient and light up all four locality metrics, since
+    /// [`is_sufficient`](Self::is_sufficient) compares against exactly this
+    /// field (aoa-d6t.38).
+    ///
+    /// Re-deriving rather than rejecting a mismatch is deliberate:
+    /// [`MIN_HELD_OUT_OBSERVATIONS`] is a calibration floor expected to move,
+    /// and rejecting would turn each move into a data-compat break for reports
+    /// written under the previous floor.
+    ///
+    /// This takes the *threshold* out of an editor's reach; it does not make
+    /// `observations` tamper-proof. That count is a measurement, and no reader
+    /// can validate it without re-measuring — but a forged count now has to
+    /// claim a full window of held-out signal the repo visibly lacks, instead
+    /// of quietly lowering the bar to meet it.
+    #[serde(skip_deserializing, default = "required_window")]
     pub required: usize,
+}
+
+/// The ingest-time value of [`BehavioralSignal::required`]. A function because
+/// `serde(default = ...)` takes a path, not a constant.
+fn required_window() -> usize {
+    MIN_HELD_OUT_OBSERVATIONS
 }
 
 impl BehavioralSignal {
@@ -323,5 +350,53 @@ mod tests {
         let signal = BehavioralSignal::default();
         assert_eq!(signal.observations, 0);
         assert!(!signal.is_sufficient());
+    }
+
+    /// aoa-d6t.38: `required` is the reader's own calibration constant, not
+    /// producer data. A hand-edited report that lowers it must not be able to
+    /// declare a repo with one observation sufficient — that would defeat the
+    /// precondition outright, since `is_sufficient` compares against exactly
+    /// this field.
+    #[test]
+    fn tampered_required_cannot_forge_sufficient_signal() {
+        let forged: BehavioralSignal =
+            serde_json::from_str(r#"{"observations":1,"required":1}"#).expect("deserializes");
+
+        assert_eq!(
+            forged.required, MIN_HELD_OUT_OBSERVATIONS,
+            "required is re-derived on ingest, never read from the wire"
+        );
+        assert!(!forged.is_sufficient());
+        assert!(forged.insufficient_data().is_some());
+
+        // The impact the precondition exists to prevent: the four locality
+        // metrics must stay InsufficientData under the forged signal.
+        let report = determination_with_signal(&forged);
+        for m in report.metrics.iter().filter(|m| is_behavioral(&m.metric)) {
+            assert_eq!(
+                m.mode,
+                MetricMode::InsufficientData,
+                "{} must not light up on a forged window",
+                m.metric
+            );
+        }
+    }
+
+    /// Re-deriving on ingest must not change what honest producers write or
+    /// read back: the threshold stays on the wire for inspection, and a
+    /// genuine signal round-trips to itself.
+    #[test]
+    fn honest_signal_round_trips_with_the_threshold_still_on_the_wire() {
+        let signal = BehavioralSignal::from_observations(3);
+        let json = serde_json::to_string(&signal).expect("serialize");
+
+        assert!(
+            json.contains(&format!("\"required\":{MIN_HELD_OUT_OBSERVATIONS}")),
+            "producers still emit the threshold for inspection: {json}"
+        );
+        assert_eq!(
+            serde_json::from_str::<BehavioralSignal>(&json).expect("round-trips"),
+            signal
+        );
     }
 }

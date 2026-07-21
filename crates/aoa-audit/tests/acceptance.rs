@@ -586,6 +586,25 @@ fn corrupt_trace_corpus_fails_the_audit_loud() {
     );
 }
 
+// aoa-d6t.38: the `serde(default)` on `behavioral_signal` only ever covered a
+// MISSING struct. A present-but-tampered one used to be trusted verbatim, so a
+// hand-edited report could lower the window and hand a greenfield repo
+// sufficient behavioral signal. The threshold is now re-derived on ingest.
+#[test]
+fn tampered_report_json_cannot_forge_sufficient_behavioral_signal() {
+    let forged = r#"{"items":[],"behavioral_signal":{"observations":1,"required":1}}"#;
+    let report: AuditReport = serde_json::from_str(forged).expect("deserializes");
+
+    assert_eq!(
+        report.behavioral_signal.required, MIN_HELD_OUT_OBSERVATIONS,
+        "the reader's own calibration floor governs, not the wire's"
+    );
+    assert!(
+        !report.behavioral_signal.is_sufficient(),
+        "one observation cannot satisfy the window however the report is edited"
+    );
+}
+
 // Defensive: the default-config audit (no context root match, empty graph) still
 // produces a well-formed, ranked report with tiered items.
 #[test]
