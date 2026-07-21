@@ -310,6 +310,22 @@ pub fn aggregate_provenance(
 mod tests {
     use super::*;
 
+    /// `DualScoring` is a declared SUBSET of codeprobe's flattened
+    /// `scoring.json` (see its doc), so tolerating unknown fields is the
+    /// decision, not an oversight: `deny_unknown_fields` would reject every
+    /// real file, whose dual-verifier `details` merge leaves further keys at
+    /// the top level. This pins that decision mechanically.
+    #[test]
+    fn dual_scoring_tolerates_unknown_codeprobe_fields() {
+        let scoring: DualScoring = serde_json::from_str(
+            r#"{ "scorer_family": "dual_composite", "passed_direct": true,
+                 "passed_artifact": false, "score": 0.5,
+                 "details": { "nested": 1 }, "duration_s": 12.5 }"#,
+        )
+        .expect("a real codeprobe scoring.json carries fields this subset ignores");
+        assert_eq!(scoring.scorer_family.as_deref(), Some("dual_composite"));
+    }
+
     #[test]
     fn aggregate_provenance_rejects_synthesized_loud() {
         let err = aggregate_provenance(&[

@@ -13,6 +13,15 @@ use crate::index::IndexedRepo;
 /// needs. This mirrors what a SCIP tool emits — per-document symbol definitions
 /// and occurrences with semantic roles — without the full protobuf surface, so
 /// tests run fully offline against committed data.
+///
+/// A hybrid boundary, hence no `deny_unknown_fields`: the document shape is a
+/// declared subset of a tool export, so strictness would reject real indexes
+/// over the top-level keys this type ignores. But `writable`/`gold`/`invariants`
+/// are AOA extensions no SCIP tool emits — only a human writes them — and each
+/// defaults to empty, so a misspelled `gold` silently yields an empty gold set
+/// feeding `AuditConfig::gold_set`, i.e. verification reachability measured
+/// against nothing. Splitting the operator-authored keys onto their own strict
+/// struct is aoa-t49j.
 #[derive(Debug, Deserialize)]
 struct ScipIndex {
     documents: Vec<ScipDocument>,
@@ -129,6 +138,32 @@ mod tests {
             occ.roles,
             vec![ScipRole::Definition, ScipRole::Reference, ScipRole::Unknown]
         );
+    }
+
+    /// The tolerance documented on `ScipIndex` is a decision, so it is pinned
+    /// here rather than only asserted in prose: a real SCIP export carries
+    /// top-level keys this subset ignores (`metadata`, `external_symbols`), and
+    /// adding `deny_unknown_fields` would reject every one of them. Fails the
+    /// day someone "hardens" this struct; the operator-authored extension keys
+    /// are the part that wants strictness, and that split is aoa-t49j.
+    #[test]
+    fn scip_index_tolerates_unknown_tool_emitted_fields() {
+        let dir = std::env::temp_dir().join(format!("aoa-scip-tolerant-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("idx.json");
+        std::fs::write(
+            &path,
+            r#"{ "metadata": { "tool_info": { "name": "scip-rust" } },
+                 "external_symbols": [ { "symbol": "ext" } ],
+                 "documents": [ { "relative_path": "a.rs", "language": "rust",
+                                  "occurrences": [
+                     { "symbol": "f", "roles": ["definition"], "range": [0, 0, 1] }
+                 ] } ] }"#,
+        )
+        .unwrap();
+        let repo = index_with_scip(&path).unwrap();
+        assert_eq!(repo.graph.nodes, vec!["f".to_string()]);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

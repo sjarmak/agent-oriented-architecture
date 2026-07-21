@@ -45,7 +45,16 @@ use crate::output::{escape_terminal, print_human, print_json};
 
 /// One operator-declared canary: a known held-out probe and the outcome a clean
 /// (non-leaking) run must produce for it.
+///
+/// `deny_unknown_fields` because `--canary`'s help publishes this schema
+/// verbatim, so anything else is drift: a manifest written to a neighbouring
+/// shape (`expected_visible` alongside `expected_held_out`) currently parses
+/// with the extra assertion silently dropped. Both fields are required today,
+/// so a misspelled field name already fails as a missing field — the attribute
+/// closes the stray-key gap and pre-empts the silent-default hazard the moment
+/// anyone adds a `#[serde(default)]` here (cf. the R0 build manifest, aoa-gcwl).
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CanarySpec {
     id: String,
     expected_held_out: bool,

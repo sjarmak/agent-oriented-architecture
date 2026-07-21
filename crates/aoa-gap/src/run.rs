@@ -5,6 +5,7 @@ use crate::provenance::HeldOutProvenance;
 /// A single task's per-suite outcome: did the visible suite pass, did the
 /// held-out suite pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TaskOutcome {
     pub visible_success: bool,
     pub held_out_success: bool,
@@ -14,6 +15,7 @@ pub struct TaskOutcome {
 /// is the outcome a clean (non-leaking) run must produce; an observed
 /// `held_out_success` that diverges from it is an unexpected flip.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CanaryItem {
     pub id: String,
     pub held_out_success: bool,
@@ -29,7 +31,19 @@ impl CanaryItem {
 
 /// The result of one evaluation run over a task set, with held-out provenance
 /// and any injected integrity canaries.
+///
+/// `deny_unknown_fields` on every boundary here: a run-result file is
+/// operator-authored — the workspace builds `RunResult` values in memory but
+/// never serializes one to disk, and both
+/// `aoa eval compare` and `aoa audit --self` take it as a path the operator
+/// supplies — so there is no forward-compat producer to accommodate, and a
+/// misspelled key must fail loud rather than leave the real field at its
+/// default. `canaries` is why this matters: it defaults to empty, so a typo'd
+/// key silently empties the canary set, makes `leakage_detected` false, and
+/// downgrades a hard `GapError::LeakageDetected` refusal into the non-fatal
+/// `ZeroCanaryLeakShape` advisory. The leakage gate would fail open.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RunResult {
     pub tasks: Vec<TaskOutcome>,
     pub held_out_provenance: HeldOutProvenance,

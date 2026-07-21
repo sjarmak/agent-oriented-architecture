@@ -496,6 +496,24 @@ mod tests {
     use aoa_trace::{Span, SpanSource, SpanType};
     use serde_json::Value;
 
+    /// `Scoring` is a declared SUBSET of codeprobe's `scoring.json` (see its
+    /// doc), so tolerating unknown fields is the decision, not an oversight:
+    /// `deny_unknown_fields` here would reject every real codeprobe file. This
+    /// pins that decision mechanically — a comment does not fail CI.
+    ///
+    /// Scope: the UNKNOWN-FIELD tolerance is deliberate. The `#[serde(default)]`
+    /// on `score` is a separate, known-bad default tracked as aoa-vme7; this
+    /// test takes no position on it.
+    #[test]
+    fn scoring_tolerates_unknown_codeprobe_fields() {
+        let scoring: Scoring = serde_json::from_str(
+            r#"{ "score": 1.0, "passed": true, "scorer_family": "dual_composite",
+                 "passed_direct": true, "details": { "nested": 1 } }"#,
+        )
+        .expect("a real codeprobe scoring.json carries fields this subset ignores");
+        assert!(scoring.held_out_success());
+    }
+
     /// `F_edit` must stay non-empty for a transcript whose write succeeded.
     ///
     /// This is the guard on the repoint to `write.committed`. Nothing else

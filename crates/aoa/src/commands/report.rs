@@ -61,6 +61,14 @@ enum FalsificationView {
 
 /// The slice of `falsification.json` this command reads (see the
 /// `FalsificationOutput` schema in the `falsify` command).
+///
+/// Being a declared slice, it must tolerate unknown fields — `deny_unknown_fields`
+/// would reject every real file. Note the direction of the default, which is the
+/// opposite of `falsify::BuildMeta`'s: `precondition_unmet` defaults to `None`,
+/// so a hand-edited file that misspells the key reads as a clean `proceed` and
+/// `pillar_live` reports the migrate pillar live on a verdict that actually
+/// carried an unmet precondition. That is fail-open, and it is why this type
+/// must stay a read of tool output rather than an operator input boundary.
 #[derive(Debug, Deserialize)]
 struct FalsificationSlice {
     verdict: Verdict,
@@ -221,6 +229,21 @@ fn render_falsification(falsification: &FalsificationView) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The tolerance documented on `FalsificationSlice` is a decision, so it is
+    /// pinned here rather than only asserted in prose: a real `falsification.json`
+    /// carries the rest of `FalsificationOutput` beside the two fields this slice
+    /// reads, and `deny_unknown_fields` would reject every one of them.
+    #[test]
+    fn falsification_slice_tolerates_the_rest_of_the_report() {
+        let slice: FalsificationSlice = serde_json::from_str(
+            r#"{ "verdict": "proceed", "repos": [], "k_runs": 3,
+                 "min_effect_size": 0.05, "generated_at": "2026-07-21" }"#,
+        )
+        .expect("the slice must read a full falsification.json, not just its own two fields");
+        assert!(matches!(slice.verdict, Verdict::Proceed));
+        assert!(slice.precondition_unmet.is_none());
+    }
 
     fn present(verdict: Verdict, precondition_unmet: Option<&str>) -> FalsificationView {
         FalsificationView::Present {

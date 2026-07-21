@@ -62,6 +62,13 @@ const TEMPLATES: &[Template] = &[
 
 /// The persisted manifest: template version + sha256 of every rendered file
 /// init owns, so `--update` can tell a pristine file from a user-edited one.
+///
+/// Deliberately NOT `deny_unknown_fields`, and for a different reason than the
+/// slice types elsewhere in this crate: this is tool-owned state AOA writes and
+/// reads back, so the constraint is forward compatibility — an older binary must
+/// still read a `.aoa/init.json` written by a newer one during `--update`, which
+/// a strict parse would turn into a hard failure on the operator's next upgrade.
+/// Every field is required, so a typo in a hand-edited manifest still fails loud.
 #[derive(Debug, Serialize, Deserialize)]
 struct Manifest {
     template_version: u32,
