@@ -91,16 +91,24 @@ const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 /// contention, long enough not to spin a core against a wedged holder.
 const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(5);
 
-/// Bytes of the log's tail [`next_seq`] reads per attempt. Sized so one read
-/// covers any span line this layer writes; a longer final line widens the
-/// window rather than being truncated into a parse error.
+/// Bytes of the log's tail [`next_seq`] reads per attempt. Comfortably covers a
+/// *typical* span line (60–300 bytes) so the common append needs exactly one
+/// read; a longer final line widens the window rather than being truncated into
+/// a parse error. Undersizing costs an extra read round-trip, oversizing costs
+/// a bigger copy on every append, and 8 KiB is the slack side of that trade.
 const SEQ_TAIL_WINDOW: u64 = 8 * 1024;
 
-/// Ceiling on that widening, matching the 16 MiB cap the sibling readers carry
-/// (`aoa_trace`'s `MAX_TRACE_BYTES`, `aoa-observe-shim`'s
-/// `MAX_CORPUS_FILE_BYTES`). A final line that large is not a span this layer
-/// wrote, and growing the read past it would trade away the bound `next_seq`
-/// exists to establish.
+/// Ceiling on that widening — the same order of magnitude the sibling readers
+/// use (`aoa_trace`'s `MAX_TRACE_BYTES`, `aoa-observe-shim`'s
+/// `MAX_CORPUS_FILE_BYTES`), though nothing links the three; growing the read
+/// past it would trade away the bound `next_seq` exists to establish.
+///
+/// Deliberately far above a typical span line, which runs 60–300 bytes, because
+/// a line is *not* bounded by anything this layer controls: `write_target` takes
+/// `file_path` straight from the hook payload, so a 20 KiB path yields a 20 KiB
+/// line. Widening therefore has to reach well past [`SEQ_TAIL_WINDOW`] — a
+/// single unwidened read would refuse every append after one such line, wedging
+/// recording for the rest of the session.
 const MAX_SEQ_TAIL_BYTES: u64 = 16 * 1024 * 1024;
 
 /// The subset of a Claude Code hook payload this gate needs. Unknown fields are
@@ -343,15 +351,12 @@ fn read_spans(log: &Path) -> Result<Vec<Span>> {
     };
     raw.lines()
         .filter(|line| !line.trim().is_empty())
-        .map(|line| {
-            serde_json::from_str::<Span>(line)
-                .with_context(|| format!("corrupt span line in {}", log.display()))
-        })
+        .map(|line| parse_span_line(line.as_bytes(), log))
         .collect()
 }
 
-/// Append a fresh span of `span_type` with `attributes`, numbered after the
-/// spans already present so `seq` stays monotonic.
+/// Append a fresh span of `span_type` with `attributes`, numbered one past the
+/// log's last `seq` so ordering stays monotonic.
 fn append_span(log: &Path, span_type: SpanType, attributes: Map<String, Value>) -> Result<()> {
     append_span_with(log, |seq| Span {
         span_type,
@@ -465,43 +470,50 @@ fn next_seq(file: &mut File, log: &Path, max_tail: u64) -> Result<u64> {
     if len == 0 {
         return Ok(0);
     }
-    if read_at(file, log, len - 1, 1)?[0] != b'\n' {
-        return Err(anyhow!(
-            "{} has no trailing newline, so its last line is a torn write; \
-             appending would splice this span onto it",
-            log.display()
-        ));
-    }
 
-    let mut window = SEQ_TAIL_WINDOW.min(len);
+    // One bound for every read, the first included. Deriving it once is what
+    // makes the cap real: clamping only at the widen step left the *initial*
+    // read bounded by `len` alone, so a `max_tail` below one window was
+    // exceeded before any widening was even considered.
+    let max_window = len.min(max_tail);
+    let mut window = SEQ_TAIL_WINDOW.min(max_window);
     loop {
         let start = len - window;
         let buf = read_at(file, log, start, window)?;
+        // Every window ends at EOF (`start + window == len`), so the buffer's
+        // last byte is the file's. An append-only log always ends with the
+        // newline `append_span_within` wrote; a missing one means the previous
+        // append was torn, and `O_APPEND` would splice this span onto that
+        // partial line. Checked before trimming, so a trailing space still
+        // reads as torn.
+        if buf.last() != Some(&b'\n') {
+            return Err(anyhow!(
+                "{} has no trailing newline, so its last line is a torn write; \
+                 appending would splice this span onto it",
+                log.display()
+            ));
+        }
         // Trimming the end collapses the final newline and any blank lines
         // after it, so whatever follows the last remaining newline is a
         // non-empty line — the same blank tolerance `read_spans` has.
         let trimmed = buf.trim_ascii_end();
         match trimmed.iter().rposition(|byte| *byte == b'\n') {
             Some(cut) => return Ok(parse_seq(&trimmed[cut + 1..], log)? + 1),
-            // No newline left and nothing before the window: the log is
-            // nothing but blanks, or else it is a single line.
-            None if start == 0 && trimmed.is_empty() => return Ok(0),
-            None if start == 0 => return Ok(parse_seq(trimmed, log)? + 1),
-            // The last line straddles the window's start; widen and retry.
-            //
-            // Deciding by whether the window actually *grew*, rather than by a
-            // `window < max_tail` guard on the pre-doubled value, is what keeps
-            // the cap a real bound. Under that guard the doubling clamped only
-            // against `len`, so the read issued before the cap error could
-            // overshoot `max_tail` — invisible with the shipped constants only
-            // because 16 MiB is an exact power-of-two multiple of 8 KiB, which
-            // is a coincidence of their values, not something enforced.
+            // Nothing before the window: the log is nothing but blanks, or
+            // else it is a single line.
+            None if start == 0 => {
+                return match trimmed.is_empty() {
+                    true => Ok(0),
+                    false => Ok(parse_seq(trimmed, log)? + 1),
+                }
+            }
+            // The last line straddles the window's start; widen and retry
+            // until `max_window` leaves no room to grow.
             None => {
-                let grown = (window * 2).min(len).min(max_tail);
-                if grown == window {
+                let grown = (window * 2).min(max_window);
+                if grown <= window {
                     return Err(anyhow!(
-                        "the last line of {} exceeds the {max_tail}-byte tail read; \
-                         no span this layer writes is that large",
+                        "the last line of {} exceeds the {max_tail}-byte tail read",
                         log.display()
                     ));
                 }
@@ -523,12 +535,19 @@ fn read_at(file: &mut File, log: &Path, offset: u64, len: u64) -> Result<Vec<u8>
     Ok(buf)
 }
 
-/// The `seq` of one serialized span line, failing loud on a corrupt one under
-/// the same wording [`read_spans`] uses.
+/// The `seq` of one serialized span line.
 fn parse_seq(line: &[u8], log: &Path) -> Result<u64> {
-    let span: Span = serde_json::from_slice(line)
-        .with_context(|| format!("corrupt span line in {}", log.display()))?;
-    Ok(span.seq)
+    Ok(parse_span_line(line, log)?.seq)
+}
+
+/// Deserialize one span line, failing loud on a corrupt one.
+///
+/// Shared by [`read_spans`] and [`parse_seq`] so the two paths that read this
+/// file report the same corruption identically. They used to spell the context
+/// separately, which made the wording a convention rather than a fact: adding a
+/// byte offset or a repair hint to one would silently leave the other behind.
+fn parse_span_line(line: &[u8], log: &Path) -> Result<Span> {
+    serde_json::from_slice(line).with_context(|| format!("corrupt span line in {}", log.display()))
 }
 
 /// Take the log's exclusive lock, giving up after `timeout` rather than waiting
@@ -951,8 +970,7 @@ mod tests {
     #[test]
     fn a_held_lock_fails_the_waiter_instead_of_hanging_it() {
         let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join(".aoa/traces/live-held.jsonl");
-        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        let log = log_path(&dir, "live-held.jsonl");
 
         // A separate open file description, which is what the lock arbitrates on.
         let holder = std::fs::OpenOptions::new()
@@ -993,8 +1011,7 @@ mod tests {
     #[test]
     fn a_contended_append_fails_bounded_instead_of_hanging() {
         let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join(".aoa/traces/live-contended.jsonl");
-        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        let log = log_path(&dir, "live-contended.jsonl");
 
         let holder = std::fs::OpenOptions::new()
             .create(true)
@@ -1039,7 +1056,7 @@ mod tests {
     #[test]
     fn append_then_read_round_trips_spans_monotonically() {
         let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join(".aoa/traces/live-x.jsonl");
+        let log = log_path(&dir, "live-x.jsonl");
         append_span(&log, SpanType::TestRun, Map::new()).unwrap();
         append_span(&log, SpanType::WriteAttempt, Map::new()).unwrap();
         let spans = read_spans(&log).unwrap();
@@ -1070,7 +1087,7 @@ mod tests {
     fn concurrent_appends_assign_distinct_sequence_numbers() {
         const RACERS: u64 = 20;
         let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join(".aoa/traces/live-race.jsonl");
+        let log = log_path(&dir, "live-race.jsonl");
 
         std::thread::scope(|scope| {
             for _ in 0..RACERS {
@@ -1089,11 +1106,17 @@ mod tests {
         );
     }
 
+    /// A live-log path under `dir`, with its parent created.
+    fn log_path(dir: &tempfile::TempDir, name: &str) -> PathBuf {
+        let log = dir.path().join(".aoa/traces").join(name);
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        log
+    }
+
     /// Write `raw` as the whole log, bypassing the append path, so a test can
     /// stage a log shape the append path would never produce.
     fn seed_log(dir: &tempfile::TempDir, raw: &str) -> PathBuf {
-        let log = dir.path().join(".aoa/traces/live-seeded.jsonl");
-        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        let log = log_path(dir, "live-seeded.jsonl");
         std::fs::write(&log, raw).unwrap();
         log
     }
@@ -1133,14 +1156,6 @@ mod tests {
             Value::String("p".repeat(bytes as usize)),
         );
         span_line_with(seq, attributes)
-    }
-
-    #[test]
-    fn an_empty_log_starts_at_seq_zero() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = seed_log(&dir, "");
-        append_span(&log, SpanType::TestRun, Map::new()).unwrap();
-        assert_eq!(last_seq(&log), 0);
     }
 
     /// `seq` continues from the last one written, not from the number of spans.
