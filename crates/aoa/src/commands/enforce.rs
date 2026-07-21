@@ -52,7 +52,7 @@
 //! `observe` already provisions.
 
 use std::fs::{File, TryLockError};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -90,6 +90,18 @@ const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 /// Poll interval while waiting. Short enough to be invisible under normal
 /// contention, long enough not to spin a core against a wedged holder.
 const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(5);
+
+/// Bytes of the log's tail [`next_seq`] reads per attempt. Sized so one read
+/// covers any span line this layer writes; a longer final line widens the
+/// window rather than being truncated into a parse error.
+const SEQ_TAIL_WINDOW: u64 = 8 * 1024;
+
+/// Ceiling on that widening, matching the 16 MiB cap the sibling readers carry
+/// (`aoa_trace`'s `MAX_TRACE_BYTES`, `aoa-observe-shim`'s
+/// `MAX_CORPUS_FILE_BYTES`). A final line that large is not a span this layer
+/// wrote, and growing the read past it would trade away the bound `next_seq`
+/// exists to establish.
+const MAX_SEQ_TAIL_BYTES: u64 = 16 * 1024 * 1024;
 
 /// The subset of a Claude Code hook payload this gate needs. Unknown fields are
 /// ignored by serde, so the host may add more without breaking the parse.
@@ -353,7 +365,7 @@ fn append_span(log: &Path, span_type: SpanType, attributes: Map<String, Value>) 
 ///
 /// `build` receives the next sequence number, so the number is derived *inside*
 /// the locked region. That is the whole point of the closure: deriving `seq`
-/// means reading the log and counting it, which together with the append is a
+/// means reading the log's tail, which together with the append is a
 /// read-modify-write. Every mutation now drives two of these (intent at
 /// `PreToolUse`, then an outcome), so unsynchronized racers were routine, and
 /// they produced duplicate and even *decreasing* `seq` values. A decreasing
@@ -362,12 +374,15 @@ fn append_span(log: &Path, span_type: SpanType, attributes: Map<String, Value>) 
 /// repo — against an append-only log with no repair path. A caller that built
 /// its span before calling would reintroduce exactly that race.
 ///
-/// The lock must be one held per *open file description*, which is what
-/// [`File::try_lock`] gives us. [`read_spans`] opens a **second** descriptor on
-/// the same path via `read_to_string` inside the critical section, and a classic
-/// POSIX record lock (`fcntl(F_SETLK)`) is per-process-per-inode, so closing
-/// that second descriptor would drop the lock mid-update. Modern OFD locks
-/// (`fcntl(F_OFD_SETLK)`) would be equivalent; plain `F_SETLK` would not.
+/// The critical section opens no second descriptor: [`next_seq`] reads through
+/// the very handle that holds the lock. That was not always so — deriving `seq`
+/// used to mean `read_to_string` on the same path, a second open inside the
+/// locked region, which constrained the lock to one held per *open file
+/// description* ([`File::try_lock`]) because a classic POSIX record lock
+/// (`fcntl(F_SETLK)`) is per-process-per-inode and closing that second
+/// descriptor would have dropped the lock mid-update. The constraint is gone
+/// with the second open; `try_lock` stays because per-OFD is the right
+/// semantics for a handle this function owns.
 ///
 /// Readers outside this function still take no lock. That is deliberate and
 /// bounded: an advisory lock only binds parties that opt in, so this serializes
@@ -397,19 +412,123 @@ fn append_span_within(
     // Bound to a named local, never a temporary: dropping the `File` closes the
     // descriptor and releases the lock, so a temporary would unlock immediately
     // and leave the read-modify-write below unguarded.
+    //
+    // `read` is requested alongside `append` so `next_seq` can derive the
+    // sequence number through this same descriptor. `O_APPEND` repositions every
+    // write to end-of-file atomically, so the seeking that read does cannot
+    // misplace the append below.
     let mut file = std::fs::OpenOptions::new()
         .create(true)
+        .read(true)
         .append(true)
         .open(log)
         .with_context(|| format!("failed to open {}", log.display()))?;
     lock_exclusive_bounded(&file, log, lock_timeout)?;
 
-    let span = build(read_spans(log)?.len() as u64);
+    let span = build(next_seq(&mut file, log, MAX_SEQ_TAIL_BYTES)?);
     let mut line = serde_json::to_string(&span).context("failed to serialize span")?;
     line.push('\n');
     file.write_all(line.as_bytes())
         .with_context(|| format!("failed to append to {}", log.display()))?;
     Ok(())
+}
+
+/// The sequence number the next span should carry: one past the log's last.
+///
+/// Reads only the log's tail. Deriving `seq` by counting the whole log — which
+/// is what this replaced — made every hook invocation O(n) in the log's length,
+/// and since that read happens inside [`append_span_within`]'s exclusive lock,
+/// a long session's writes were both quadratic and serialized. Hook latency
+/// lands directly in the agent's tool path, so that cost is agent-visible.
+///
+/// *Last + 1*, not *count*, and the difference is correctness rather than
+/// convenience. `validate_trace` compares **adjacent** spans, rejecting only a
+/// `seq` lower than its predecessor's. On a log carrying a gap — which the
+/// pre-lock races described on [`append_span_with`] really did produce — the
+/// count is smaller than the last `seq`, so a count-derived append writes a
+/// *decrease*, and that wedges `aoa audit` for the whole repo against an
+/// append-only file with no repair path. Last + 1 recovers from any tail.
+///
+/// Only the final line is parsed, so corruption earlier in the log no longer
+/// fails this path — nor does invalid UTF-8 outside the window, which the
+/// whole-file `read_to_string` used to reject up front. That narrowing is
+/// deliberate: the corpus re-validates at ingest, and [`run_check`] still reads
+/// and parses the log in full on every mutation *when the reproduction gate is
+/// on* — a policy that sets `reproduction_required: false` returns before that
+/// read, leaving ingest as the only check. Failing here instead
+/// would freeze all further recording on a log with any historical bad line.
+fn next_seq(file: &mut File, log: &Path, max_tail: u64) -> Result<u64> {
+    let len = file
+        .metadata()
+        .with_context(|| format!("failed to stat {}", log.display()))?
+        .len();
+    if len == 0 {
+        return Ok(0);
+    }
+    if read_at(file, log, len - 1, 1)?[0] != b'\n' {
+        return Err(anyhow!(
+            "{} has no trailing newline, so its last line is a torn write; \
+             appending would splice this span onto it",
+            log.display()
+        ));
+    }
+
+    let mut window = SEQ_TAIL_WINDOW.min(len);
+    loop {
+        let start = len - window;
+        let buf = read_at(file, log, start, window)?;
+        // Trimming the end collapses the final newline and any blank lines
+        // after it, so whatever follows the last remaining newline is a
+        // non-empty line — the same blank tolerance `read_spans` has.
+        let trimmed = buf.trim_ascii_end();
+        match trimmed.iter().rposition(|byte| *byte == b'\n') {
+            Some(cut) => return Ok(parse_seq(&trimmed[cut + 1..], log)? + 1),
+            // No newline left and nothing before the window: the log is
+            // nothing but blanks, or else it is a single line.
+            None if start == 0 && trimmed.is_empty() => return Ok(0),
+            None if start == 0 => return Ok(parse_seq(trimmed, log)? + 1),
+            // The last line straddles the window's start; widen and retry.
+            //
+            // Deciding by whether the window actually *grew*, rather than by a
+            // `window < max_tail` guard on the pre-doubled value, is what keeps
+            // the cap a real bound. Under that guard the doubling clamped only
+            // against `len`, so the read issued before the cap error could
+            // overshoot `max_tail` — invisible with the shipped constants only
+            // because 16 MiB is an exact power-of-two multiple of 8 KiB, which
+            // is a coincidence of their values, not something enforced.
+            None => {
+                let grown = (window * 2).min(len).min(max_tail);
+                if grown == window {
+                    return Err(anyhow!(
+                        "the last line of {} exceeds the {max_tail}-byte tail read; \
+                         no span this layer writes is that large",
+                        log.display()
+                    ));
+                }
+                window = grown;
+            }
+        }
+    }
+}
+
+/// Read exactly `len` bytes at `offset`. Seeks from the start rather than the
+/// end: `SeekFrom::End` with a negative offset larger than the file is an error,
+/// not a clamp, so a log shorter than one window would fail there.
+fn read_at(file: &mut File, log: &Path, offset: u64, len: u64) -> Result<Vec<u8>> {
+    file.seek(SeekFrom::Start(offset))
+        .with_context(|| format!("failed to seek {}", log.display()))?;
+    let mut buf = vec![0u8; len as usize];
+    file.read_exact(&mut buf)
+        .with_context(|| format!("failed to read {}", log.display()))?;
+    Ok(buf)
+}
+
+/// The `seq` of one serialized span line, failing loud on a corrupt one under
+/// the same wording [`read_spans`] uses.
+fn parse_seq(line: &[u8], log: &Path) -> Result<u64> {
+    let span: Span = serde_json::from_slice(line)
+        .with_context(|| format!("corrupt span line in {}", log.display()))?;
+    Ok(span.seq)
 }
 
 /// Take the log's exclusive lock, giving up after `timeout` rather than waiting
@@ -967,6 +1086,214 @@ mod tests {
             (0..RACERS).collect::<Vec<_>>(),
             "seqs must be distinct and gapless; duplicates or gaps mean the \
              read-modify-write raced"
+        );
+    }
+
+    /// Write `raw` as the whole log, bypassing the append path, so a test can
+    /// stage a log shape the append path would never produce.
+    fn seed_log(dir: &tempfile::TempDir, raw: &str) -> PathBuf {
+        let log = dir.path().join(".aoa/traces/live-seeded.jsonl");
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        std::fs::write(&log, raw).unwrap();
+        log
+    }
+
+    /// One serialized span line, newline included.
+    fn span_line(seq: u64) -> String {
+        span_line_with(seq, Map::new())
+    }
+
+    /// [`span_line`], carrying `attributes` — which is how a fixture controls
+    /// the line's length.
+    fn span_line_with(seq: u64, attributes: Map<String, Value>) -> String {
+        let span = Span {
+            span_type: SpanType::TestRun,
+            source: SpanSource::Native,
+            seq,
+            attributes,
+        };
+        format!("{}\n", serde_json::to_string(&span).unwrap())
+    }
+
+    /// The seq of the span the append path just wrote — i.e. the log's last.
+    ///
+    /// Reads the log in full, so it is only usable where every line parses. A
+    /// test staging a deliberately corrupt line must read the tail by hand.
+    fn last_seq(log: &Path) -> u64 {
+        read_spans(log).unwrap().last().unwrap().seq
+    }
+
+    /// One span line whose serialized form exceeds `bytes`: the padding alone
+    /// is that long, and it rides in an attribute so the line is a real span
+    /// rather than filler.
+    fn oversized_span_line(seq: u64, bytes: u64) -> String {
+        let mut attributes = Map::new();
+        attributes.insert(
+            "path".to_string(),
+            Value::String("p".repeat(bytes as usize)),
+        );
+        span_line_with(seq, attributes)
+    }
+
+    #[test]
+    fn an_empty_log_starts_at_seq_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = seed_log(&dir, "");
+        append_span(&log, SpanType::TestRun, Map::new()).unwrap();
+        assert_eq!(last_seq(&log), 0);
+    }
+
+    /// `seq` continues from the last one written, not from the number of spans.
+    ///
+    /// The two agree only on a gapless log. They diverge on one carrying a gap
+    /// — which the pre-lock races (see [`append_span_with`]) actually produced —
+    /// and there the count is the wrong answer: it re-emits a seq already in the
+    /// file, and `validate_trace` compares adjacent pairs, so the resulting
+    /// decrease wedges `aoa audit` for the whole repo with no repair path.
+    #[test]
+    fn append_continues_from_the_last_seq_not_the_span_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = seed_log(&dir, &format!("{}{}", span_line(0), span_line(7)));
+        append_span(&log, SpanType::WriteCommitted, Map::new()).unwrap();
+        assert_eq!(
+            last_seq(&log),
+            8,
+            "must be last+1; 2 would mean the count was used and the seq decreased"
+        );
+    }
+
+    /// The regression guard for the bounded read itself (aoa-1lq0).
+    ///
+    /// Deriving `seq` must touch only the log's tail, so a log whose *earlier*
+    /// lines are unparseable still appends. Any implementation that *validates
+    /// every line* fails here — which is the point: every other test in this
+    /// group passes under a full-file read, so without this one nothing pins
+    /// the tail-only contract at all.
+    ///
+    /// It pins parsing, not I/O: an implementation that read the whole file into
+    /// memory and still parsed only the last line would pass. The bound on how
+    /// much is *read* is pinned by
+    /// [`next_seq_refuses_to_widen_past_the_cap`] instead.
+    ///
+    /// This deliberately narrows corruption detection on the append path.
+    /// Mid-log corruption is still caught loudly by the full `read_spans` in
+    /// [`run_check`] and again by validation at corpus ingest, and refusing to
+    /// append here would instead freeze all further recording on a log with any
+    /// historical bad line — on an append-only file with no repair path.
+    #[test]
+    fn append_reads_only_the_tail_and_ignores_an_unparseable_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = seed_log(&dir, &format!("not json at all\n{}", span_line(4)));
+        append_span(&log, SpanType::WriteCommitted, Map::new()).unwrap();
+
+        let raw = std::fs::read_to_string(&log).unwrap();
+        let appended: Span = serde_json::from_str(raw.lines().last().unwrap()).unwrap();
+        assert_eq!(appended.seq, 5);
+    }
+
+    /// A final line larger than one tail window must widen the read, not get
+    /// truncated into a parse error.
+    ///
+    /// Ordinary lines precede the big one deliberately. A log consisting of
+    /// *only* the oversized line would let the widen loop terminate by reaching
+    /// the start of the file, leaving the case it actually has to get right —
+    /// locating the newline that ends the line before it — unexercised.
+    #[test]
+    fn append_resolves_a_final_line_longer_than_one_tail_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = seed_log(
+            &dir,
+            &format!(
+                "{}{}{}",
+                span_line(0),
+                span_line(1),
+                oversized_span_line(2, SEQ_TAIL_WINDOW * 3)
+            ),
+        );
+        append_span(&log, SpanType::TestRun, Map::new()).unwrap();
+        assert_eq!(last_seq(&log), 3);
+    }
+
+    /// Widening is bounded. Past the cap the read gives up loudly rather than
+    /// growing without limit — which would surrender the very bound `next_seq`
+    /// exists to establish.
+    ///
+    /// The cap is a parameter for the same reason the lock timeout is: the real
+    /// 16 MiB [`MAX_SEQ_TAIL_BYTES`] would make this test write 16 MiB to prove
+    /// a branch that is independent of the number.
+    ///
+    /// The numbers are chosen so an unclamped widen is caught as a wrong
+    /// *answer*, not merely as an oversized read a test cannot observe. `cap` is
+    /// deliberately not a power-of-two multiple of [`SEQ_TAIL_WINDOW`], and the
+    /// log is shorter than the next doubling past it. A widen that clamps only
+    /// against the log's length therefore reaches `start == 0`, parses the whole
+    /// file as one line, and *succeeds* — so this assertion fails. Only a widen
+    /// that also clamps against `cap` stops short and reports the cap.
+    ///
+    /// With the shipped constants the bug is dormant (16 MiB is an exact
+    /// power-of-two multiple of 8 KiB, so doubling lands on the cap), which is
+    /// precisely why the alignment must not be assumed here.
+    #[test]
+    fn next_seq_refuses_to_widen_past_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let cap = SEQ_TAIL_WINDOW * 3;
+        let log = seed_log(&dir, &oversized_span_line(1, cap + 1000));
+
+        let len = std::fs::metadata(&log).unwrap().len();
+        assert!(len > cap, "the log must exceed the cap, got {len} vs {cap}");
+        assert!(
+            len < SEQ_TAIL_WINDOW * 4,
+            "and must be short enough that an unclamped widen would reach the \
+             start of the file and wrongly succeed, got {len}"
+        );
+
+        let mut file = std::fs::OpenOptions::new().read(true).open(&log).unwrap();
+        let err = next_seq(&mut file, &log, cap).unwrap_err();
+        assert!(
+            err.to_string().contains("exceeds"),
+            "must name the exceeded tail read, got: {err}"
+        );
+    }
+
+    /// A log of nothing but blank lines is empty in every sense `read_spans`
+    /// recognizes, so it starts at zero rather than failing on an empty parse.
+    #[test]
+    fn an_entirely_blank_log_starts_at_seq_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = seed_log(&dir, "\n   \n\n");
+        append_span(&log, SpanType::TestRun, Map::new()).unwrap();
+        assert_eq!(last_seq(&log), 0);
+    }
+
+    /// Blank trailing lines are not corruption — [`read_spans`] skips them, and
+    /// the tail scan must skip them too rather than handing an empty segment to
+    /// the parser.
+    #[test]
+    fn append_skips_blank_trailing_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = seed_log(&dir, &format!("{}\n   \n", span_line(3)));
+        append_span(&log, SpanType::TestRun, Map::new()).unwrap();
+        assert_eq!(last_seq(&log), 4);
+    }
+
+    /// A log with no final newline is a torn write, and appending onto it would
+    /// glue the new span's JSON onto the partial line — one permanently corrupt
+    /// line that fails at corpus ingest, on an append-only file. Refuse instead.
+    #[test]
+    fn append_refuses_a_log_whose_final_line_is_torn() {
+        let dir = tempfile::tempdir().unwrap();
+        let torn = format!("{}{{\"type\":\"test.run\"", span_line(0));
+        let log = seed_log(&dir, &torn);
+
+        let err = append_span(&log, SpanType::TestRun, Map::new()).unwrap_err();
+        assert!(
+            err.to_string().contains("no trailing newline"),
+            "must name the torn write, got: {err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            torn,
+            "refusing must leave the log byte-identical, never a partial append"
         );
     }
 }
