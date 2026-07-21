@@ -23,6 +23,12 @@ pub enum AuditError {
     )]
     UnsafeTraceName { name: String },
 
+    /// A trace write targeted a path that already exists. Whole traces are
+    /// finished artifacts, so the write is refused rather than truncating an
+    /// observation the corpus may already have counted.
+    #[error("trace file already exists at {path}: refusing to overwrite a landed trace")]
+    TraceExists { path: PathBuf },
+
     /// A trace produced through the observe-installed path failed validation.
     #[error(transparent)]
     Trace(#[from] aoa_trace::TraceError),

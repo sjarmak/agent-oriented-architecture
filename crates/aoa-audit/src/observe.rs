@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
 use aoa_trace::{validate_trace, Trace, TraceReport};
@@ -6,6 +7,10 @@ use crate::error::AuditError;
 
 /// Where telemetry traces are written, relative to a repo root.
 const TRACES_SUBDIR: &str = ".aoa/traces";
+
+/// The extension every whole-trace file carries. Distinguishes this lane from
+/// the `.jsonl` live logs that share the traces directory.
+const TRACE_EXTENSION: &str = ".json";
 
 /// The result of installing trace telemetry. Tells the caller exactly where
 /// traces will be written and where the ignore guard lives.
@@ -24,28 +29,49 @@ impl ObserveOutcome {
     /// Returns [`AuditError::UnsafeTraceName`] for anything that could escape
     /// the installed `.aoa/traces` boundary: an absolute path (which would
     /// replace the base outright), a `.`/`..` component, a multi-component or
-    /// separator-bearing name, or an empty name.
+    /// separator-bearing name, or an empty name. Also rejects any name outside
+    /// this lane's `<stem>.json` shape, which keeps the write off the
+    /// `live-<session>.jsonl` lane (see [`validate_trace_name`]).
     pub fn trace_path(&self, name: &str) -> Result<PathBuf, AuditError> {
         validate_trace_name(name)?;
         Ok(self.traces_dir.join(name))
     }
 }
 
-/// Accept a trace filename only if it is exactly one [`Component::Normal`].
+/// Accept a trace filename only if it is exactly one [`Component::Normal`]
+/// carrying a non-empty stem and the `.json` extension.
 ///
-/// This is the containment invariant for the write path: joined onto
-/// `.aoa/traces`, a single normal component always lands directly inside it,
-/// whereas an absolute path replaces the base, `..` walks out of it, and a
+/// The component rule is the containment invariant for the write path: joined
+/// onto `.aoa/traces`, a single normal component always lands directly inside
+/// it, whereas an absolute path replaces the base, `..` walks out of it, and a
 /// multi-component name reaches into sub-trees. The explicit separator/NUL
 /// guard closes the platform gap where `Path::components` folds a trailing
 /// separator into a lone `Normal` and where `\` is an ordinary character on
 /// Unix but a separator elsewhere.
+///
+/// The `.json` rule is the *lane* invariant. Two file shapes share
+/// `.aoa/traces`: whole traces (`<stem>.json`, this function's caller) and the
+/// append-only live logs (`live-<session>.jsonl`) that the `aoa enforce` hooks
+/// extend under their own write lock. Without an extension check a caller could
+/// hand `write_trace` a live-log name and clobber an active log from entirely
+/// outside that lock. Requiring `.json` — which `.jsonl` does not satisfy —
+/// confines this lane to files the live-log writer never touches, and matches
+/// the reader contract in `aoa_observe_shim::corpus`, which only ingests a
+/// non-`.jsonl` file when it ends in `.json`.
 fn validate_trace_name(name: &str) -> Result<(), AuditError> {
     let mut components = Path::new(name).components();
     let single_normal =
         matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none();
+    let in_json_lane = name
+        .strip_suffix(TRACE_EXTENSION)
+        .is_some_and(|stem| !stem.is_empty());
 
-    if single_normal && !name.contains('/') && !name.contains('\\') && !name.contains('\0') {
+    if single_normal
+        && in_json_lane
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains('\0')
+    {
         Ok(())
     } else {
         Err(AuditError::UnsafeTraceName {
@@ -106,10 +132,28 @@ pub fn write_trace(
         path: path.clone(),
         source: std::io::Error::new(std::io::ErrorKind::InvalidData, source),
     })?;
-    std::fs::write(&path, json).map_err(|source| AuditError::Io {
-        path: path.clone(),
-        source,
-    })?;
+    // Create-new, never truncate. A trace file is a finished artifact, so an
+    // existing path means a name collision, not an update: truncating it would
+    // destroy a landed observation the corpus has already counted. `create_new`
+    // makes that refusal atomic — the existence check and the create are one
+    // syscall, so a concurrent writer cannot land between them.
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|source| match source.kind() {
+            std::io::ErrorKind::AlreadyExists => AuditError::TraceExists { path: path.clone() },
+            _ => AuditError::Io {
+                path: path.clone(),
+                source,
+            },
+        })?;
+    file.write_all(json.as_bytes())
+        .map_err(|source| AuditError::Io {
+            path: path.clone(),
+            source,
+        })?;
+    drop(file);
 
     let report = validate_trace(&path)?;
     Ok((path, report))
@@ -132,10 +176,13 @@ mod tests {
         for name in [
             "run-1.json",
             "trace.json",
-            "a",
-            "..foo",
-            "foo..bar",
+            "a.json",
+            "..foo.json",
+            "foo..bar.json",
             "session_2026.json",
+            // Not in the live-log lane: the `live-` prefix alone is harmless,
+            // only `live-<session>.jsonl` names an append-only log.
+            "live-s1.json",
         ] {
             let path = o.trace_path(name).expect("valid name accepted");
             assert_eq!(path, o.traces_dir.join(name));
@@ -162,6 +209,11 @@ mod tests {
             "dir/",             // trailing separator
             "a\\b",             // backslash separator (defensive)
             "",                 // empty
+            "live-x.jsonl",     // the append-only live-log lane
+            "trace.jsonl",      // any .jsonl, lane-owned regardless of prefix
+            "run-1",            // no extension: outside the ingested lane
+            "run-1.txt",        // wrong extension
+            ".json",            // extension with an empty stem
         ] {
             let err = o
                 .trace_path(name)
