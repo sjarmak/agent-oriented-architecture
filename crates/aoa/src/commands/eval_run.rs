@@ -37,10 +37,8 @@ use serde::{Deserialize, Serialize};
 
 use aoa_bench::{discover_tasks, leg_pass, load_task, scoring_path, transcript_path};
 use aoa_codeprobe_shim::parse_transcript_file;
-use aoa_gap::{
-    compute_gap, BehavioralSignal, GapOutcome, HeldOutProvenance, InsufficientDataNote, RunResult,
-    TaskOutcome,
-};
+use aoa_construct::{BehavioralSignal, InsufficientDataNote};
+use aoa_gap::{compute_gap, GapOutcome, HeldOutProvenance, RunResult, TaskOutcome};
 use aoa_metrics::{
     compute_edit_locality, compute_invariant_discoverability, compute_mutation_surface,
     compute_retrieval_locality, compute_subtree_metrics, discover_partition, ConditionedOn,

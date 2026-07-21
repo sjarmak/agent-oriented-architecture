@@ -33,11 +33,14 @@ use crate::construct::{
 /// under real observation reaches it. Moving it is a calibration decision, not a
 /// refactor.
 ///
-/// Deliberately NOT [`crate::MAX_EXACT_N`], which happens to hold the same
+/// Deliberately NOT `aoa_corpus::MAX_EXACT_N`, which happens to hold the same
 /// value: that is a *ceiling* on permutation compute over a population of repos,
 /// this is a *floor* on sessions within one repo. Coupled, the sampled
-/// significance test `correlation.rs` anticipates would raise the cap and
-/// thereby make the behavioral window *harder* to satisfy.
+/// significance test `aoa-corpus` anticipates would raise the cap and thereby
+/// make the behavioral window *harder* to satisfy. The two constants live in
+/// different crates precisely because they are unrelated quantities; this is a
+/// plain reference, not a link, because construct validity does not depend on
+/// the corpus that supplies its outcomes.
 pub const MIN_HELD_OUT_OBSERVATIONS: usize = 10;
 
 /// The gating-candidate metrics that are *behavioral* — computable only from

@@ -26,7 +26,7 @@ pub fn run(args: &RecommendArgs) -> Result<i32> {
     if let Some(warning) = &audit.subtree_discovery_warning {
         eprintln!("warning: {warning}");
     }
-    let determination = aoa_gap::determination_with_signal(&audit.behavioral_signal);
+    let determination = aoa_construct::determination_with_signal(&audit.behavioral_signal);
     let fixes = aoa_migrate::all_fixes();
 
     let report = aoa_recommend::recommend(&audit, &determination, &fixes);

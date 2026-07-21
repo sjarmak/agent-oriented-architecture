@@ -17,7 +17,7 @@
 //!   needs — strict UTF-8 for paths/OIDs (fail loud on garbage), lossy for
 //!   blame content that legitimately may not be UTF-8.
 //!
-//! Both return `Result<_, String>`: the injectable [`aoa_gap::GitRunner`]
+//! Both return `Result<_, String>`: the injectable [`aoa_corpus::GitRunner`]
 //! contract is `Result<String, String>`, so `corpus` returns the string
 //! verbatim; the `anyhow` callers map it at their boundary.
 

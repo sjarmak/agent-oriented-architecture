@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use aoa_audit::{audit, exit_code, observe, write_trace, AuditConfig, AuditReport, Tier};
-use aoa_gap::MIN_HELD_OUT_OBSERVATIONS;
+use aoa_construct::MIN_HELD_OUT_OBSERVATIONS;
 use aoa_metrics::{IndexQuality, SymbolGraph};
 use aoa_trace::{Span, SpanSource, SpanType, Trace};
 
@@ -479,7 +479,7 @@ fn greenfield_repo_reports_insufficient_data_not_a_fabricated_score() {
         .as_ref()
         .expect("insufficient-data note present");
     // Metrics and reason both match the canonical family note.
-    assert_eq!(*note, aoa_gap::InsufficientDataNote::behavioral());
+    assert_eq!(*note, aoa_construct::InsufficientDataNote::behavioral());
 
     // No fabricated behavioral score: the mutation-surface item is absent.
     assert!(
@@ -492,7 +492,10 @@ fn greenfield_repo_reports_insufficient_data_not_a_fabricated_score() {
 
     let human = report.render_human();
     assert!(human.contains("InsufficientData"), "{human}");
-    assert!(human.contains(aoa_gap::INSUFFICIENT_DATA_REASON), "{human}");
+    assert!(
+        human.contains(aoa_construct::INSUFFICIENT_DATA_REASON),
+        "{human}"
+    );
 }
 
 // aoa-d6t.23 criterion: once enough observe-captured sessions accumulate under

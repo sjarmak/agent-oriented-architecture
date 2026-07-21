@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use aoa_gap::MIN_HELD_OUT_OBSERVATIONS;
+use aoa_construct::MIN_HELD_OUT_OBSERVATIONS;
 use assert_cmd::prelude::*;
 use predicates::prelude::*;
 use serde_json::Value;

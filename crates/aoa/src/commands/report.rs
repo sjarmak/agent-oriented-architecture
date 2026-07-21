@@ -24,8 +24,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use aoa_audit::AuditReport;
+use aoa_construct::ConstructValidityReport;
 use aoa_falsify::Verdict;
-use aoa_gap::ConstructValidityReport;
 use aoa_recommend::RecommendationReport;
 
 use crate::cli::ReportArgs;
@@ -88,7 +88,7 @@ pub fn run(args: &ReportArgs) -> Result<i32> {
     // Condition on the signal the audit just measured, as `aoa recommend`
     // does. `report` composes both into one document, so an unconditioned
     // determination would contradict the audit half it ships alongside.
-    let determination = aoa_gap::determination_with_signal(&audit.behavioral_signal);
+    let determination = aoa_construct::determination_with_signal(&audit.behavioral_signal);
     let fixes = aoa_migrate::all_fixes();
     let recommendations = aoa_recommend::recommend(&audit, &determination, &fixes);
     let migrations: Vec<MigrationView> = fixes

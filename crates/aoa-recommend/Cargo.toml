@@ -8,7 +8,7 @@ license.workspace = true
 
 [dependencies]
 aoa-audit = { path = "../aoa-audit" }
-aoa-gap = { path = "../aoa-gap" }
+aoa-construct = { path = "../aoa-construct" }
 aoa-migrate = { path = "../aoa-migrate" }
 serde = { workspace = true }
 

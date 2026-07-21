@@ -1,6 +1,6 @@
 //! Live external-outcome corpus driver (aoa-x0a.4).
 //!
-//! The offline apparatus in `aoa_gap::outcome` correlates AOA structure measures
+//! The offline apparatus in `aoa_corpus` correlates AOA structure measures
 //! against a per-repo revert rate, but only when handed a real [`Corpus`]. That
 //! crate is deliberately offline — it never clones, never shells git, and wires
 //! no real subprocess runner into any default. This module is the app-layer
@@ -8,7 +8,7 @@
 //! a cloned repo for the structure counts, shells git for the revert signal, and
 //! assembles the [`Corpus`] the offline builder consumes. The offline clamp holds
 //! because everything that touches the network or a subprocess lives here, in the
-//! binary, never back in `aoa-gap`.
+//! binary, never back in `aoa-corpus`.
 //!
 //! [`structure_counts`] reduces a real audit run to the `(metric → count)` map a
 //! corpus [`Repo`] carries; [`mine_corpus`] is the `aoa gap mine-corpus` handler
@@ -26,10 +26,8 @@ use anyhow::{anyhow, bail, Context, Result};
 
 use aoa_audit::{structure_measurements, AuditConfig, AuditError, FindingKind, StructureMeasure};
 use aoa_bench::{is_task_dir, load_task};
-use aoa_gap::{
-    build_report_from_corpus, mine_reverts, Corpus, GatingThresholds, GitRunner, MetricName,
-    MinedCommit, Repo,
-};
+use aoa_construct::{GatingThresholds, MetricName};
+use aoa_corpus::{build_report_from_corpus, mine_reverts, Corpus, GitRunner, MinedCommit, Repo};
 
 use crate::cli::MineCorpusArgs;
 use crate::commands::fsutil::MAX_TASK_DIRS;
@@ -84,7 +82,7 @@ fn structure_metric(kind: FindingKind) -> Option<MetricName> {
 }
 
 /// Reduce a real structure measurement over `repo` to the corpus structure-count
-/// map: the `(gating-candidate name → measured count)` pairs one [`aoa_gap::Repo`]
+/// map: the `(gating-candidate name → measured count)` pairs one [`aoa_corpus::Repo`]
 /// carries as its `x` values.
 ///
 /// Uses [`aoa_audit::structure_measurements`], not the punch list, so a *clean*
@@ -372,7 +370,7 @@ ground_truth_commit skipped)",
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aoa_gap::GATING_CANDIDATES;
+    use aoa_construct::GATING_CANDIDATES;
 
     fn is_gating_candidate(name: &str) -> bool {
         GATING_CANDIDATES.iter().any(|(n, _)| n.as_str() == name)

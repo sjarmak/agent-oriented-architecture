@@ -3,7 +3,7 @@ use std::io::IsTerminal;
 
 use anyhow::{Context, Result};
 
-use aoa_gap::{CheckboxBaseline, CriterionStatus};
+use aoa_corpus::{CheckboxBaseline, CriterionStatus};
 
 use crate::cli::{CheckboxBaselineArgs, GapArgs, GapCommand};
 use crate::output::{print_human, print_json};
@@ -22,13 +22,13 @@ pub fn run(args: &GapArgs) -> Result<i32> {
 /// Surface the R9c construct-validity determination in the requested register.
 ///
 /// This is the live, operator-facing consumer of
-/// [`aoa_gap::current_determination`]: it reports which gating-candidate metrics
+/// [`aoa_construct::current_determination`]: it reports which gating-candidate metrics
 /// have earned `Gating` status (a confirming external-outcome correlation) and
 /// which remain `Advisory`. With no external-outcome corpus available, every
 /// candidate is advisory — the surface shows that explicitly rather than letting
 /// any metric silently gate a decision.
 fn determination(json: bool) -> Result<i32> {
-    let report = aoa_gap::current_determination();
+    let report = aoa_construct::current_determination();
 
     if json {
         print_json(&report)?;
@@ -45,7 +45,7 @@ fn determination(json: bool) -> Result<i32> {
 /// criteria that cannot be decided from the repo tree, with their reasons —
 /// they are carried in the JSON register regardless, never dropped.
 fn checkbox_baseline(args: &CheckboxBaselineArgs, json: bool) -> Result<i32> {
-    let baseline = aoa_gap::score_repo(args.repo_id.as_str(), &args.root)
+    let baseline = aoa_corpus::score_repo(args.repo_id.as_str(), &args.root)
         .with_context(|| format!("failed to score {}", args.root.display()))?;
 
     if json {
@@ -91,7 +91,7 @@ impl Style {
 fn render_baseline(baseline: &CheckboxBaseline, show_excluded: bool, style: &Style) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "Factory checkbox baseline: {}", baseline.repo_id);
-    let level_name = aoa_gap::FACTORY_LEVEL_NAMES[usize::from(baseline.level) - 1];
+    let level_name = aoa_corpus::FACTORY_LEVEL_NAMES[usize::from(baseline.level) - 1];
     let _ = writeln!(
         out,
         "{}",
@@ -176,7 +176,7 @@ mod tests {
 
     fn baseline() -> CheckboxBaseline {
         let dir = tempfile::tempdir().unwrap();
-        aoa_gap::score_repo("styled", dir.path()).unwrap()
+        aoa_corpus::score_repo("styled", dir.path()).unwrap()
     }
 
     #[test]

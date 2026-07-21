@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use aoa_budget::{count_budget, resolve_closure, Config};
-use aoa_gap::BehavioralSignal;
+use aoa_construct::BehavioralSignal;
 use aoa_metrics::{
     compute_mutation_surface, discover_partition, IndexQuality, MetricInput, SubtreePartition,
     SymbolGraph, TransformMap,

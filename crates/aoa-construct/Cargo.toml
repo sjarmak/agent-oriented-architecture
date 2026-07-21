@@ -1,0 +1,15 @@
+[package]
+name = "aoa-construct"
+description = "Construct validity (R9c): metric classification, gating determination, and behavioral signal for the AOA Toolkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+# serde_json is test-only here: the construct-validity report is serialized by
+# consumers, but this crate only round-trips it in its own artifact tests.
+serde_json = { workspace = true }

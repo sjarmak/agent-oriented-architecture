@@ -1,6 +1,6 @@
 //! Offline external-outcome corpus → construct-validity wiring (R9c follow-up).
 //!
-//! The apparatus in [`crate::correlation`] / [`crate::construct`] can flip a
+//! The apparatus in [`crate::correlation`] / [`aoa_construct`] can flip a
 //! metric from Advisory to Gating, but only when fed real `(metric, outcome)`
 //! pairs. This module supplies those pairs **offline**, from a synthetic corpus
 //! of mined repos, with no clone, no network, and no forge API. It is the bridge
@@ -32,13 +32,13 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::checkbox_baseline::CheckboxBaseline;
-use crate::construct::{
+use aoa_construct::{
     build_report, ConstructValidityReport, CorrelationReport, ExternalOutcome, GatingThresholds,
     MetricName, MetricOrientation, OutcomeCorrelation, GATING_CANDIDATES,
 };
+
+use crate::checkbox_baseline::CheckboxBaseline;
 use crate::correlation::{spearman, CorrelationError};
-use crate::error::GapError;
 
 /// One commit mined from a repo's history, with its outcome flags. `reverted`
 /// is the primary revert signal; `churn` is the post-merge line-churn proxy
@@ -203,7 +203,7 @@ pub enum CorpusJoinError {
 ///
 /// Deliberately NOT a [`CorrelationReport`]: the baseline is a study feature
 /// column, not a gating candidate. It carries no orientation and is never
-/// classified into a [`crate::MetricMode`], so a checkbox score cannot gate a
+/// classified into a [`aoa_construct::MetricMode`], so a checkbox score cannot gate a
 /// decision (see `crate::checkbox_baseline`) — a null result here IS the R0
 /// headline.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -394,13 +394,13 @@ pub fn parse_reverted_shas(git_log: &str) -> Vec<String> {
 /// is evidence the change was backed out, and the alternative is a silent, non-
 /// obvious undercount. Enforced by [`tests::revert_log_command_shape_is_stable`].
 ///
-/// Errs with [`GapError::RevertMiner`] when `dir` is not valid UTF-8: git's `-C`
+/// Errs with [`RevertMinerError`] when `dir` is not valid UTF-8: git's `-C`
 /// argument is a string, and silently lossy-converting the path would point the
 /// miner at the wrong directory.
-pub fn revert_log_command(dir: &Path) -> Result<Vec<String>, GapError> {
+pub fn revert_log_command(dir: &Path) -> Result<Vec<String>, RevertMinerError> {
     let dir = dir
         .to_str()
-        .ok_or_else(|| GapError::RevertMiner(format!("clone path is not valid UTF-8: {dir:?}")))?;
+        .ok_or_else(|| RevertMinerError(format!("clone path is not valid UTF-8: {dir:?}")))?;
     Ok(vec![
         "git".into(),
         "-C".into(),
@@ -417,8 +417,20 @@ pub fn revert_log_command(dir: &Path) -> Result<Vec<String>, GapError> {
 /// module offline: tests pass a closure over captured text; a live session passes
 /// a real subprocess runner. The runner reports failure as an opaque message
 /// string (whatever the subprocess surface produced); [`mine_reverts`] wraps it
-/// into the typed [`GapError::RevertMiner`] at the boundary.
+/// into the typed [`RevertMinerError`] at the boundary.
 pub type GitRunner<'a> = dyn Fn(&[String]) -> Result<String, String> + 'a;
+
+/// The offline revert miner could not produce SHAs: either the injected git
+/// runner failed or the clone path is not representable on the git command
+/// line. Carries the underlying message verbatim so the real cause is never
+/// obscured.
+///
+/// This is corpus-local on purpose. Revert mining is not part of computing or
+/// gating on a held-out gap, so it does not belong in `aoa-gap`'s `GapError`
+/// alongside the three refusal variants that are.
+#[derive(Debug, Error, PartialEq, Eq)]
+#[error("revert miner failed: {0}")]
+pub struct RevertMinerError(pub String);
 
 /// Mine the reverted SHAs from a real clone at `dir`, using the injected `run`.
 ///
@@ -428,20 +440,21 @@ pub type GitRunner<'a> = dyn Fn(&[String]) -> Result<String, String> + 'a;
 /// shells out to git; the offline clamp is enforced by never wiring a real
 /// subprocess runner into any test or default.
 ///
-/// Errs with [`GapError::RevertMiner`] when the path is not valid UTF-8 (see
+/// Errs with [`RevertMinerError`] when the path is not valid UTF-8 (see
 /// [`revert_log_command`]) or when the runner fails; the runner's message is
-/// carried verbatim inside the variant.
-pub fn mine_reverts(dir: &Path, run: &GitRunner<'_>) -> Result<Vec<String>, GapError> {
+/// carried verbatim inside the error.
+pub fn mine_reverts(dir: &Path, run: &GitRunner<'_>) -> Result<Vec<String>, RevertMinerError> {
     let cmd = revert_log_command(dir)?;
-    let stdout = run(&cmd).map_err(GapError::RevertMiner)?;
+    let stdout = run(&cmd).map_err(RevertMinerError)?;
     Ok(parse_reverted_shas(&stdout))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aoa_construct::MetricMode;
+
     use crate::checkbox_baseline::{FACTORY_CRITERIA_SOURCE, FACTORY_CRITERIA_VERSION};
-    use crate::construct::MetricMode;
 
     const CONFIRMING: &str =
         include_str!("../tests/fixtures/external_outcome_corpus_confirming.json");
@@ -1115,10 +1128,6 @@ prose: this reverts commit nothing in particular
         let bad = Path::new(OsStr::from_bytes(b"/scratch/\xff\xfe"));
         let err = revert_log_command(bad).expect_err("non-UTF-8 path must fail loudly");
         assert!(
-            matches!(err, GapError::RevertMiner(_)),
-            "expected RevertMiner, got {err:?}"
-        );
-        assert!(
             err.to_string().contains("not valid UTF-8"),
             "error must name the UTF-8 failure: {err}"
         );
@@ -1143,7 +1152,7 @@ prose: this reverts commit nothing in particular
         let run = |_cmd: &[String]| -> Result<String, String> { Err("git not found".into()) };
         let err = mine_reverts(Path::new("/scratch/clone"), &run)
             .expect_err("runner failure must propagate");
-        assert_eq!(err, GapError::RevertMiner("git not found".into()));
+        assert_eq!(err, RevertMinerError("git not found".into()));
         assert!(
             err.to_string().contains("git not found"),
             "display must carry the runner's message: {err}"

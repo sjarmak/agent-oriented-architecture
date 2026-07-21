@@ -1,4 +1,4 @@
-use aoa_gap::MetricName;
+use aoa_construct::MetricName;
 use serde::{Deserialize, Serialize};
 
 use crate::tier::{EnforcementPlane, Tier};

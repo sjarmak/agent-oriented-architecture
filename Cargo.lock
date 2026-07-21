@@ -76,6 +76,8 @@ dependencies = [
  "aoa-bench",
  "aoa-budget",
  "aoa-codeprobe-shim",
+ "aoa-construct",
+ "aoa-corpus",
  "aoa-enforce",
  "aoa-falsify",
  "aoa-gap",
@@ -101,7 +103,7 @@ name = "aoa-audit"
 version = "0.1.0"
 dependencies = [
  "aoa-budget",
- "aoa-gap",
+ "aoa-construct",
  "aoa-metrics",
  "aoa-observe-shim",
  "aoa-trace",
@@ -140,6 +142,25 @@ dependencies = [
  "aoa-trace",
  "serde",
  "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "aoa-construct"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "aoa-corpus"
+version = "0.1.0"
+dependencies = [
+ "aoa-construct",
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror",
 ]
 
@@ -235,7 +256,7 @@ name = "aoa-recommend"
 version = "0.1.0"
 dependencies = [
  "aoa-audit",
- "aoa-gap",
+ "aoa-construct",
  "aoa-migrate",
  "serde",
  "serde_json",

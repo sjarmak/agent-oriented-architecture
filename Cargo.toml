@@ -13,6 +13,6 @@ serde = { version = "1.0.219", features = ["derive"] }
 # float_roundtrip: committed JSON artifacts (correlation reports, corpus rows)
 # carry arbitrary f64 values that must parse back to the exact double they were
 # printed from; the default fast parse can be one ULP off, which breaks the
-# artifact-reproducibility tests in aoa-gap.
+# artifact-reproducibility tests in aoa-construct and aoa-corpus.
 serde_json = { version = "1.0.140", features = ["float_roundtrip"] }
 thiserror = "2.0.12"

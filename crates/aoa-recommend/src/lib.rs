@@ -7,7 +7,7 @@
 //! - **(a)** the ranked audit punch-list ([`aoa_audit::AuditReport`]) — measured
 //!   facts, deliberately stripped of any "deficiency" framing (anti-Goodhart);
 //! - **(b)** the R9c construct-validity determination
-//!   ([`aoa_gap::ConstructValidityReport`]) — whether each metric may *gate* a
+//!   ([`aoa_construct::ConstructValidityReport`]) — whether each metric may *gate* a
 //!   decision (`Gating`) or is `Advisory` only;
 //! - **(c)** the migration registry ([`aoa_migrate::all_fixes`]) — which fixes
 //!   exist and under what eligibility precondition.
@@ -19,7 +19,7 @@
 //! executable form of the rule "a recommendation may NOT assert a fix is worth
 //! applying on a metric still Advisory": the `Gating` conjunct gates it. With no
 //! external-outcome corpus available, every metric is currently `Advisory`
-//! (see [`aoa_gap::current_determination`]), so every finding is
+//! (see [`aoa_construct::current_determination`]), so every finding is
 //! [`Actionability::AdvisoryOnly`] today — the honest result. The same code
 //! promotes a finding to actionable-now automatically once a confirming
 //! correlation lifts its metric to `Gating`.
@@ -37,7 +37,7 @@ use std::fmt::Write as _;
 use serde::{Deserialize, Serialize};
 
 use aoa_audit::{AuditReport, FindingKind, MeasuredCost, PunchItem, Tier};
-use aoa_gap::{ConstructValidityReport, InsufficientDataNote, MetricMode, MetricName};
+use aoa_construct::{ConstructValidityReport, InsufficientDataNote, MetricMode, MetricName};
 use aoa_migrate::CodeFix;
 
 /// Whether AOA recommends acting on a finding now, or merely surfaces it.
@@ -342,7 +342,7 @@ fn verdict_line(rec: &FindingRecommendation) -> String {
 mod tests {
     use super::*;
 
-    use aoa_gap::{
+    use aoa_construct::{
         build_report, CorrelationReport, ExternalOutcome, GatingThresholds, MetricOrientation,
         OutcomeCorrelation, GATING_CANDIDATES,
     };
@@ -410,7 +410,11 @@ mod tests {
     #[test]
     fn all_advisory_determination_yields_no_actionable_now() {
         let audit = AuditReport::new(vec![nav_item()]);
-        let report = recommend(&audit, &aoa_gap::current_determination(), &all_fixes());
+        let report = recommend(
+            &audit,
+            &aoa_construct::current_determination(),
+            &all_fixes(),
+        );
 
         assert_eq!(report.actionable_now, 0);
         assert_eq!(report.advisory_only, 1);
@@ -515,7 +519,12 @@ mod tests {
         plane.plane = Some(aoa_audit::EnforcementPlane::RuntimeHook);
         let audit = AuditReport::new(vec![plane]);
 
-        let rec = &recommend(&audit, &aoa_gap::current_determination(), &all_fixes()).items[0];
+        let rec = &recommend(
+            &audit,
+            &aoa_construct::current_determination(),
+            &all_fixes(),
+        )
+        .items[0];
         assert_eq!(rec.metric, None);
         assert_eq!(rec.metric_mode, None);
         assert_eq!(rec.fix_id, None);
@@ -537,7 +546,12 @@ mod tests {
         );
         let audit = AuditReport::new(vec![finding]);
 
-        let rec = &recommend(&audit, &aoa_gap::current_determination(), &all_fixes()).items[0];
+        let rec = &recommend(
+            &audit,
+            &aoa_construct::current_determination(),
+            &all_fixes(),
+        )
+        .items[0];
         assert_eq!(rec.metric, None);
         assert_eq!(rec.metric_mode, None);
         assert_eq!(rec.fix_id, None);
@@ -559,7 +573,12 @@ mod tests {
         );
         let audit = AuditReport::new(vec![finding]);
 
-        let rec = &recommend(&audit, &aoa_gap::current_determination(), &all_fixes()).items[0];
+        let rec = &recommend(
+            &audit,
+            &aoa_construct::current_determination(),
+            &all_fixes(),
+        )
+        .items[0];
         assert_eq!(rec.metric, None);
         assert_eq!(rec.metric_mode, None);
         assert_eq!(rec.fix_id, None);
@@ -591,7 +610,12 @@ mod tests {
         ];
         for (kind, metric, unit) in cases {
             let audit = AuditReport::new(vec![item(kind, "probe", Tier::Tier3, 1, unit)]);
-            let rec = &recommend(&audit, &aoa_gap::current_determination(), &all_fixes()).items[0];
+            let rec = &recommend(
+                &audit,
+                &aoa_construct::current_determination(),
+                &all_fixes(),
+            )
+            .items[0];
             assert_eq!(rec.metric.as_deref(), Some(metric), "{kind:?}");
             assert_eq!(rec.metric_mode, Some(MetricMode::Advisory), "{kind:?}");
             assert_eq!(rec.fix_id, None, "{kind:?} has no migration");
@@ -629,8 +653,9 @@ mod tests {
             3,
             "writable files reachable",
         )]);
-        let determination =
-            aoa_gap::determination_with_signal(&aoa_gap::BehavioralSignal::from_observations(0));
+        let determination = aoa_construct::determination_with_signal(
+            &aoa_construct::BehavioralSignal::from_observations(0),
+        );
 
         let report = recommend(&audit, &determination, &all_fixes());
         let rec = &report.items[0];
@@ -644,12 +669,12 @@ mod tests {
 
         let note = report.insufficient_data.as_ref().expect("note present");
         // Metrics and reason both match the canonical family note.
-        assert_eq!(*note, aoa_gap::InsufficientDataNote::behavioral());
+        assert_eq!(*note, aoa_construct::InsufficientDataNote::behavioral());
 
         let rendered = report.render_human();
         assert!(rendered.contains("InsufficientData"), "{rendered}");
         assert!(
-            rendered.contains(aoa_gap::INSUFFICIENT_DATA_REASON),
+            rendered.contains(aoa_construct::INSUFFICIENT_DATA_REASON),
             "{rendered}"
         );
     }
@@ -657,8 +682,10 @@ mod tests {
     #[test]
     fn sufficient_signal_determination_carries_no_insufficient_note() {
         let audit = AuditReport::new(vec![nav_item()]);
-        let determination = aoa_gap::determination_with_signal(
-            &aoa_gap::BehavioralSignal::from_observations(aoa_gap::MIN_HELD_OUT_OBSERVATIONS),
+        let determination = aoa_construct::determination_with_signal(
+            &aoa_construct::BehavioralSignal::from_observations(
+                aoa_construct::MIN_HELD_OUT_OBSERVATIONS,
+            ),
         );
         let report = recommend(&audit, &determination, &all_fixes());
         assert!(report.insufficient_data.is_none());
@@ -668,7 +695,11 @@ mod tests {
     #[test]
     fn report_round_trips_through_json() {
         let audit = AuditReport::new(vec![nav_item()]);
-        let report = recommend(&audit, &aoa_gap::current_determination(), &all_fixes());
+        let report = recommend(
+            &audit,
+            &aoa_construct::current_determination(),
+            &all_fixes(),
+        );
         let json = serde_json::to_string(&report).expect("serialize");
         let parsed: RecommendationReport = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed, report);
@@ -677,8 +708,12 @@ mod tests {
     #[test]
     fn render_human_names_findings_and_the_gap_footer() {
         let audit = AuditReport::new(vec![nav_item()]);
-        let rendered =
-            recommend(&audit, &aoa_gap::current_determination(), &all_fixes()).render_human();
+        let rendered = recommend(
+            &audit,
+            &aoa_construct::current_determination(),
+            &all_fixes(),
+        )
+        .render_human();
         assert!(rendered.contains("AOA recommendations"));
         assert!(rendered.contains("navigability anchor"));
         assert!(rendered.contains("advisory-only"));
