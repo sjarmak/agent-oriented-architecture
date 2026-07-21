@@ -203,6 +203,157 @@ fn write_trace_refuses_to_follow_a_symlink_out_of_the_trace_dir() {
     );
 }
 
+// Criterion (aoa-pbqk): the INSTALL path is defended, not just the caller-
+// supplied trace name. `create_dir_all` and `fs::write` both follow symlinks, so
+// a `.aoa`, `.aoa/traces`, or `.aoa/.gitignore` planted as a link before install
+// would relocate every subsequent write outside the repo while each trace name
+// still passes the single-component check.
+//
+// The outside target is a REAL, EXISTING directory holding a seeded file. That
+// distinction is what makes these tests genuinely red before the fix: pointed at
+// a non-existent target, `create_dir_all` fails on its own with `Io` and a bare
+// `expect_err` would pass without any guard.
+#[cfg(unix)]
+mod install_path_symlinks {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    /// An existing directory outside the repo, holding one seeded file, that no
+    /// install may write into or through.
+    fn outside_dir() -> (TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("create outside dir");
+        let seeded = dir.path().join("seeded.txt");
+        std::fs::write(&seeded, "original").expect("seed outside file");
+        (dir, seeded)
+    }
+
+    /// Assert the outside tree is byte-for-byte what it was before the install
+    /// attempt: same entries, same seeded content. Deliberately NOT expressed via
+    /// `file_set` on the repo — that walker recurses through `path.is_dir()`,
+    /// which FOLLOWS symlinks, so an escaped write would surface as an innocent
+    /// `.aoa/traces/x` entry and the assertion would pass vacuously.
+    fn assert_outside_untouched(outside: &Path, seeded: &Path) {
+        let entries: BTreeSet<PathBuf> = std::fs::read_dir(outside)
+            .expect("read outside dir")
+            .flatten()
+            .map(|e| e.file_name().into())
+            .collect();
+        assert_eq!(
+            entries,
+            BTreeSet::from([PathBuf::from("seeded.txt")]),
+            "install wrote into the symlink target at {}",
+            outside.display()
+        );
+        assert_eq!(
+            std::fs::read_to_string(seeded).expect("read seeded file"),
+            "original",
+            "install wrote through the symlink and clobbered {}",
+            seeded.display()
+        );
+    }
+
+    /// Pin the reported node, not just the variant. Matching `{ .. }` alone
+    /// would pass for a guard that fired on the wrong ancestor — which is
+    /// precisely the regression the innermost-first walk could introduce.
+    fn assert_unsafe_install_path(err: aoa_audit::AuditError, planted: &Path) {
+        match err {
+            aoa_audit::AuditError::UnsafeInstallPath { path } => {
+                assert_eq!(path, planted, "guard fired on the wrong node")
+            }
+            other => panic!(
+                "wrong error for planted symlink {}: {other:?}",
+                planted.display()
+            ),
+        }
+    }
+
+    #[test]
+    fn observe_refuses_when_dot_aoa_is_a_symlink() {
+        let repo = fixture_repo();
+        let (outside, seeded) = outside_dir();
+
+        let planted = repo.path().join(".aoa");
+        symlink(outside.path(), &planted).expect("plant .aoa symlink");
+
+        let err = observe(repo.path()).expect_err("observe must refuse a symlinked .aoa");
+        assert_unsafe_install_path(err, &planted);
+        assert_outside_untouched(outside.path(), &seeded);
+    }
+
+    #[test]
+    fn observe_refuses_when_traces_dir_is_a_symlink() {
+        let repo = fixture_repo();
+        let (outside, seeded) = outside_dir();
+
+        // A real `.aoa` with a planted `traces` link: lstat of `.aoa/traces`
+        // catches this one, whereas lstat of `.aoa` alone would not.
+        std::fs::create_dir(repo.path().join(".aoa")).expect("create real .aoa");
+        let planted = repo.path().join(".aoa").join("traces");
+        symlink(outside.path(), &planted).expect("plant traces symlink");
+
+        let err = observe(repo.path()).expect_err("observe must refuse a symlinked traces dir");
+        assert_unsafe_install_path(err, &planted);
+        assert_outside_untouched(outside.path(), &seeded);
+    }
+
+    #[test]
+    fn observe_refuses_when_gitignore_is_a_symlink() {
+        let repo = fixture_repo();
+        let (outside, seeded) = outside_dir();
+
+        std::fs::create_dir(repo.path().join(".aoa")).expect("create real .aoa");
+        let planted = repo.path().join(".aoa").join(".gitignore");
+        symlink(&seeded, &planted).expect("plant .gitignore symlink");
+
+        let err = observe(repo.path()).expect_err("observe must refuse a symlinked .gitignore");
+        assert_unsafe_install_path(err, &planted);
+        assert_outside_untouched(outside.path(), &seeded);
+    }
+
+    // The guard runs at WRITE time too, not only at install time: `observe()`
+    // runs once but writes happen in later processes, so a link planted after
+    // install would otherwise defeat the whole fix.
+    #[test]
+    fn write_trace_refuses_when_the_traces_dir_became_a_symlink() {
+        let repo = fixture_repo();
+        let (outside, seeded) = outside_dir();
+
+        let outcome = observe(repo.path()).expect("observe succeeds on a clean repo");
+
+        // Swap the installed traces dir for a link, exactly as a later attacker
+        // with write access to `.aoa` would.
+        std::fs::remove_dir(&outcome.traces_dir).expect("remove installed traces dir");
+        symlink(outside.path(), &outcome.traces_dir).expect("plant traces symlink");
+
+        let err = write_trace(&outcome, "run-1.json", &valid_trace())
+            .expect_err("write_trace must refuse a symlinked traces dir");
+        assert_unsafe_install_path(err, &outcome.traces_dir);
+        assert_outside_untouched(outside.path(), &seeded);
+    }
+}
+
+// The install-path guard must not break the ordinary case: a clean repo
+// installs, and a re-install over the real `.aoa/traces` it just created still
+// succeeds. Not confined to the unix module above — this one must hold on every
+// platform the guard runs on.
+#[test]
+fn observe_is_idempotent_on_a_clean_repo() {
+    let repo = fixture_repo();
+
+    let first = observe(repo.path()).expect("first install succeeds");
+    let second = observe(repo.path()).expect("re-install over a real .aoa/traces succeeds");
+
+    assert_eq!(first.traces_dir, second.traces_dir);
+    assert!(
+        second.traces_dir.is_dir(),
+        "traces dir must exist after install"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&second.gitignore).expect("read .gitignore"),
+        "*\n"
+    );
+}
+
 // Criterion 3: audit writes nothing to tracked files.
 #[test]
 fn audit_does_not_mutate_repo() {
