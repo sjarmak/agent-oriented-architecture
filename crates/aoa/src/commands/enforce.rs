@@ -364,7 +364,8 @@ fn resolve_base(event: &HookEvent) -> Result<PathBuf> {
 
 /// Resolve the append-only live-log path for this session, under the ignored
 /// `.aoa/traces/` tree. The session id is sanitized to a bare filename token so
-/// a hostile payload cannot escape the traces directory.
+/// a hostile payload cannot traverse out of the traces directory. The final
+/// component is opened safely by [`open_log`].
 fn live_log_path(event: &HookEvent) -> Result<PathBuf> {
     let session = sanitize_session(&event.session_id);
     Ok(resolve_base(event)?
@@ -395,8 +396,26 @@ fn sanitize_session(raw: &str) -> String {
     }
 }
 
-/// Reject anything but a regular file at the live-log path, before either the
-/// read or the append opens it.
+/// Whether an [`open_log`] failure was "the log does not exist yet", which is the
+/// ordinary state before the first span is written. Checked through the error
+/// chain because `open_log` attaches context to the underlying [`std::io::Error`].
+/// Every other failure — a symlink, a FIFO, a permission problem — stays an error.
+fn is_not_found(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+    })
+}
+
+/// How the live log is opened. The two modes the hook needs; see [`open_log`]
+/// for why the choice is an enum rather than a caller-supplied builder.
+enum LogAccess {
+    Read,
+    AppendCreate,
+}
+
+/// Open the live log, refusing any path that is not a plain regular file.
 ///
 /// This is not belt-and-braces around the open. A FIFO squatting the path makes
 /// `open` *block* until a counterpart appears, so no error is ever produced and
@@ -405,31 +424,50 @@ fn sanitize_session(raw: &str) -> String {
 /// lock wait cannot cover this either: it only begins once the open has already
 /// returned. A directory or a device node likewise has no business here.
 ///
-/// A missing path stays fine — that is simply a session with no spans yet. A
-/// symlink is not: the gate's own log has no reason to be one, and following it
-/// would hand the decision about what gets written to whatever planted it.
-fn ensure_regular_log(log: &Path) -> Result<()> {
-    let meta = match std::fs::symlink_metadata(log) {
-        Ok(meta) => meta,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => {
-            return Err(anyhow!(err)).with_context(|| format!("failed to stat {}", log.display()))
-        }
+/// - A **symlink** at the path is followed by a naive open, so the hook appends
+///   its spans into whatever the link names. `O_NOFOLLOW` fails the open instead
+///   (`ELOOP`), and does so atomically — an `lstat` check alone would leave a
+///   window in which the path is swapped between the check and the open.
+/// - A **FIFO** at the path makes a blocking open wait for a peer, hanging the
+///   hook (and with it the agent's tool call) before any lock is reached — a DoS
+///   that needs no lock contention at all. `O_NONBLOCK` makes the open return
+///   rather than wait; on a regular file it has no effect.
+///
+/// `O_NOFOLLOW` only covers the final component and `O_NONBLOCK` still lets a
+/// FIFO open succeed when a peer is already attached, so the file type is
+/// verified after the fact too, via the descriptor we just opened rather than the
+/// path (nothing to race). On a non-Unix host the flags are unavailable and the
+/// type check is all there is.
+///
+/// Callers pick an [`LogAccess`] rather than passing an [`std::fs::OpenOptions`]:
+/// `custom_flags` overwrites the flag field rather than OR-ing into it, so a
+/// caller-owned builder would let a future call site silently drop the two flags
+/// this function exists to set.
+fn open_log(log: &Path, access: LogAccess) -> Result<File> {
+    let mut options = File::options();
+    match access {
+        LogAccess::Read => options.read(true),
+        LogAccess::AppendCreate => options.read(true).create(true).append(true),
     };
-    if meta.is_file() {
-        return Ok(());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
-    let kind = if meta.is_dir() {
-        "a directory"
-    } else if meta.file_type().is_symlink() {
-        "a symlink"
-    } else {
-        "a special file (FIFO, socket, or device)"
-    };
-    Err(anyhow!(
-        "the span log {} is {kind}, not a regular file",
-        log.display()
-    ))
+    let file = options
+        .open(log)
+        .with_context(|| format!("failed to open {}", log.display()))?;
+    let file_type = file
+        .metadata()
+        .with_context(|| format!("failed to stat {}", log.display()))?
+        .file_type();
+    if !file_type.is_file() {
+        return Err(anyhow!(
+            "refusing to use {}: the span log must be a regular file, found {file_type:?}",
+            log.display()
+        ));
+    }
+    Ok(file)
 }
 
 /// Read the live log into spans, tolerating a missing file (no reproduction yet)
@@ -451,13 +489,13 @@ fn read_spans(log: &Path) -> Result<Vec<Span>> {
 /// including that it acquires the lock boundedly, without waiting a full
 /// [`LOCK_TIMEOUT`].
 fn read_spans_within(log: &Path, lock_timeout: Duration) -> Result<Vec<Span>> {
-    ensure_regular_log(log)?;
-    let mut file = match File::open(log) {
+    if let Some(traces_dir) = log.parent() {
+        aoa_audit::reject_symlinked_trace_dir(traces_dir)?;
+    }
+    let mut file = match open_log(log, LogAccess::Read) {
         Ok(file) => file,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => {
-            return Err(anyhow!(err)).with_context(|| format!("failed to read {}", log.display()))
-        }
+        Err(err) if is_not_found(&err) => return Ok(Vec::new()),
+        Err(err) => return Err(err),
     };
     lock_shared_bounded(&file, log, lock_timeout)?;
     read_spans_from(&mut file, log)
@@ -539,10 +577,10 @@ fn append_span_within(
     build: impl FnOnce(u64) -> Span,
 ) -> Result<()> {
     if let Some(parent) = log.parent() {
+        aoa_audit::reject_symlinked_trace_dir(parent)?;
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    ensure_regular_log(log)?;
     // Bound to a named local, never a temporary: dropping the `File` closes the
     // descriptor and releases the lock, so a temporary would unlock immediately
     // and leave the read-modify-write below unguarded.
@@ -551,12 +589,7 @@ fn append_span_within(
     // sequence number through this same descriptor. `O_APPEND` repositions every
     // write to end-of-file atomically, so the seeking that read does cannot
     // misplace the append below.
-    let mut file = std::fs::OpenOptions::new()
-        .read(true)
-        .create(true)
-        .append(true)
-        .open(log)
-        .with_context(|| format!("failed to open {}", log.display()))?;
+    let mut file = open_log(log, LogAccess::AppendCreate)?;
     lock_exclusive_bounded(&file, log, lock_timeout)?;
 
     let end = file
@@ -1380,6 +1413,54 @@ mod tests {
         let log = dir.path().join(".aoa/traces").join(name);
         std::fs::create_dir_all(log.parent().unwrap()).unwrap();
         log
+    }
+
+    /// A symlink already sitting at the log path must not be followed.
+    /// Reproduced before the fix: the appended span landed in the victim file.
+    #[cfg(unix)]
+    #[test]
+    fn a_planted_symlink_is_refused_and_the_victim_is_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim.txt");
+        std::fs::write(&victim, "original\n").unwrap();
+
+        let log = dir.path().join(".aoa/traces/live-unknown.jsonl");
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&victim, &log).unwrap();
+
+        let err = append_span(&log, SpanType::TestRun, Map::new()).unwrap_err();
+        assert!(
+            !format!("{err:#}").is_empty(),
+            "the refusal must carry a diagnosable message"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&victim).unwrap(),
+            "original\n",
+            "the span must not have been appended through the symlink"
+        );
+        read_spans(&log).unwrap_err();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_planted_fifo_is_refused_instead_of_hanging() {
+        use std::ffi::CString;
+
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join(".aoa/traces/live-unknown.jsonl");
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        let raw = CString::new(log.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0, "mkfifo");
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let target = log.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(append_span(&target, SpanType::TestRun, Map::new()).is_err());
+        });
+        let refused = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the open must return rather than block on the FIFO");
+        assert!(refused, "a FIFO at the log path must be an error");
     }
 
     /// Write `raw` as the whole log, bypassing the append path, so a test can

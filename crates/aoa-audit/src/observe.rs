@@ -136,7 +136,7 @@ fn reject_symlink(node: &Path) -> Result<(), AuditError> {
 /// success and `is_dir` follows links. Closing that needs `openat`/`O_NOFOLLOW`
 /// rather than lstat, which is a dependency decision, not a patch — tracked as
 /// aoa-zb48. Do not read this guard as more than it is.
-fn reject_symlinked_install_path(traces_dir: &Path) -> Result<(), AuditError> {
+pub fn reject_symlinked_trace_dir(traces_dir: &Path) -> Result<(), AuditError> {
     let depth = Path::new(TRACES_SUBDIR).components().count();
     traces_dir
         .ancestors()
@@ -153,7 +153,7 @@ fn reject_symlinked_install_path(traces_dir: &Path) -> Result<(), AuditError> {
 /// touched.
 pub fn observe(repo: &Path) -> Result<ObserveOutcome, AuditError> {
     let traces_dir = repo.join(TRACES_SUBDIR);
-    reject_symlinked_install_path(&traces_dir)?;
+    reject_symlinked_trace_dir(&traces_dir)?;
     std::fs::create_dir_all(&traces_dir).map_err(|source| AuditError::Io {
         path: traces_dir.clone(),
         source,
@@ -189,7 +189,7 @@ pub fn write_trace(
     // version and survives the read-side version check below.
     //
     // Done BEFORE the symlink checks, not between them and the write. The guard
-    // is check-then-act either way (see `reject_symlinked_install_path`), but
+    // is check-then-act either way (see `reject_symlinked_trace_dir`), but
     // interposing this work would stretch the race window by however long
     // encoding takes. Keep the checks adjacent to the `fs::write` they protect.
     let json = aoa_trace::to_envelope_json_pretty(trace).map_err(|source| AuditError::Io {
@@ -202,7 +202,7 @@ pub fn write_trace(
     // so a link planted into `.aoa` after install would otherwise defeat the
     // install-time guard entirely. `ObserveOutcome`'s fields are public too, so
     // an outcome reaching here need never have come from `observe` at all.
-    reject_symlinked_install_path(&outcome.traces_dir)?;
+    reject_symlinked_trace_dir(&outcome.traces_dir)?;
 
     // Symlink boundary: even a legal single-component name can be a symlink
     // already sitting in the trace dir and pointing outside it. `std::fs::write`

@@ -2208,10 +2208,10 @@ fn enforce_check_fails_closed_when_the_span_log_is_unusable() {
     std::fs::create_dir_all(live_log_path(repo.path())).unwrap();
 
     aoa_stdin()
-        .args(["enforce", "check"])
-        .write_stdin(hook_payload("Write", None, repo.path()))
+        .args(["enforce", "record"])
+        .write_stdin(hook_payload("Bash", Some("cargo test"), repo.path()))
         .assert()
-        .code(2)
+        .code(1)
         .stderr(predicate::str::contains("blocked"));
 }
 
@@ -2242,6 +2242,27 @@ fn enforce_check_fails_closed_on_a_fifo_span_log() {
         .assert()
         .code(2)
         .stderr(predicate::str::contains("blocked"));
+}
+
+#[cfg(unix)]
+#[test]
+fn enforce_check_refuses_a_symlinked_traces_directory() {
+    let repo = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    std::fs::create_dir_all(repo.path().join(".aoa")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), repo.path().join(".aoa/traces")).unwrap();
+
+    aoa_stdin()
+        .args(["enforce", "record"])
+        .write_stdin(hook_payload("Bash", Some("cargo test"), repo.path()))
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("symlink"));
+
+    assert!(
+        std::fs::read_dir(outside.path()).unwrap().next().is_none(),
+        "the enforce lane must not create a live log through the directory symlink"
+    );
 }
 
 /// The posture holds for the policy the gate is enforcing, not just for its log.
