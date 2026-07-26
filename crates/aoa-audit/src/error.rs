@@ -29,6 +29,17 @@ pub enum AuditError {
     #[error("trace file already exists at {path}: refusing to overwrite a landed trace")]
     TraceExists { path: PathBuf },
 
+    /// A node of the installed `.aoa/traces` path already exists as a symlink.
+    /// The install-path analogue of [`AuditError::UnsafeTraceName`]: that one
+    /// guards the caller-supplied *name*, this one guards the *directories* the
+    /// name is joined onto, which `create_dir_all` and `fs::write` would
+    /// otherwise follow straight out of the repo.
+    #[error(
+        "refusing to install or write through a symlink at {path} \
+         (aoa observe does not follow links)"
+    )]
+    UnsafeInstallPath { path: PathBuf },
+
     /// A trace produced through the observe-installed path failed validation.
     #[error(transparent)]
     Trace(#[from] aoa_trace::TraceError),
