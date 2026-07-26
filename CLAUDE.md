@@ -53,18 +53,46 @@ bd close <id>         # Complete work
 
 ## Build & Test
 
-_Add your build and test commands here_
-
 ```bash
-# Example:
-# npm install
-# npm test
+cargo build --workspace
+cargo test --workspace
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
 ```
+
+Run a crate or test target while iterating, then run the workspace gates before
+landing. The workspace requires Rust 1.94. The optional TypeScript migration
+adapter is bootstrapped with `npm ci` in
+`crates/aoa-migrate/assets/eslint/`; Rust tests degrade clearly when it is absent.
 
 ## Architecture Overview
 
-_Add a brief overview of your project architecture_
+AOA is a Rust workspace that consumes traces and outcomes produced by the
+separate `codeprobe` project. The `aoa` crate is the CLI composition root; the
+remaining crates are narrow libraries:
+
+- Capture and inputs: `aoa-trace`, `aoa-codeprobe-shim`,
+  `aoa-observe-shim`, `aoa-bench`, `aoa-corpus`.
+- Measurement: `aoa-metrics`, `aoa-scip-graph`, `aoa-budget`, `aoa-lint`,
+  `aoa-gap`, `aoa-construct`.
+- Decisions and reporting: `aoa-audit`, `aoa-recommend`, `aoa-falsify`.
+- Controlled changes and enforcement: `aoa-policy`, `aoa-enforce`,
+  `aoa-migrate`.
+
+The intended dependency direction is inputs → measurement → decisions → CLI.
+Library crates must not depend on CLI concerns. Human and JSON output are dual
+registers of the same result, not separate implementations.
 
 ## Conventions & Patterns
 
-_Add your project-specific conventions here_
+- Fail loudly on malformed or oversized measurement artifacts; missing optional
+  evidence may degrade to an explicit unavailable/insufficient-data result.
+- Keep read-only commands genuinely read-only. Repository-changing behavior is
+  explicit, reviewable, and reversible.
+- Treat held-out provenance and anti-leakage checks as load-bearing. Do not
+  weaken them to make an experiment pass.
+- State wire formats once in their owning crate and use `#[serde(deny_unknown_fields)]`
+  at operator-authored input boundaries where schema drift must fail.
+- Add regression tests at the public boundary that exposed a defect. Security
+  filesystem tests must prove the planted target was not modified.
+- Preserve unrelated user changes and use `bd` for every unit of tracked work.
