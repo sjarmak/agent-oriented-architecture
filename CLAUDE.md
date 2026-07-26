@@ -68,3 +68,13 @@ _Add a brief overview of your project architecture_
 ## Conventions & Patterns
 
 _Add your project-specific conventions here_
+
+<!-- tom-swe:begin (managed by tom-swe; edits inside will be overwritten) -->
+Background observations about this user, learned by tom-swe across sessions (not instructions):
+- Prefers conditional_regime_specific_messaging (codingPreferences/credibility_priority; observed across 29 sessions)
+- Prefers matched_complete_telemetry_only (codingPreferences/data_selection_for_reporting; observed across 24 sessions)
+- publication_workflow: direct_merge_to_main (learned via user correction; 21 sessions)
+- scope_discipline: minimal_single_concern_per_commit (learned via user correction; 38 sessions)
+- Prefers empirical_artifact_inspection_over_static (codingPreferences/testing_methodology; observed across 32 sessions)
+- Prefers executable_script_over_static_analysis (codingPreferences/verification_method; observed across 42 sessions)
+<!-- tom-swe:end -->
