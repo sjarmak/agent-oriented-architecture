@@ -2208,10 +2208,10 @@ fn enforce_check_fails_closed_when_the_span_log_is_unusable() {
     std::fs::create_dir_all(live_log_path(repo.path())).unwrap();
 
     aoa_stdin()
-        .args(["enforce", "record"])
-        .write_stdin(hook_payload("Bash", Some("cargo test"), repo.path()))
+        .args(["enforce", "check"])
+        .write_stdin(hook_payload("Write", None, repo.path()))
         .assert()
-        .code(1)
+        .code(2)
         .stderr(predicate::str::contains("blocked"));
 }
 
