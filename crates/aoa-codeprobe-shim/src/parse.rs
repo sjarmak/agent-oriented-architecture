@@ -64,14 +64,51 @@ pub fn parse_transcript_file(path: &Path) -> Result<ShimResult, ShimError> {
 /// in the shim family reads attacker-adjacent local files under the same
 /// TOCTOU-safe cap and reports through the same [`ShimError`] surface.
 pub fn read_capped(path: &Path, max: u64) -> Result<String, ShimError> {
+    decode_utf8(read_capped_bytes(path, max)?, path)
+}
+
+/// Read the newline-framed prefix of a file another process may be appending to.
+///
+/// Same cap and TOCTOU handling as [`read_capped`], but the bytes after the last
+/// `\n` are discarded. In a newline-framed log (`.jsonl`) they are a record still
+/// being written, not a record — a reader that keeps them fails on input that is
+/// merely in flight rather than corrupt.
+///
+/// The cut is on **bytes, before UTF-8 decoding**, and that ordering is the whole
+/// point: a tear inside a multi-byte character makes decoding fail with
+/// `InvalidData`, so any check phrased over a `&str` runs too late to see it.
+///
+/// This is sound only against an appender that writes each record with a single
+/// `write_all` under an exclusive lock (which is what `aoa enforce` does). Absent
+/// that lock two writers can interleave *mid-file*, and no amount of tail framing
+/// detects it.
+pub fn read_capped_framed(path: &Path, max: u64) -> Result<String, ShimError> {
+    let mut raw = read_capped_bytes(path, max)?;
+    match raw.iter().rposition(|byte| *byte == b'\n') {
+        Some(last) => raw.truncate(last + 1),
+        None => raw.clear(),
+    }
+    decode_utf8(raw, path)
+}
+
+/// The shared capped read behind [`read_capped`] and [`read_capped_framed`].
+///
+/// Yields bytes rather than a `String` so the framed variant can cut the tail
+/// before decoding. The cap therefore applies to what was read from disk, ahead
+/// of any framing: it exists to bound the memory held, not the result returned.
+///
+/// Checking the size before decoding also fixes the precedence for a file that
+/// is both over the cap and undecodable: it reports the cap. The size is the
+/// resource fact and the actionable one.
+fn read_capped_bytes(path: &Path, max: u64) -> Result<Vec<u8>, ShimError> {
     let file = std::fs::File::open(path).map_err(|source| ShimError::Read {
         path: path.to_path_buf(),
         source,
     })?;
-    let mut raw = String::new();
+    let mut raw = Vec::new();
     let read = file
         .take(max + 1)
-        .read_to_string(&mut raw)
+        .read_to_end(&mut raw)
         .map_err(|source| ShimError::Read {
             path: path.to_path_buf(),
             source,
@@ -83,6 +120,24 @@ pub fn read_capped(path: &Path, max: u64) -> Result<String, ShimError> {
         });
     }
     Ok(raw)
+}
+
+/// Decode a capped read, reporting invalid UTF-8 through the same [`ShimError`]
+/// variant `read_to_string` would have produced.
+///
+/// Only [`FromUtf8Error::utf8_error`] is carried into the error, never the
+/// `FromUtf8Error` itself: that type owns the whole buffer it failed to decode,
+/// so attaching it would put the file's bytes inside a value whose `Debug` (one
+/// `tracing::error!(?err)` away) prints them. The files reaching here are the
+/// attacker-adjacent ones this module's cap exists for — agent transcripts and
+/// live logs, which carry commands and paths. `read_to_string` discards its
+/// buffer on failure, so retaining it would have been a regression against the
+/// call this replaced. [`std::str::Utf8Error`] is position metadata only.
+fn decode_utf8(raw: Vec<u8>, path: &Path) -> Result<String, ShimError> {
+    String::from_utf8(raw).map_err(|err| ShimError::Read {
+        path: path.to_path_buf(),
+        source: std::io::Error::new(std::io::ErrorKind::InvalidData, err.utf8_error()),
+    })
 }
 
 /// Parse a newline-delimited stream-json transcript into a native trace.
@@ -345,6 +400,109 @@ mod tests {
         assert!(matches!(err, ShimError::TranscriptTooLarge { max: 4, .. }));
         // ...while a cap at exactly the file size is accepted.
         assert_eq!(read_capped(&path, 10).unwrap().len(), 10);
+
+        // A file that is both over the cap AND undecodable reports the cap. The
+        // size is the resource fact and the actionable one; whether the excess
+        // bytes would have decoded is a question about input nobody should be
+        // holding in memory. This precedence is a property of the read/decode
+        // split, so it is pinned rather than left to the order of two `?`s.
+        std::fs::write(&path, [0xff_u8; 10]).unwrap();
+        assert!(matches!(
+            read_capped(&path, 4).unwrap_err(),
+            ShimError::TranscriptTooLarge { max: 4, .. }
+        ));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A failed decode must not carry the bytes it failed to decode.
+    ///
+    /// `Debug` is the exposure, not `Display`: `{err}` renders only the position,
+    /// but a `FromUtf8Error` attached as the source owns the entire buffer, and
+    /// `{err:?}` prints it. Asserted against `Debug` on the whole [`ShimError`]
+    /// because that is the value callers hold and log.
+    #[test]
+    fn an_undecodable_file_does_not_carry_its_bytes_into_the_error() {
+        const SECRET: &str = "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI";
+
+        let dir = std::env::temp_dir().join(format!("aoa-shim-utf8-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("transcript.txt");
+        let mut bytes = SECRET.as_bytes().to_vec();
+        bytes.push(0xff); // never valid UTF-8, in any position
+                          // Terminated, so the framed read keeps the bad byte rather than cutting
+                          // it off as an in-flight tail — otherwise that lane would decode an
+                          // empty string and never reach the error path under test.
+        bytes.push(b'\n');
+        std::fs::write(&path, &bytes).unwrap();
+
+        for rendered in [
+            format!("{:?}", read_capped(&path, 1024).unwrap_err()),
+            format!("{:?}", read_capped_framed(&path, 1024).unwrap_err()),
+        ] {
+            assert!(
+                !rendered.contains(SECRET),
+                "error must not carry the file's text: {rendered}"
+            );
+            // The bytes must not survive in numeric form either, which is how a
+            // derived `Debug` on a `Vec<u8>` would render them.
+            assert!(
+                !rendered.contains(&format!("{}", SECRET.as_bytes()[0])),
+                "error must not carry the file's bytes: {rendered}"
+            );
+            assert!(
+                rendered.contains("InvalidData"),
+                "the failure must still be legible: {rendered}"
+            );
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The bytes after the last newline are a record still being written, not a
+    /// record, so a framed read must drop them.
+    ///
+    /// Exhaustive over every byte prefix rather than one hand-picked cut,
+    /// because the interesting tear is *inside* a multi-byte character: that one
+    /// fails UTF-8 decoding before any `&str`-level check could run. The fixture
+    /// carries an em dash so the case is covered by construction, not by luck.
+    #[test]
+    fn a_framed_read_drops_a_partially_written_final_line() {
+        const COMMITTED: &str = "first\nsecond\n";
+        const IN_FLIGHT: &str = "third — still being written";
+
+        let dir = std::env::temp_dir().join(format!("aoa-shim-framed-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("live.jsonl");
+
+        for cut in 1..IN_FLIGHT.len() {
+            let mut bytes = COMMITTED.as_bytes().to_vec();
+            bytes.extend_from_slice(&IN_FLIGHT.as_bytes()[..cut]);
+            std::fs::write(&path, &bytes).unwrap();
+
+            let framed = read_capped_framed(&path, 1024)
+                .unwrap_or_else(|err| panic!("a {cut}-byte tail must not fail the read: {err}"));
+            assert_eq!(
+                framed, COMMITTED,
+                "cut {cut} must yield the committed prefix"
+            );
+        }
+
+        // A file with no newline at all is entirely in flight.
+        std::fs::write(&path, IN_FLIGHT).unwrap();
+        assert_eq!(read_capped_framed(&path, 1024).unwrap(), "");
+
+        // Framing is only about the tail: a fully committed file is untouched.
+        std::fs::write(&path, COMMITTED).unwrap();
+        assert_eq!(read_capped_framed(&path, 1024).unwrap(), COMMITTED);
+
+        // The cap still applies, and is checked against the bytes on disk rather
+        // than the shorter framed result — the cap bounds what is read into
+        // memory, which framing happens after.
+        assert!(matches!(
+            read_capped_framed(&path, 4).unwrap_err(),
+            ShimError::TranscriptTooLarge { max: 4, .. }
+        ));
 
         std::fs::remove_dir_all(&dir).ok();
     }

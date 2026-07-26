@@ -194,6 +194,47 @@ fn corrupt_live_log_fails_loud_naming_the_file() {
     assert!(msg.contains("live-bad.jsonl"), "names the file: {msg}");
 }
 
+/// An audit run during an active session reads a log the enforce hooks are still
+/// appending to, so its final line can be half written. That is an in-flight
+/// record, not corruption: ingest must yield the committed spans before it
+/// rather than failing the whole repo's corpus (aoa-wew0).
+///
+/// Exhaustive over every byte prefix rather than one hand-picked cut. The tear
+/// that matters lands *inside* a multi-byte character, which fails UTF-8
+/// decoding before any line-level check runs; the fixture's final line carries
+/// an em dash because every R6 `write.blocked` span does (aoa-enforce's
+/// `GeneratedArtifact` reason), so that case is covered by construction.
+///
+/// The complementary guarantee — a newline-terminated malformed line still fails
+/// loud — is pinned by `corrupt_live_log_fails_loud_naming_the_file` above.
+/// Together they say tolerance is about *framing*, never about content.
+#[test]
+fn a_partially_written_final_line_ingests_as_the_committed_prefix() {
+    const IN_FLIGHT: &str = r#"{"type":"write.blocked","source":"native","seq":2,"attributes":{"path":"a.rs","reason":"generated artifact: 'a.rs' is derived from 'a.tmpl' — edit 'a.tmpl' and regenerate"}}"#;
+    assert!(
+        IN_FLIGHT.contains('—'),
+        "the fixture must exercise a torn multi-byte character"
+    );
+
+    let committed = format!("{SPAN_TEST_RUN}\n{SPAN_WRITE}\n");
+    let repo = TempDir::new().expect("tempdir");
+    let path = traces_dir(repo.path()).join("live-inflight.jsonl");
+    for cut in 1..IN_FLIGHT.len() {
+        let mut bytes = committed.as_bytes().to_vec();
+        bytes.extend_from_slice(&IN_FLIGHT.as_bytes()[..cut]);
+        std::fs::write(&path, &bytes).expect("write in-flight live log");
+
+        let corpus = load_corpus(repo.path())
+            .unwrap_or_else(|err| panic!("a {cut}-byte in-flight tail must ingest: {err}"));
+        assert_eq!(corpus.sessions.len(), 1, "cut {cut}");
+        assert_eq!(
+            corpus.sessions[0].trace.spans.len(),
+            2,
+            "the in-flight record must not count until it is framed (cut {cut})"
+        );
+    }
+}
+
 #[test]
 fn out_of_order_trace_fails_validation() {
     let repo = TempDir::new().expect("tempdir");
