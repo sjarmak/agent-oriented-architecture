@@ -169,6 +169,58 @@ fn write_trace_rejects_escaping_names() {
     assert_eq!(before, after, "a rejected trace write must create no file");
 }
 
+// Criterion (aoa-8tw8): the append-only live-log lane is defended by the writer
+// itself, not by caller discipline. `live-<session>.jsonl` files are extended by
+// the enforce hooks under their own write lock; write_trace runs entirely
+// outside that lock, so it must refuse those names rather than truncate a log
+// mid-session.
+#[test]
+fn write_trace_refuses_to_clobber_an_active_live_log() {
+    let repo = fixture_repo();
+    let outcome = observe(repo.path()).expect("observe succeeds");
+
+    let live = outcome.traces_dir.join("live-s1.jsonl");
+    std::fs::write(&live, "{\"span\":1}\n").expect("seed live log");
+
+    let err = write_trace(&outcome, "live-s1.jsonl", &valid_trace())
+        .expect_err("write_trace must reject a live-log name");
+    assert!(
+        matches!(err, aoa_audit::AuditError::UnsafeTraceName { .. }),
+        "wrong error: {err:?}"
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(&live).expect("read live log"),
+        "{\"span\":1}\n",
+        "write_trace truncated an active live log"
+    );
+}
+
+// Criterion (aoa-8tw8): a whole trace is a finished artifact. A second write to
+// the same name is a collision, not an update — it must be refused, leaving the
+// landed trace byte-identical.
+#[test]
+fn write_trace_refuses_to_overwrite_a_landed_trace() {
+    let repo = fixture_repo();
+    let outcome = observe(repo.path()).expect("observe succeeds");
+
+    let (path, _) = write_trace(&outcome, "run-1.json", &valid_trace()).expect("first write lands");
+    let landed = std::fs::read_to_string(&path).expect("read landed trace");
+
+    let err = write_trace(&outcome, "run-1.json", &valid_trace())
+        .expect_err("write_trace must refuse to overwrite");
+    assert!(
+        matches!(err, aoa_audit::AuditError::TraceExists { .. }),
+        "wrong error: {err:?}"
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("re-read landed trace"),
+        landed,
+        "the landed trace was modified by a refused write"
+    );
+}
+
 // Criterion (aoa-kk6m): the symlink boundary is defended. A legal-looking name
 // that is actually a symlink out of the trace dir must NOT be written through —
 // the file it points at stays untouched, proving no write escapes.
