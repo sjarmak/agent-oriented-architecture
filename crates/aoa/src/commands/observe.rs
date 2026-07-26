@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::cli::ObserveArgs;
-use crate::commands::enforce::install_enforce_hooks;
+use crate::commands::enforce::{enforce_hook_warning, install_enforce_hooks};
 use crate::output::{print_human, print_json};
 
 /// The observe result: what was installed where, identical in both registers
@@ -13,6 +13,8 @@ struct ObserveView {
     traces_dir: String,
     gitignore: String,
     enforce_settings: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enforce_hook_warning: Option<String>,
 }
 
 /// Install read-only trace telemetry. Touches only the ignored `.aoa/` tree —
@@ -32,6 +34,7 @@ pub fn run(args: &ObserveArgs) -> Result<i32> {
         traces_dir: outcome.traces_dir.display().to_string(),
         gitignore: outcome.gitignore.display().to_string(),
         enforce_settings,
+        enforce_hook_warning: enforce_hook_warning(&args.repo),
     };
 
     if args.json {
@@ -45,6 +48,9 @@ pub fn run(args: &ObserveArgs) -> Result<i32> {
             message.push_str(&format!(
                 "  enforcement gate (R7): merged hooks into {settings}\n"
             ));
+        }
+        if let Some(warning) = &view.enforce_hook_warning {
+            message.push_str(&format!("  warning: {warning}\n"));
         }
         print_human(&message);
     }

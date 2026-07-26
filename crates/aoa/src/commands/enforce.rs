@@ -76,6 +76,10 @@ use crate::commands::generated::generated_rules;
 /// mutation and must be preceded by a reproduction (`test.run`) span.
 const MUTATION_TOOLS: [&str; 4] = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
 
+const ENFORCE_HOOK_SET_VERSION: u64 = 1;
+const AOA_SETTINGS_KEY: &str = "aoa";
+const HOOK_VERSION_KEY: &str = "enforce_hook_set_version";
+
 /// The exit code Claude Code reads as "deny this tool call"; every other
 /// non-zero exit is only a non-blocking warning.
 const BLOCK_EXIT_CODE: i32 = 2;
@@ -862,7 +866,68 @@ pub(crate) fn merge_enforce_hooks(mut settings: Value) -> Result<Value> {
     ] {
         add_hook(hooks, event, &matcher, command)?;
     }
+    let aoa = object.entry(AOA_SETTINGS_KEY).or_insert_with(|| json!({}));
+    let Some(aoa) = aoa.as_object_mut() else {
+        return Err(anyhow!(
+            "settings key {AOA_SETTINGS_KEY:?} must be a JSON object, found {}",
+            json_kind(aoa)
+        ));
+    };
+    aoa.insert(
+        HOOK_VERSION_KEY.to_string(),
+        json!(ENFORCE_HOOK_SET_VERSION),
+    );
     Ok(settings)
+}
+
+pub(crate) fn enforce_hook_warning(repo: &Path) -> Option<String> {
+    let path = repo.join(".claude").join("settings.json");
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(err) => {
+            return Some(format!(
+                "{} has an unreadable enforce hook stamp ({err}); rerun `aoa observe --enforce`",
+                path.display()
+            ))
+        }
+    };
+    let settings: Value = match serde_json::from_str(&raw) {
+        Ok(settings) => settings,
+        Err(_) => {
+            return Some(format!(
+                "{} has a malformed enforce hook stamp; repair the JSON and rerun `aoa observe --enforce`",
+                path.display()
+            ))
+        }
+    };
+    let Some(version) = settings
+        .get(AOA_SETTINGS_KEY)
+        .and_then(Value::as_object)
+        .and_then(|aoa| aoa.get(HOOK_VERSION_KEY))
+    else {
+        return Some(format!(
+            "{} is missing the enforce hook stamp (current version {ENFORCE_HOOK_SET_VERSION}); rerun `aoa observe --enforce`",
+            path.display()
+        ));
+    };
+    let Some(version) = version.as_u64() else {
+        return Some(format!(
+            "{} has a malformed enforce hook stamp; rerun `aoa observe --enforce`",
+            path.display()
+        ));
+    };
+    match version.cmp(&ENFORCE_HOOK_SET_VERSION) {
+        std::cmp::Ordering::Less => Some(format!(
+            "{} enforce hooks are behind (installed {version}, current {ENFORCE_HOOK_SET_VERSION}); rerun `aoa observe --enforce`",
+            path.display()
+        )),
+        std::cmp::Ordering::Greater => Some(format!(
+            "{} enforce hooks are ahead of this binary (installed {version}, current {ENFORCE_HOOK_SET_VERSION}); upgrade AOA before reinstalling",
+            path.display()
+        )),
+        std::cmp::Ordering::Equal => None,
+    }
 }
 
 /// Name a JSON value's type for an error message.

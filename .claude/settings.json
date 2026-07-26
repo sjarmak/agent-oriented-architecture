@@ -1,4 +1,7 @@
 {
+  "aoa": {
+    "enforce_hook_set_version": 1
+  },
   "hooks": {
     "PermissionDenied": [
       {

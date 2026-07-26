@@ -2705,6 +2705,100 @@ fn tracked_settings_json_matches_observe_enforce_output() {
     );
 }
 
+#[test]
+fn observe_reports_missing_and_stale_enforce_hook_stamps() {
+    for (settings, expected) in [
+        (serde_json::json!({"hooks": {}}), "missing"),
+        (
+            serde_json::json!({
+                "hooks": {},
+                "aoa": {"enforce_hook_set_version": 0}
+            }),
+            "behind",
+        ),
+        (
+            serde_json::json!({
+                "hooks": {},
+                "aoa": {"enforce_hook_set_version": 999}
+            }),
+            "ahead",
+        ),
+        (
+            serde_json::json!({
+                "hooks": {},
+                "aoa": {"enforce_hook_set_version": "old"}
+            }),
+            "malformed",
+        ),
+    ] {
+        let repo = TempDir::new().unwrap();
+        std::fs::create_dir_all(repo.path().join(".claude")).unwrap();
+        std::fs::write(
+            repo.path().join(".claude/settings.json"),
+            serde_json::to_vec(&settings).unwrap(),
+        )
+        .unwrap();
+
+        aoa_stdin()
+            .args(["observe", "--json", "--repo"])
+            .arg(repo.path())
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("enforce_hook_warning"))
+            .stdout(predicate::str::contains(expected))
+            .stdout(predicate::str::contains(".claude/settings.json"));
+    }
+}
+
+#[test]
+fn current_enforce_hook_stamp_is_quiet_in_observe_and_audit() {
+    let repo = TempDir::new().unwrap();
+    observe_enforce(repo.path());
+
+    let settings: Value =
+        serde_json::from_slice(&std::fs::read(repo.path().join(".claude/settings.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        settings["aoa"]["enforce_hook_set_version"], 1,
+        "installer must stamp the hook-set version"
+    );
+
+    for command in ["observe", "audit"] {
+        aoa_stdin()
+            .args([command, "--json", "--repo"])
+            .arg(repo.path())
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("enforce_hook_warning").not());
+    }
+}
+
+#[test]
+fn audit_surfaces_a_stale_hook_stamp_in_both_registers() {
+    let repo = TempDir::new().unwrap();
+    std::fs::create_dir_all(repo.path().join(".claude")).unwrap();
+    std::fs::write(
+        repo.path().join(".claude/settings.json"),
+        r#"{"aoa":{"enforce_hook_set_version":0}}"#,
+    )
+    .unwrap();
+
+    for json in [false, true] {
+        let mut command = aoa_stdin();
+        command.arg("audit");
+        if json {
+            command.arg("--json");
+        }
+        command
+            .arg("--repo")
+            .arg(repo.path())
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("behind"))
+            .stdout(predicate::str::contains(".claude/settings.json"));
+    }
+}
+
 // --- aoa gap checkbox-baseline (aoa-d6t.28) ---------------------------------
 
 /// A fixture tree passing all four level-1 mechanical criteria, so the
