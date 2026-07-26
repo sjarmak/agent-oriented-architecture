@@ -108,6 +108,7 @@ dependencies = [
  "aoa-metrics",
  "aoa-observe-shim",
  "aoa-trace",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",
