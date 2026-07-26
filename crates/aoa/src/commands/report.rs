@@ -20,7 +20,7 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use aoa_audit::AuditReport;
@@ -30,6 +30,7 @@ use aoa_recommend::RecommendationReport;
 
 use crate::cli::ReportArgs;
 use crate::commands::fsutil::load_json_capped;
+use crate::commands::pipeline::{self, Readiness};
 use crate::output::{escape_terminal, print_human, print_json};
 
 /// The filename `aoa falsify` writes by default, consulted under the repo root.
@@ -90,15 +91,15 @@ struct ReadinessView {
 
 /// Compose the readiness view and render it in the requested register.
 pub fn run(args: &ReportArgs) -> Result<i32> {
-    let cfg = crate::commands::audit::repo_audit_config(&args.repo)?;
-    let audit = aoa_audit::audit(&args.repo, &cfg)
-        .with_context(|| format!("failed to audit {}", args.repo.display()))?;
-    // Condition on the signal the audit just measured, as `aoa recommend`
-    // does. `report` composes both into one document, so an unconditioned
-    // determination would contradict the audit half it ships alongside.
-    let determination = aoa_construct::determination_with_signal(&audit.behavioral_signal);
-    let fixes = aoa_migrate::all_fixes();
-    let recommendations = aoa_recommend::recommend(&audit, &determination, &fixes);
+    // The same chain `aoa recommend` runs, from the same seam: `report` ships
+    // both halves in one document, so any step it computed for itself could
+    // drift from the surface it claims to agree with. See `commands::pipeline`.
+    let Readiness {
+        audit,
+        determination,
+        fixes,
+        recommendations,
+    } = pipeline::readiness(&args.repo)?;
     let migrations: Vec<MigrationView> = fixes
         .iter()
         .map(|f| MigrationView {

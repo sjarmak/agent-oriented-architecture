@@ -1837,13 +1837,7 @@ fn audit_reports_insufficient_data_without_observe_captured_signal() {
 // fabricated) cost.
 #[test]
 fn audit_lights_up_behavioral_metrics_once_corpus_is_sufficient() {
-    let repo = TempDir::new().expect("tempdir");
-    seed_live_sessions(repo.path(), MIN_HELD_OUT_OBSERVATIONS);
-    std::fs::write(
-        repo.path().join("app.py"),
-        "def handle(x):\n    return store(x)\n\ndef store(x):\n    return x\n",
-    )
-    .expect("write indexable source");
+    let repo = seeded_indexable_repo();
 
     let output = aoa()
         .args(["audit", "--json", "--repo"])
@@ -3090,12 +3084,48 @@ fn report_json_omits_insufficient_data_with_a_sufficient_corpus() {
 // empty symbol graph, which silently withholds the measured mutation-surface
 // item — the operator-facing readiness view under-reporting the very findings
 // the other two surfaces report for the same repo.
-//
-// The repo needs BOTH a sufficient corpus and indexable source: without the
-// corpus this is the InsufficientData path, and without a .py file the graph is
-// empty for every command, so neither alone would catch the divergence.
 #[test]
 fn report_and_audit_agree_on_findings_for_an_indexable_repo() {
+    let repo = seeded_indexable_repo();
+
+    // Compare the whole AuditReport, not just each item's `kind`. A kind-only
+    // comparison passes while `measured_cost` or `subtree` diverge, and
+    // `subtree` is observable through this leg alone: `FindingRecommendation`
+    // drops it, so the recommend-leg guard below cannot see it.
+    let from_audit = aoa_json(repo.path(), &["audit", "--json", "--repo"]);
+    // `audit --json` IS the AuditReport; `report --json` nests it under `audit`.
+    let mut report_view = aoa_json(repo.path(), &["report", "--json", "--repo"]);
+    let from_report = report_view["audit"].take();
+
+    let kinds: Vec<&str> = from_audit["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|i| i["kind"].as_str().expect("kind"))
+        .collect();
+    assert!(
+        kinds.contains(&"mutation_surface"),
+        "precondition: the fixture repo indexes into a real graph: {kinds:?}"
+    );
+    assert_eq!(
+        from_report, from_audit,
+        "`report` must not diverge from the audit `audit` reports for the same repo"
+    );
+}
+
+/// Run `aoa` with `args` against `repo` and parse stdout as JSON.
+fn aoa_json(repo: &Path, args: &[&str]) -> Value {
+    let output = aoa().args(args).arg(repo).output().expect("run");
+    assert!(output.status.success(), "{args:?} failed: {output:?}");
+    serde_json::from_slice(&output.stdout).expect("valid json")
+}
+
+/// A repo with BOTH a sufficient held-out corpus and source the indexer can see
+/// into. Both halves are load-bearing for the agreement guards: without the
+/// corpus the commands take the InsufficientData path, and without a `.py` file
+/// the symbol graph is empty for every command, so neither alone would catch a
+/// config or conditioning divergence.
+fn seeded_indexable_repo() -> TempDir {
     let repo = TempDir::new().expect("tempdir");
     seed_live_sessions(repo.path(), MIN_HELD_OUT_OBSERVATIONS);
     std::fs::write(
@@ -3103,32 +3133,105 @@ fn report_and_audit_agree_on_findings_for_an_indexable_repo() {
         "def handle(x):\n    return store(x)\n\ndef store(x):\n    return x\n",
     )
     .expect("write indexable source");
+    repo
+}
 
-    let kinds = |args: &[&str]| -> Vec<String> {
-        let output = aoa().args(args).arg(repo.path()).output().expect("run");
-        let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
-        // `audit --json` is the AuditReport itself; `report --json` nests it.
-        match parsed.get("audit") {
-            Some(audit) => audit["items"].as_array(),
-            None => parsed["items"].as_array(),
-        }
-        .expect("items")
-        .iter()
-        .map(|i| i["kind"].as_str().expect("kind").to_string())
-        .collect()
+// aoa-ghwi: the same guard for the RECOMMEND leg of `report`. aoa-d6t.41 locked
+// report's audit half to `aoa audit` and left this half uncovered, which is
+// where a third divergence lands: `report::run` was a statement-for-statement
+// hand-copy of `recommend::run`, so any step `recommend` gains and `report`
+// misses ships a readiness view that under-reports while exiting 0.
+//
+// Two fixtures, because neither alone covers both historical divergence
+// classes. On the seeded+indexable repo `determination_with_signal` returns the
+// ordinary determination, so a fork that drops the signal conditioning
+// (aoa-d6t.35) is invisible; on the greenfield repo the symbol graph is empty,
+// so a fork that rebuilds the audit config by hand (aoa-d6t.41) is invisible.
+#[test]
+fn report_and_recommend_agree_on_recommendations() {
+    let greenfield = TempDir::new().expect("tempdir");
+    let indexable = seeded_indexable_repo();
+
+    // Assert the two surfaces agree for `repo`, and hand back the report view so
+    // the preconditions below read it instead of re-running the command.
+    let agreeing_report = |repo: &Path| -> Value {
+        let from_recommend = aoa_json(repo, &["recommend", "--json", "--repo"]);
+        let from_report = aoa_json(repo, &["report", "--json", "--repo"]);
+        assert_eq!(
+            from_report["recommendations"],
+            from_recommend,
+            "`report` must join recommendations exactly as `recommend` does, for {}",
+            repo.display()
+        );
+        from_report
     };
 
-    let from_audit = kinds(&["audit", "--json", "--repo"]);
-    let from_report = kinds(&["report", "--json", "--repo"]);
+    let greenfield_view = agreeing_report(greenfield.path());
+    let indexable_view = agreeing_report(indexable.path());
 
-    assert!(
-        from_audit.iter().any(|k| k == "mutation_surface"),
-        "precondition: the fixture repo indexes into a real graph: {from_audit:?}"
-    );
-    assert_eq!(
-        from_report, from_audit,
-        "`report` must not drop findings `audit` reports for the same repo"
-    );
+    // Precondition: the two fixtures must actually exercise the two different
+    // legs, or the pair above is one assertion run twice. `mutation_surface` is
+    // measurable only through a real symbol graph (the config leg), and
+    // `insufficient_data` metrics appear only without a held-out corpus (the
+    // signal-conditioning leg). Each fixture must show exactly one of them.
+    let has_mutation_surface = |view: &Value| -> bool {
+        view["audit"]["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .any(|i| i["kind"] == "mutation_surface")
+    };
+    let has_insufficient_data = |view: &Value| -> bool {
+        view["construct_validity"]["metrics"]
+            .as_array()
+            .expect("metrics")
+            .iter()
+            .any(|m| m["mode"] == "insufficient_data")
+    };
+
+    for (name, view, graph, insufficient) in [
+        ("greenfield", &greenfield_view, false, true),
+        ("indexable", &indexable_view, true, false),
+    ] {
+        assert_eq!(
+            has_mutation_surface(view),
+            graph,
+            "precondition: only the indexable fixture measures a real symbol graph ({name})"
+        );
+        assert_eq!(
+            has_insufficient_data(view),
+            insufficient,
+            "precondition: only the greenfield fixture leaves metrics in insufficient_data ({name})"
+        );
+    }
+}
+
+// aoa-ghwi: the third leg of the same agreement — the three commands must fail
+// the same way, not just succeed the same way. A repo the indexer cannot read is
+// fatal for all of them (the policy is argued at `pipeline::repo_audit_config`),
+// and before the seam existed `report` alone exited 0 here, printing a punch-list
+// that silently omitted every graph-derived item. Degrading in one command and
+// not the others is how aoa-d6t.35 and aoa-d6t.41 both shipped, so the guard is
+// agreement rather than any particular exit code.
+#[test]
+fn audit_recommend_and_report_all_fail_on_an_unreadable_repo() {
+    let repo = TempDir::new().expect("tempdir");
+    // Invalid UTF-8 in a `.py` file: the SCIP indexer insists on UTF-8, so this
+    // is the cheapest repo it genuinely cannot read.
+    std::fs::write(
+        repo.path().join("app.py"),
+        b"def f():\n    x = \"\xff\xfe\"\n",
+    )
+    .expect("write non-utf8 source");
+
+    for command in ["audit", "recommend", "report"] {
+        aoa()
+            .args([command, "--repo"])
+            .arg(repo.path())
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("failed to index"));
+    }
 }
 
 #[test]

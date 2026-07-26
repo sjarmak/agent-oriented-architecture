@@ -1,6 +1,7 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use crate::cli::RecommendArgs;
+use crate::commands::pipeline::{self, Readiness};
 use crate::output::{print_human, print_json};
 
 /// Join the audit punch-list, the R9c construct-validity determination, and the
@@ -18,19 +19,19 @@ use crate::output::{print_human, print_json};
 /// observe-captured held-out signal reports its behavioral metrics as
 /// InsufficientData, never Advisory.
 pub fn run(args: &RecommendArgs) -> Result<i32> {
-    let cfg = crate::commands::audit::repo_audit_config(&args.repo)?;
-    let audit = aoa_audit::audit(&args.repo, &cfg)
-        .with_context(|| format!("failed to audit {}", args.repo.display()))?;
-    // The recommendation report carries no warning field of its own; a
-    // degraded subtree discovery in the underlying audit surfaces here.
+    let Readiness {
+        audit,
+        recommendations: report,
+        ..
+    } = pipeline::readiness(&args.repo)?;
+    // The recommendation report carries no warning field of its own; a degraded
+    // subtree discovery in the underlying audit surfaces here. It stays in the
+    // command rather than in the seam: `report` already carries the same warning
+    // on the wire, so warning from `readiness` would give `aoa report` a stderr
+    // line it has never printed.
     if let Some(warning) = &audit.subtree_discovery_warning {
         eprintln!("warning: {warning}");
     }
-    let determination = aoa_construct::determination_with_signal(&audit.behavioral_signal);
-    let fixes = aoa_migrate::all_fixes();
-
-    let report = aoa_recommend::recommend(&audit, &determination, &fixes);
-
     if args.json {
         print_json(&report)?;
     } else {

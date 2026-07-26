@@ -13,6 +13,7 @@ mod init;
 mod lint;
 mod migrate;
 mod observe;
+mod pipeline;
 mod policy;
 mod r0b;
 mod recommend;
