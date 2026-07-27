@@ -25,6 +25,7 @@
 //! | `search` | `retrieval.search` | `query` |
 //! | `read` | `file.read` | `path` |
 //! | `write` | `write.attempt` | `path` |
+//! | `committed` | `write.committed` | `path` |
 //! | `blocked` | `write.blocked` | `path` |
 //! | `test` | `test.run` | `command` |
 //! | `gateway` | `gateway.invoke` | `tool` |
@@ -68,6 +69,7 @@ fn map_verb(verb: &str) -> Option<(SpanType, &'static str)> {
         "search" => Some((SpanType::RetrievalSearch, "query")),
         "read" => Some((SpanType::FileRead, "path")),
         "write" => Some((SpanType::WriteAttempt, "path")),
+        "committed" => Some((SpanType::WriteCommitted, "path")),
         "blocked" => Some((SpanType::WriteBlocked, "path")),
         "test" => Some((SpanType::TestRun, "command")),
         "gateway" => Some((SpanType::GatewayInvoke, "tool")),
@@ -124,7 +126,7 @@ mod tests {
 
     #[test]
     fn maps_each_verb_to_its_span_in_order() {
-        let log = "search q\nread p\ngateway t\nblocked b\nwrite w\ntest c\n";
+        let log = "search q\nread p\ngateway t\nblocked b\nwrite w\ncommitted w\ntest c\n";
         let result = parse_generic_log(log).unwrap();
         let types: Vec<SpanType> = result.trace.spans.iter().map(|s| s.span_type).collect();
         assert_eq!(
@@ -135,13 +137,14 @@ mod tests {
                 SpanType::GatewayInvoke,
                 SpanType::WriteBlocked,
                 SpanType::WriteAttempt,
+                SpanType::WriteCommitted,
                 SpanType::TestRun,
             ]
         );
         assert!(result.warnings.is_empty());
         // seq is strictly increasing.
         let seqs: Vec<u64> = result.trace.spans.iter().map(|s| s.seq).collect();
-        assert_eq!(seqs, vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(seqs, vec![0, 1, 2, 3, 4, 5, 6]);
     }
 
     #[test]

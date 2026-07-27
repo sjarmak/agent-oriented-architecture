@@ -6,5 +6,6 @@ read src/config.rs
 gateway mcp__codegraph__codegraph_search
 blocked /etc/forbidden.conf
 write src/config.rs
+committed src/config.rs
 test pytest tests/test_config.py -q
 frobnicate something-unmapped

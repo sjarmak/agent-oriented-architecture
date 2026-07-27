@@ -10,7 +10,7 @@ use std::path::Path;
 use aoa_codeprobe_shim::{
     run_conformance, ClaudeStreamJson, GenericLogBackend, TraceBackend, CONTRACT_VERSION,
 };
-use aoa_trace::{validate_trace_value, SpanSource};
+use aoa_trace::{validate_trace_value, SpanSource, SpanType};
 
 fn fixture(name: &str) -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -51,8 +51,9 @@ fn generic_log_backend_conforms_as_a_reconstructed_example() {
         outcome.has_reconstructed,
         "reconstructed spans must be flagged so R7/R8 exclude them"
     );
-    // search, read, gateway, blocked, write, test — the unmapped verb yields no span.
-    assert_eq!(outcome.span_count, 6);
+    // search, read, gateway, blocked, write intent, committed outcome, test —
+    // the unmapped verb yields no span.
+    assert_eq!(outcome.span_count, 7);
     assert_eq!(
         outcome.warnings, 1,
         "the unmapped verb is surfaced, not swallowed"
@@ -65,6 +66,14 @@ fn reconstructed_trace_validates_and_is_uniformly_reconstructed() {
     let result = GenericLogBackend.parse(&raw).expect("parse generic log");
 
     validate_trace_value(&result.trace).expect("reconstructed trace validates");
+    assert!(
+        result
+            .trace
+            .spans
+            .iter()
+            .any(|span| span.span_type == SpanType::WriteCommitted),
+        "the generic format must be able to attest a landed write"
+    );
     assert!(
         result
             .trace

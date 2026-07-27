@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use aoa_codeprobe_shim::{GenericLogBackend, TraceBackend};
 use aoa_observe_shim::{held_out_edits, load_corpus, ObserveShimError};
 use tempfile::TempDir;
 
@@ -141,6 +142,19 @@ fn held_out_edits_admit_only_confirmed_successful_mutations() {
     // ...and all six spans survive ingestion: excluded from ground truth is not
     // the same as discarded. The failure modes stay auditable.
     assert_eq!(trace.spans.len(), 6, "no span is dropped on ingest");
+}
+
+#[test]
+fn reconstructed_generic_log_can_supply_landed_edit_ground_truth() {
+    let parsed = GenericLogBackend
+        .parse("write src/lib.rs\ncommitted src/lib.rs\n")
+        .expect("generic log parses");
+
+    assert_eq!(
+        held_out_edits(&parsed.trace),
+        ["src/lib.rs".to_string()].into_iter().collect(),
+        "write intent alone is insufficient; its committed outcome is ground truth"
+    );
 }
 
 #[test]
