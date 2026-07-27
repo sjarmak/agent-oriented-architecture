@@ -898,6 +898,22 @@ fn tampered_report_json_cannot_forge_sufficient_behavioral_signal() {
     );
 }
 
+#[test]
+fn deserialized_report_rederives_insufficient_data_from_signal() {
+    let suppressed =
+        r#"{"items":[],"behavioral_signal":{"observations":0},"insufficient_data":null}"#;
+    let report: AuditReport = serde_json::from_str(suppressed).expect("deserializes");
+
+    assert!(
+        report.insufficient_data.is_some(),
+        "wire data cannot suppress the note derived from an insufficient signal"
+    );
+    assert!(
+        report.render_human().contains("[InsufficientData]"),
+        "the human register must disclose withheld behavioral metrics"
+    );
+}
+
 // Defensive: the default-config audit (no context root match, empty graph) still
 // produces a well-formed, ranked report with tiered items.
 #[test]

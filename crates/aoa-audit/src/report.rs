@@ -13,7 +13,7 @@ const TIER1_FAILURE_CODE: i32 = 2;
 /// The full audit result: a ranked punch-list plus the repo's held-out
 /// behavioral signal. Serializes to structured JSON and renders to a
 /// human-readable ranked list.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AuditReport {
     pub items: Vec<PunchItem>,
     /// Present when a workspace manifest exists but could not be used for
@@ -34,6 +34,31 @@ pub struct AuditReport {
     /// Their punch items are withheld rather than fabricated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub insufficient_data: Option<InsufficientDataNote>,
+}
+
+#[derive(Deserialize)]
+struct AuditReportWire {
+    items: Vec<PunchItem>,
+    #[serde(default)]
+    subtree_discovery_warning: Option<String>,
+    #[serde(default)]
+    behavioral_signal: BehavioralSignal,
+    // Accepted for wire compatibility, but this is a projection of
+    // `behavioral_signal`, never independent input.
+    #[serde(default, rename = "insufficient_data")]
+    _insufficient_data: Option<InsufficientDataNote>,
+}
+
+impl<'de> Deserialize<'de> for AuditReport {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = AuditReportWire::deserialize(deserializer)?;
+        Ok(Self {
+            items: wire.items,
+            subtree_discovery_warning: wire.subtree_discovery_warning,
+            insufficient_data: wire.behavioral_signal.insufficient_data(),
+            behavioral_signal: wire.behavioral_signal,
+        })
+    }
 }
 
 impl AuditReport {
