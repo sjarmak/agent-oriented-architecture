@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::error::BudgetError;
+use crate::normalize_path;
 use crate::reference::extract_references;
 
 /// A single resolved context file and its on-disk text.
@@ -37,7 +38,7 @@ impl Closure {
 /// file is skipped (it may be a relative doc link outside the context tree);
 /// failure to read the explicitly requested `root`, however, is an error.
 pub fn resolve_closure(root: &Path) -> Result<Closure, BudgetError> {
-    let root = normalize(root);
+    let root = normalize_path(root);
     let mut visited: BTreeSet<PathBuf> = BTreeSet::new();
     let mut files: Vec<ContextFile> = Vec::new();
     let mut stack: Vec<PathBuf> = vec![root.clone()];
@@ -58,7 +59,7 @@ pub fn resolve_closure(root: &Path) -> Result<Closure, BudgetError> {
         let base_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
         let mut children: Vec<PathBuf> = extract_references(&text, &base_dir)
             .into_iter()
-            .map(|r| normalize(&r.target))
+            .map(|r| normalize_path(&r.target))
             .filter(|p| !visited.contains(p))
             .collect();
         // Reverse so the stack pops children in source order (stable output).
@@ -68,21 +69,4 @@ pub fn resolve_closure(root: &Path) -> Result<Closure, BudgetError> {
     }
 
     Ok(Closure { root, files })
-}
-
-/// Lexically normalize a path (resolve `.` and `..` components) without
-/// touching the filesystem, so equivalent references compare equal.
-fn normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        use std::path::Component::*;
-        match component {
-            CurDir => {}
-            ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
 }

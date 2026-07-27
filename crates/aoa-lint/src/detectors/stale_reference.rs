@@ -1,8 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::category::SmellCategory;
 use crate::detectors::LintedFile;
 use crate::finding::Finding;
+use aoa_budget::normalize_path;
 
 /// Flag markdown links whose local target does not exist on disk (a dead link).
 /// External links (`http`, `https`, `mailto`) and pure anchors are ignored.
@@ -15,7 +16,7 @@ pub fn detect(file: &LintedFile) -> Vec<Finding> {
         let Some(local) = local_path(&raw) else {
             continue;
         };
-        let target = normalize(&base_dir.join(local));
+        let target = normalize_path(&base_dir.join(local));
         if !target.exists() {
             findings.push(Finding {
                 file: file.path.clone(),
@@ -53,21 +54,6 @@ fn markdown_link_targets(text: &str) -> Vec<String> {
             }
         }
         i += 1;
-    }
-    out
-}
-
-fn normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        use std::path::Component::*;
-        match component {
-            CurDir => {}
-            ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
-        }
     }
     out
 }
