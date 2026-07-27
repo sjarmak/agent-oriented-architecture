@@ -4,7 +4,11 @@ use thiserror::Error;
 
 /// Errors raised while installing telemetry (`observe`) or running the
 /// read-only audit (`audit`).
+///
+/// Downstream callers must retain a fallback arm: new typed failures may be
+/// added as the audit grows without turning every addition into a semver break.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum AuditError {
     /// A filesystem operation against the repo failed.
     #[error("filesystem operation failed at {path}: {source}")]
