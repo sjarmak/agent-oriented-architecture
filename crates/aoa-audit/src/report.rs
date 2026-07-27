@@ -2,7 +2,7 @@ use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
 
-use aoa_construct::{BehavioralSignal, InsufficientDataNote};
+use aoa_construct::{BehavioralSignal, ConstructValidityReport, InsufficientDataNote};
 
 use crate::punch::PunchItem;
 use crate::tier::Tier;
@@ -79,6 +79,15 @@ impl AuditReport {
             insufficient_data: behavioral_signal.insufficient_data(),
             behavioral_signal,
         }
+    }
+
+    /// Derive construct validity from this report's own behavioral signal.
+    ///
+    /// Callers holding an audit should use this accessor rather than an
+    /// unconditioned determination, so the readiness view cannot disagree with
+    /// the evidence that produced its punch-list.
+    pub fn determination(&self) -> ConstructValidityReport {
+        aoa_construct::determination_with_signal(&self.behavioral_signal)
     }
 
     /// Whether any punch-list item is a Tier-1 gap.

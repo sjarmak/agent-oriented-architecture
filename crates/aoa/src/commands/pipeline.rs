@@ -84,7 +84,7 @@ pub(crate) struct Readiness {
 /// it ships alongside.
 pub(crate) fn readiness(repo: &Path) -> Result<Readiness> {
     let audit = audited(repo)?;
-    let determination = aoa_construct::determination_with_signal(&audit.behavioral_signal);
+    let determination = audit.determination();
     let fixes = aoa_migrate::all_fixes();
     let recommendations = aoa_recommend::recommend(&audit, &determination, &fixes);
     Ok(Readiness {

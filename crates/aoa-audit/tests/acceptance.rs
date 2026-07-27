@@ -786,6 +786,11 @@ fn greenfield_repo_reports_insufficient_data_not_a_fabricated_score() {
         human.contains(aoa_construct::INSUFFICIENT_DATA_REASON),
         "{human}"
     );
+    assert_eq!(
+        report.determination(),
+        aoa_construct::determination_with_signal(&report.behavioral_signal),
+        "the report owns derivation of its signal-conditioned determination"
+    );
 }
 
 // aoa-d6t.23 criterion: once enough observe-captured sessions accumulate under
