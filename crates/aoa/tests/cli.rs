@@ -2150,6 +2150,7 @@ fn observe_enforce(repo: &Path) {
 }
 
 fn hook_payload(tool: &str, command: Option<&str>, cwd: &Path) -> String {
+    std::fs::create_dir_all(cwd.join(".git")).expect("mark hook fixture as a repository");
     let mut input = serde_json::Map::new();
     match command {
         Some(c) => {
@@ -2508,6 +2509,7 @@ fn enforce_check_records_allowed_write_when_reproduction_is_disabled() {
 #[test]
 fn enforce_check_blocks_protected_path_even_without_reproduction() {
     let repo = TempDir::new().unwrap();
+    std::fs::create_dir(repo.path().join(".git")).unwrap();
     std::fs::write(
         repo.path().join("aoa-policy.yaml"),
         "protected_paths: [\".github/**\"]\nreproduction_required: false\n",
@@ -2551,9 +2553,33 @@ fn enforce_reproduction_toggle_off_allows_unprotected_write() {
         .success();
 }
 
+#[test]
+fn enforce_check_rejects_an_arbitrary_non_repository_cwd_without_writing() {
+    let dir = TempDir::new().unwrap();
+    let payload = serde_json::to_string(&serde_json::json!({
+        "session_id": "it-untrusted-root",
+        "tool_name": "Write",
+        "tool_input": {"file_path": "src/lib.rs"},
+        "cwd": dir.path().to_str().unwrap(),
+    }))
+    .unwrap();
+
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(payload)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("not inside a Git repository"));
+    assert!(
+        !dir.path().join(".aoa").exists(),
+        "a rejected payload must not create telemetry outside a repository"
+    );
+}
+
 /// A hook payload writing to an explicit `file_path` (the generated/protected
 /// path tests need a target other than the default `src/lib.rs`).
 fn write_payload(file_path: &str, session: &str, cwd: &Path) -> String {
+    std::fs::create_dir_all(cwd.join(".git")).expect("mark hook fixture as a repository");
     let mut input = serde_json::Map::new();
     input.insert("file_path".into(), Value::String(file_path.into()));
     serde_json::to_string(&serde_json::json!({

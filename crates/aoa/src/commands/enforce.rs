@@ -370,15 +370,54 @@ fn recorded_span_type(event: &HookEvent) -> Option<SpanType> {
     bash_runs_tests(command).then_some(SpanType::TestRun)
 }
 
-/// The repo root the hook fired from: the payload `cwd`, falling back to the
-/// process working directory. Both the live log and `aoa-policy.yaml` are rooted
-/// here.
+/// Resolve the repository trust root for the hook payload.
+///
+/// The host normally supplies an absolute project `cwd`; an empty value falls
+/// back to the process directory. Canonicalization proves the directory exists
+/// and collapses aliases, then the nearest non-symlink `.git` marker pins writes
+/// and policy reads to a real repository root rather than an arbitrary payload
+/// path. A `.git` file is accepted for linked worktrees.
 fn resolve_base(event: &HookEvent) -> Result<PathBuf> {
-    if event.cwd.is_empty() {
-        std::env::current_dir().context("failed to resolve current directory")
+    let supplied = if event.cwd.is_empty() {
+        std::env::current_dir().context("failed to resolve current directory")?
     } else {
-        Ok(PathBuf::from(&event.cwd))
+        let path = PathBuf::from(&event.cwd);
+        if !path.is_absolute() {
+            return Err(anyhow!("hook cwd must be absolute: {:?}", event.cwd));
+        }
+        path
+    };
+    let canonical = supplied
+        .canonicalize()
+        .with_context(|| format!("failed to resolve hook cwd {}", supplied.display()))?;
+    if !canonical.is_dir() {
+        return Err(anyhow!(
+            "hook cwd is not a directory: {}",
+            canonical.display()
+        ));
     }
+
+    for candidate in canonical.ancestors() {
+        let marker = candidate.join(".git");
+        match std::fs::symlink_metadata(&marker) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(anyhow!(
+                    "refusing repository root with symlinked marker at {}",
+                    marker.display()
+                ));
+            }
+            Ok(_) => return Ok(candidate.to_path_buf()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(anyhow!(err))
+                    .with_context(|| format!("failed to inspect {}", marker.display()));
+            }
+        }
+    }
+    Err(anyhow!(
+        "hook cwd {} is not inside a Git repository",
+        canonical.display()
+    ))
 }
 
 /// Resolve the append-only live-log path for this session, under the ignored
@@ -1166,11 +1205,24 @@ mod tests {
 
     #[test]
     fn live_log_path_stays_inside_traces_dir() {
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repo.path().join(".git")).unwrap();
         let mut e = event("Write", None);
-        e.cwd = "/repo".to_string();
+        e.cwd = repo.path().to_string_lossy().into_owned();
         e.session_id = "../escape".to_string();
         let path = live_log_path(&e).unwrap();
-        assert_eq!(path, PathBuf::from("/repo/.aoa/traces/live-escape.jsonl"));
+        assert_eq!(path, repo.path().join(".aoa/traces/live-escape.jsonl"));
+    }
+
+    #[test]
+    fn resolve_base_rejects_an_existing_non_repository_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut e = event("Write", None);
+        e.cwd = dir.path().to_string_lossy().into_owned();
+
+        let err = resolve_base(&e).expect_err("an arbitrary directory is not a trust root");
+        assert!(err.to_string().contains("not inside a Git repository"));
+        assert!(!dir.path().join(".aoa").exists());
     }
 
     /// Re-merging an already-installed config must be byte-stable: every entry is
