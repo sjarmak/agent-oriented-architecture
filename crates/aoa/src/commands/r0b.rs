@@ -26,7 +26,7 @@
 //! A run whose `scoring.json` is not `dual_composite` (or whose legs errored) has
 //! no independent visible leg, so R0b **fails loud** rather than fabricating one.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -80,11 +80,10 @@ fn load_canary_manifest(path: &Path) -> Result<BTreeMap<String, bool>> {
 /// Aggregate one codeprobe run directory into a run-level `aoa_gap::RunResult`.
 fn aggregate_run(
     run_dir: &Path,
-    tasks_dir: &Path,
+    task_ids: &[String],
+    provenance_by_task: &BTreeMap<String, HeldOutProvenance>,
     canary_map: &BTreeMap<String, bool>,
 ) -> Result<RunResult> {
-    let task_ids = discover_tasks(run_dir)?;
-
     // Validate canary membership up front, before any per-task I/O: every
     // declared canary must name a real trial in this run, or the leakage check
     // would silently lose its known-item signal. The id is untrusted manifest
@@ -103,20 +102,18 @@ fn aggregate_run(
     let mut provenances = Vec::with_capacity(task_ids.len());
     let mut canaries = Vec::new();
 
-    for task_id in &task_ids {
+    for task_id in task_ids {
         let scoring = DualScoring::load(run_dir, task_id)?;
 
         let visible_success = scoring.visible_success()?;
         let held_out_success = scoring.held_out_success()?;
 
-        let task = load_task(tasks_dir.join(task_id)).with_context(|| {
-            format!(
-                "failed to load task {} oracle from {}",
-                escape_terminal(task_id),
-                tasks_dir.display()
+        provenances.push(*provenance_by_task.get(task_id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "task {} has no loaded held-out provenance",
+                escape_terminal(task_id)
             )
-        })?;
-        provenances.push(task.held_out_provenance());
+        })?);
 
         tasks.push(TaskOutcome {
             visible_success,
@@ -141,6 +138,27 @@ fn aggregate_run(
         held_out_provenance,
         canaries,
     })
+}
+
+/// Load held-out provenance once for the union of both run arms.
+fn load_provenances(
+    tasks_dir: &Path,
+    task_ids: impl Iterator<Item = String>,
+) -> Result<BTreeMap<String, HeldOutProvenance>> {
+    task_ids
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|task_id| {
+            let task = load_task(tasks_dir.join(&task_id)).with_context(|| {
+                format!(
+                    "failed to load task {} oracle from {}",
+                    escape_terminal(&task_id),
+                    tasks_dir.display()
+                )
+            })?;
+            Ok((task_id, task.held_out_provenance()))
+        })
+        .collect()
 }
 
 /// Run-level figures surfaced for both registers.
@@ -231,9 +249,16 @@ pub fn run(args: &R0bArgs) -> Result<i32> {
         None => BTreeMap::new(),
     };
 
-    let baseline = aggregate_run(&args.baseline, &args.tasks, &canary_map)
+    let baseline_ids = discover_tasks(&args.baseline)?;
+    let migrated_ids = discover_tasks(&args.migrated)?;
+    let provenances = load_provenances(
+        &args.tasks,
+        baseline_ids.iter().chain(&migrated_ids).cloned(),
+    )?;
+
+    let baseline = aggregate_run(&args.baseline, &baseline_ids, &provenances, &canary_map)
         .context("failed to aggregate baseline run")?;
-    let migrated = aggregate_run(&args.migrated, &args.tasks, &canary_map)
+    let migrated = aggregate_run(&args.migrated, &migrated_ids, &provenances, &canary_map)
         .context("failed to aggregate migrated run")?;
 
     let (verdict, code) = match compare(&baseline, &migrated) {
