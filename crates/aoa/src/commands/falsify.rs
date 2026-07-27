@@ -328,6 +328,39 @@ mod tests {
         assert!(!meta.convention_inputs_degraded);
     }
 
+    #[test]
+    fn aggregate_file_tolerates_unknown_codeprobe_fields() {
+        let aggregate: AggregateFile = serde_json::from_str(
+            r#"{
+                "ranking": [{"model": "external-tool-owned"}],
+                "future_top_level_field": true,
+                "bias_warnings": [{
+                    "kind": "sample_warning",
+                    "message": "kept",
+                    "future_warning_field": {"also": "tool-owned"}
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(aggregate.bias_warnings.len(), 1);
+        assert_eq!(aggregate.bias_warnings[0].kind, "sample_warning");
+    }
+
+    #[test]
+    fn build_meta_tolerates_unrelated_builder_fields() {
+        let meta: BuildMeta = serde_json::from_str(
+            r#"{
+                "convention_inputs_degraded": false,
+                "repo_count": 5,
+                "future_builder_field": {"version": 2}
+            }"#,
+        )
+        .unwrap();
+
+        assert!(!meta.convention_inputs_degraded);
+    }
+
     /// Write an oversized JSON file (one byte past the cap) and return its path.
     fn oversized_file(dir: &Path, name: &str) -> PathBuf {
         let path = dir.join(name);
