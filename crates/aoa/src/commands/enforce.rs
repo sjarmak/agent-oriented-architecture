@@ -597,8 +597,7 @@ fn append_span_within(
 ) -> Result<()> {
     if let Some(parent) = log.parent() {
         aoa_audit::reject_symlinked_trace_dir(parent)?;
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
+        create_traces_dir(parent)?;
     }
     // Bound to a named local, never a temporary: dropping the `File` closes the
     // descriptor and releases the lock, so a temporary would unlock immediately
@@ -651,6 +650,25 @@ fn append_span_within(
         return Err(anyhow!(err)).with_context(|| format!("failed to append to {}", log.display()));
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn create_traces_dir(path: &Path) -> Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true).mode(0o700);
+    builder
+        .create(path)
+        .with_context(|| format!("failed to create {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn create_traces_dir(path: &Path) -> Result<()> {
+    // Unix mode bits have no portable Windows equivalent. Keep the platform's
+    // inherited ACL here; the final log target is still opened atomically and
+    // must be a regular file.
+    std::fs::create_dir_all(path).with_context(|| format!("failed to create {}", path.display()))
 }
 
 /// Remove an unterminated final fragment while holding the writer's exclusive
@@ -1531,6 +1549,27 @@ mod tests {
         let log = dir.path().join(".aoa/traces").join(name);
         std::fs::create_dir_all(log.parent().unwrap()).unwrap();
         log
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn append_creates_private_trace_directories() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join(".aoa/traces/live-private.jsonl");
+
+        append_span(&log, SpanType::TestRun, Map::new()).unwrap();
+
+        for path in [dir.path().join(".aoa"), dir.path().join(".aoa/traces")] {
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(
+                mode & 0o077,
+                0,
+                "{} must not grant group or other access",
+                path.display()
+            );
+        }
     }
 
     /// A symlink already sitting at the log path must not be followed.
