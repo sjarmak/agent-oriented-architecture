@@ -18,13 +18,16 @@ use crate::model::{Span, Trace};
 /// not the serialized trace file. The two move independently.
 pub const TRACE_FORMAT_VERSION: u32 = 1;
 
-/// A file with no `version` key is treated as [`TRACE_FORMAT_VERSION`]: traces
-/// written before versioning existed are genuine current-format files, so
-/// accepting them keeps the guard non-breaking. The guard's job is to reject an
-/// *explicit* mismatch (a producer that stamped a version this build cannot
-/// parse), not to reject legacy files.
+/// The format used by traces written before the envelope carried a version.
+///
+/// This must not track [`TRACE_FORMAT_VERSION`]: once the current writer moves
+/// to v2, an unversioned v1 file must still be identified as v1 and rejected by
+/// a reader that no longer supports it, rather than silently interpreted as v2.
+const UNVERSIONED_TRACE_FORMAT_VERSION: u32 = 1;
+
+/// A file with no `version` key is treated as the fixed last unversioned format.
 fn default_trace_format_version() -> u32 {
-    TRACE_FORMAT_VERSION
+    UNVERSIONED_TRACE_FORMAT_VERSION
 }
 
 /// The on-disk trace envelope: a format version plus the span collection.
@@ -43,7 +46,7 @@ fn default_trace_format_version() -> u32 {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TraceEnvelope {
-    /// Wire-format version. Absent is treated as [`TRACE_FORMAT_VERSION`].
+    /// Wire-format version. Absent is treated as the fixed legacy v1 format.
     #[serde(default = "default_trace_format_version")]
     pub version: u32,
     /// The ordered span collection.
@@ -138,10 +141,12 @@ mod tests {
     }
 
     #[test]
-    fn missing_version_defaults_to_current() {
+    fn missing_version_defaults_to_literal_legacy_version() {
         let parsed: TraceEnvelope =
             serde_json::from_str(r#"{"spans":[]}"#).expect("deserialize unversioned");
-        assert_eq!(parsed.version, TRACE_FORMAT_VERSION);
+        // Keep this literal: a future bump of TRACE_FORMAT_VERSION must not
+        // silently reclassify pre-envelope v1 files as the new format.
+        assert_eq!(parsed.version, 1);
         assert!(parsed.into_trace().is_ok());
     }
 
