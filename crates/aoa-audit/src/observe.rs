@@ -3,7 +3,7 @@ use std::path::{Component, Path, PathBuf};
 
 #[cfg(not(unix))]
 use aoa_trace::validate_trace;
-use aoa_trace::{Trace, TraceReport};
+use aoa_trace::{validate_single_component, Trace, TraceReport};
 
 use crate::error::AuditError;
 
@@ -61,19 +61,11 @@ impl ObserveOutcome {
 /// the reader contract in `aoa_observe_shim::corpus`, which only ingests a
 /// non-`.jsonl` file when it ends in `.json`.
 fn validate_trace_name(name: &str) -> Result<(), AuditError> {
-    let mut components = Path::new(name).components();
-    let single_normal =
-        matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none();
     let in_json_lane = name
         .strip_suffix(TRACE_EXTENSION)
         .is_some_and(|stem| !stem.is_empty());
 
-    if single_normal
-        && in_json_lane
-        && !name.contains('/')
-        && !name.contains('\\')
-        && !name.contains('\0')
-    {
+    if validate_single_component(name).is_ok() && in_json_lane {
         Ok(())
     } else {
         Err(AuditError::UnsafeTraceName {
@@ -158,6 +150,14 @@ pub fn reject_symlinked_path(root: &Path, relative: &Path) -> Result<PathBuf, Au
                 path: root.join(relative),
             });
         };
+        let Some(part_name) = part.to_str() else {
+            return Err(AuditError::UnsafeInstallPath {
+                path: root.join(relative),
+            });
+        };
+        validate_single_component(part_name).map_err(|_| AuditError::UnsafeInstallPath {
+            path: root.join(relative),
+        })?;
         resolved.push(part);
         reject_symlink(&resolved)?;
     }
@@ -539,7 +539,11 @@ mod tests {
             .expect("missing normal components are safe to create");
         assert_eq!(target, root.path().join("nested/file"));
 
-        for relative in [Path::new("../escape"), Path::new("/absolute")] {
+        for relative in [
+            Path::new("../escape"),
+            Path::new("/absolute"),
+            Path::new("back\\slash"),
+        ] {
             assert!(matches!(
                 reject_symlinked_path(root.path(), relative),
                 Err(AuditError::UnsafeInstallPath { .. })

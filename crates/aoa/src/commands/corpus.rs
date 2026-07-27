@@ -28,6 +28,7 @@ use aoa_audit::{structure_measurements, AuditConfig, AuditError, FindingKind, St
 use aoa_bench::{is_task_dir, load_task};
 use aoa_construct::{GatingThresholds, MetricName};
 use aoa_corpus::{build_report_from_corpus, mine_reverts, Corpus, GitRunner, MinedCommit, Repo};
+use aoa_trace::validate_single_component;
 
 use crate::cli::MineCorpusArgs;
 use crate::commands::fsutil::MAX_TASK_DIRS;
@@ -181,15 +182,8 @@ history (not --depth) before mining",
 /// absolute path would, through `Path::join`, point the git subprocess at a
 /// directory outside the clones tree.
 fn validate_repo_id(repo_id: &str) -> Result<()> {
-    if repo_id.is_empty()
-        || repo_id == "."
-        || repo_id == ".."
-        || repo_id.contains('/')
-        || repo_id.contains('\\')
-    {
-        bail!("unsafe repo id {repo_id:?}: expected a single path segment (from codeprobe `repo`)");
-    }
-    Ok(())
+    validate_single_component(repo_id)
+        .context("unsafe repo id: expected a single path segment (from codeprobe `repo`)")
 }
 
 /// Recursively collect the task dirs under `root`: every directory `load_task`

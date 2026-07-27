@@ -9,6 +9,7 @@ mod envelope;
 mod error;
 mod metric_input;
 mod model;
+mod path_component;
 mod report;
 mod span_type;
 mod validate;
@@ -19,6 +20,7 @@ pub use metric_input::{
     Confidence, IndexQuality, MetricInput, MetricInputRef, SymbolGraph, TransformMap,
 };
 pub use model::{Span, Trace};
+pub use path_component::{validate_single_component, UnsafePathComponent};
 pub use report::TraceReport;
 pub use span_type::{SpanSource, SpanType};
 pub use validate::{validate_trace, validate_trace_value};

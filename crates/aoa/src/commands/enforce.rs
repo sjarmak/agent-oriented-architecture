@@ -67,7 +67,7 @@ use aoa_enforce::{
     blocked_span, generated_artifact_gate, reproduction_gate, BlockReason, Decision,
 };
 use aoa_policy::Policy;
-use aoa_trace::{Span, SpanSource, SpanType};
+use aoa_trace::{validate_single_component, Span, SpanSource, SpanType};
 
 use crate::cli::{EnforceArgs, EnforceCommand};
 use crate::commands::generated::generated_rules;
@@ -447,10 +447,18 @@ fn sanitize_session(raw: &str) -> String {
         })
         .collect();
     let trimmed = cleaned.trim_matches('-');
-    if trimmed.is_empty() {
+    let candidate = if trimmed.is_empty() {
         "unknown".to_string()
     } else {
         trimmed.to_string()
+    };
+    if validate_single_component(&candidate).is_ok() {
+        candidate
+    } else {
+        // Defensive fallback: the coercion above currently emits only the safe
+        // ASCII alphabet, but the shared validator remains the postcondition if
+        // that alphabet changes later.
+        "unknown".to_string()
     }
 }
 
