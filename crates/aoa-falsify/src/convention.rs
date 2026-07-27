@@ -38,6 +38,7 @@ pub enum LocalityBound {
 /// Conventions are data, not hidden code paths: the set actually evaluated is
 /// emitted in the report so the precondition is inspectable.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ScoringConvention {
     /// Human-readable label, emitted in the report.
     pub name: String,

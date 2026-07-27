@@ -12,6 +12,7 @@ use crate::convention::{ConventionFamily, ScoringConvention};
 /// AND calibrated. A repo failing any one is excluded and does not contribute a
 /// vote, per R-silent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Eligibility {
     /// Index confidence from `aoa-metrics`; only `Confidence::High` may vote.
     pub confidence: Confidence,
@@ -41,7 +42,7 @@ pub const UNREACHABLE_TRACE_REACH_DEPTH: u32 = u32::MAX;
 ///   chain file is within `k` undirected hops of the trace footprint in the
 ///   SCIP symbol graph ([`UNREACHABLE_TRACE_REACH_DEPTH`] when disconnected).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "family", rename_all = "snake_case")]
+#[serde(tag = "family", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ConventionInputs {
     Edit {
         edit_locality: f64,
@@ -73,6 +74,7 @@ impl ConventionInputs {
 /// under the two arms — repo arm (AOA migration, fixed harness) and harness arm
 /// (swapped harness, fixed repo).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PairTask {
     pub task_id: u64,
     /// Whether the task is an identical pair across both arms. Non-paired tasks
@@ -93,6 +95,7 @@ pub struct PairTask {
 /// across the `k_runs` replications. Variation is supplied by the caller (real
 /// re-runs), never by an in-crate RNG.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RepoRun {
     pub seed: u64,
     pub tasks: Vec<PairTask>,
@@ -100,6 +103,7 @@ pub struct RepoRun {
 
 /// All evidence for a single repo across its replicated runs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RepoResult {
     pub repo_id: String,
     pub eligibility: Eligibility,
@@ -113,6 +117,7 @@ pub struct RepoResult {
 /// Policy thresholds and admissible conventions for the gate, all carried as
 /// data so the verdict's preconditions are inspectable.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FalsifyConfig {
     /// Determinism replication count; the verdict must be stable across this
     /// many fixed-seed runs. Must be >= 3.
@@ -145,6 +150,7 @@ impl Default for FalsifyConfig {
 
 /// The complete input to the falsification gate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FalsifyInput {
     pub repos: Vec<RepoResult>,
     pub config: FalsifyConfig,

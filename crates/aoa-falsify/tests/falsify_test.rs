@@ -75,6 +75,42 @@ fn input(repos: Vec<RepoResult>) -> FalsifyInput {
     }
 }
 
+#[test]
+fn falsify_input_rejects_unknown_fields_at_owned_boundaries() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../fixtures/proceed_input.json"))
+            .expect("fixture parses as JSON");
+    let boundaries = [
+        ("input", ""),
+        ("repo result", "/repos/0"),
+        ("eligibility", "/repos/0/eligibility"),
+        ("repo run", "/repos/0/runs/0"),
+        ("pair task", "/repos/0/runs/0/tasks/0"),
+        (
+            "convention inputs",
+            "/repos/0/runs/0/tasks/0/convention_inputs",
+        ),
+        ("config", "/config"),
+        ("scoring convention", "/config/conventions/0"),
+    ];
+
+    for (name, pointer) in boundaries {
+        let mut candidate = fixture.clone();
+        candidate
+            .pointer_mut(pointer)
+            .and_then(serde_json::Value::as_object_mut)
+            .unwrap_or_else(|| panic!("{name} boundary is an object"))
+            .insert("unexpected".to_string(), serde_json::Value::Bool(true));
+
+        let error = serde_json::from_value::<FalsifyInput>(candidate)
+            .expect_err(&format!("{name} accepted an unknown field"));
+        assert!(
+            error.to_string().contains("unknown field `unexpected`"),
+            "{name}: {error}"
+        );
+    }
+}
+
 /// Criterion 1: emits falsification.json with repo_delta, harness_delta, verdict.
 #[test]
 fn emits_falsification_json_with_required_fields() {
