@@ -10,7 +10,7 @@
 //!   inputs (instruction, gold artifact set `G_t`, accepted-solution file-sets,
 //!   and a classified held-out provenance) and bridges those into the `aoa-gap`
 //!   gap gate and the `aoa-metrics` edit-locality floor/ceiling.
-//! - **run dirs** ([`DualScoring`], [`discover_tasks`], [`aggregate_provenance`])
+//! - **run dirs** ([`TrialScoring`], [`discover_tasks`], [`aggregate_provenance`])
 //!   — the `<run_dir>/<task_id>/scoring.json` wire contract codeprobe writes
 //!   after an agent runs, trial discovery over that layout, and the held-out
 //!   provenance reduction across a set of trials.
@@ -40,7 +40,7 @@ mod task;
 pub use bridge::EditLocalityAnchors;
 pub use codeprobe_run::{
     aggregate_provenance, discover_tasks, discover_tasks_isolating_names, leg_pass, scoring_path,
-    transcript_path, DualScoring,
+    transcript_path, DualLegs, TrialScoring,
 };
 pub use error::BenchError;
 pub use loader::{is_task_dir, load_task};

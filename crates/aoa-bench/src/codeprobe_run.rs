@@ -45,7 +45,7 @@ pub fn leg_pass(passed: Option<bool>, score: Option<f64>) -> Option<bool> {
     }
 }
 
-/// The subset of codeprobe's flattened `scoring.json` the held-out gates read.
+/// Codeprobe's scoring fields, decoded once for both honest projections.
 ///
 /// The dual-verifier scorer merges its `details` onto the top level, so the leg
 /// fields sit beside `score`/`passed` (`core/executor.py::_save_task_artifacts`):
@@ -54,20 +54,24 @@ pub fn leg_pass(passed: Option<bool>, score: Option<f64>) -> Option<bool> {
 /// - **visible** = the DIRECT leg (`passed_direct`): `test.sh` run against the
 ///   agent's diff — the gameable proxy verifier.
 ///
-/// Shared by `eval r0b` (run-level leakage) and `eval experiment` (R0 paired-arm
-/// build) so the two cannot drift on what a clean dual result is.
+/// [`TrialScoring::composite`] reads the top-level outcome accepted from any
+/// scorer. [`TrialScoring::dual`] validates and projects the independent direct
+/// and artifact legs required by R0 gates.
 ///
 /// Being a declared subset, it must tolerate unknown fields: `deny_unknown_fields`
 /// would reject every real file, whose `details` merge leaves further keys at the
 /// top level. `dual_scoring_tolerates_unknown_codeprobe_fields` pins that.
 #[derive(Debug, Deserialize)]
-pub struct DualScoring {
+pub struct TrialScoring {
     /// The trial this was read from. Not part of codeprobe's wire shape — it is
     /// the directory name, filled in by [`Self::load`] so that every error this
     /// type raises can name its trial without the caller re-supplying (and
     /// potentially mismatching) the id on each accessor.
     #[serde(skip)]
     task_id: String,
+    score: Option<f64>,
+    passed: Option<bool>,
+    error: Option<String>,
     scorer_family: Option<String>,
     passed_direct: Option<bool>,
     passed_artifact: Option<bool>,
@@ -77,8 +81,8 @@ pub struct DualScoring {
     error_artifact: Option<String>,
 }
 
-impl DualScoring {
-    /// Read and validate one trial's scoring as a clean dual-verifier result.
+impl TrialScoring {
+    /// Read one trial's scoring file through the shared bounded loader.
     ///
     /// Takes the run dir and trial id rather than a path: the
     /// `<run_dir>/<task_id>/scoring.json` layout is this module's contract, so
@@ -86,19 +90,26 @@ impl DualScoring {
     pub fn load(run_dir: &Path, task_id: &str) -> Result<Self, BenchError> {
         let path = scoring_path(run_dir, task_id);
         let raw = read_capped(&path, MAX_CODEPROBE_JSON_BYTES)?;
-        let mut scoring: DualScoring =
+        let mut scoring: TrialScoring =
             serde_json::from_str(&raw).map_err(|source| BenchError::Json { path, source })?;
         scoring.task_id = task_id.to_string();
-        scoring.ensure_dual()?;
         Ok(scoring)
+    }
+
+    /// Top-level composite outcome for scorers that do not expose independent
+    /// legs. `None` distinguishes a missing signal from an explicit failure.
+    pub fn composite(&self) -> Option<bool> {
+        leg_pass(self.passed, self.score)
+    }
+
+    /// A top-level scorer failure, when codeprobe persisted one.
+    pub fn scorer_error(&self) -> Option<&str> {
+        self.error.as_deref()
     }
 
     /// Reject anything that is not a clean dual-verifier result: both the
     /// held-out (artifact) and visible (direct) legs must have genuinely run.
-    ///
-    /// Private — `load` is the only entry point; tests in this module exercise
-    /// it directly on hand-built structs.
-    fn ensure_dual(&self) -> Result<(), BenchError> {
+    pub fn dual(&self) -> Result<DualLegs, BenchError> {
         if self.scorer_family.as_deref() != Some("dual_composite") {
             return Err(BenchError::NotDualComposite {
                 task_id: self.task_id.clone(),
@@ -117,9 +128,27 @@ impl DualScoring {
                 });
             }
         }
-        Ok(())
+        Ok(DualLegs {
+            task_id: self.task_id.clone(),
+            passed_direct: self.passed_direct,
+            passed_artifact: self.passed_artifact,
+            score_direct: self.score_direct,
+            score_artifact: self.score_artifact,
+        })
     }
+}
 
+/// Validated independent outcomes from a dual-composite trial.
+#[derive(Debug)]
+pub struct DualLegs {
+    task_id: String,
+    passed_direct: Option<bool>,
+    passed_artifact: Option<bool>,
+    score_direct: Option<f64>,
+    score_artifact: Option<f64>,
+}
+
+impl DualLegs {
     /// Visible (direct/`test.sh`) outcome — the gameable proxy verifier.
     pub fn visible_success(&self) -> Result<bool, BenchError> {
         self.leg(self.passed_direct, self.score_direct, "direct (visible)")
@@ -340,17 +369,32 @@ pub fn aggregate_provenance(
 mod tests {
     use super::*;
 
-    /// Pins the unknown-field tolerance documented on `DualScoring`, so the
+    /// Pins the unknown-field tolerance documented on `TrialScoring`, so the
     /// decision fails CI rather than only asserting itself in prose.
     #[test]
     fn dual_scoring_tolerates_unknown_codeprobe_fields() {
-        let scoring: DualScoring = serde_json::from_str(
+        let scoring: TrialScoring = serde_json::from_str(
             r#"{ "scorer_family": "dual_composite", "passed_direct": true,
                  "passed_artifact": false, "score": 0.5,
                  "details": { "nested": 1 }, "duration_s": 12.5 }"#,
         )
         .expect("a real codeprobe scoring.json carries fields this subset ignores");
         assert_eq!(scoring.scorer_family.as_deref(), Some("dual_composite"));
+    }
+
+    #[test]
+    fn composite_projection_separates_no_signal_from_failure() {
+        for (json, expected) in [
+            (r#"{"reward":0.0}"#, None),
+            (r#"{"score":null}"#, None),
+            (r#"{"score":0.0}"#, Some(false)),
+            (r#"{"score":1.0}"#, Some(true)),
+            (r#"{"passed":true}"#, Some(true)),
+            (r#"{"score":1.0,"passed":false}"#, Some(false)),
+        ] {
+            let scoring: TrialScoring = serde_json::from_str(json).unwrap();
+            assert_eq!(scoring.composite(), expected, "{json}");
+        }
     }
 
     #[test]
@@ -396,10 +440,13 @@ mod tests {
         ));
     }
 
-    fn dual(scorer_family: Option<&str>) -> DualScoring {
-        DualScoring {
+    fn dual(scorer_family: Option<&str>) -> TrialScoring {
+        TrialScoring {
             task_id: "t".to_string(),
             scorer_family: scorer_family.map(str::to_string),
+            score: None,
+            passed: None,
+            error: None,
             passed_direct: None,
             passed_artifact: None,
             score_direct: None,
@@ -411,7 +458,7 @@ mod tests {
 
     #[test]
     fn non_dual_scoring_fails_loud() {
-        let err = dual(Some("binary")).ensure_dual().unwrap_err();
+        let err = dual(Some("binary")).dual().unwrap_err();
         assert!(matches!(err, BenchError::NotDualComposite { .. }));
         // `eval r0b` surfaces this string to operators; keep it verbatim.
         assert!(err.to_string().contains("dual_composite"));
@@ -424,7 +471,7 @@ mod tests {
         errored.passed_artifact = Some(true);
         errored.error_artifact = Some("answer.json missing".to_string());
 
-        let err = errored.ensure_dual().unwrap_err();
+        let err = errored.dual().unwrap_err();
         assert!(matches!(err, BenchError::ScoringLegErrored { .. }));
         assert!(err.to_string().contains("artifact (held-out) leg errored"));
     }
@@ -435,13 +482,18 @@ mod tests {
         scored.score_direct = Some(1.0);
         scored.score_artifact = Some(0.0);
 
-        assert!(scored.visible_success().unwrap());
-        assert!(!scored.held_out_success().unwrap());
+        let legs = scored.dual().unwrap();
+        assert!(legs.visible_success().unwrap());
+        assert!(!legs.held_out_success().unwrap());
     }
 
     #[test]
     fn a_leg_with_no_signal_at_all_fails_loud() {
-        let err = dual(Some("dual_composite")).held_out_success().unwrap_err();
+        let err = dual(Some("dual_composite"))
+            .dual()
+            .unwrap()
+            .held_out_success()
+            .unwrap_err();
         assert!(matches!(err, BenchError::MissingScoringLeg { .. }));
         assert!(err.to_string().contains("artifact (held-out)"));
     }
@@ -465,17 +517,14 @@ mod tests {
         errored.task_id = "task\u{1b}[2J".to_string();
         errored.error_direct = Some("boom\u{1b}[31mRED".to_string());
 
-        let rendered = errored.ensure_dual().unwrap_err().to_string();
+        let rendered = errored.dual().unwrap_err().to_string();
         assert!(
             rendered.contains("task\u{1b}[2J") && rendered.contains("boom\u{1b}[31mRED"),
             "evidence text was transformed early: {rendered:?}"
         );
 
         // Debug-rendered optional values remain unambiguous by construction.
-        let rendered = dual(Some("evil\u{1b}[2J"))
-            .ensure_dual()
-            .unwrap_err()
-            .to_string();
+        let rendered = dual(Some("evil\u{1b}[2J")).dual().unwrap_err().to_string();
         assert!(rendered.contains("\\u{1b}"));
     }
 
@@ -492,7 +541,7 @@ mod tests {
         let ids = discover_tasks(&base).unwrap();
         assert_eq!(ids.len(), 1);
 
-        let rendered = DualScoring::load(&base, &ids[0]).unwrap_err().to_string();
+        let rendered = TrialScoring::load(&base, &ids[0]).unwrap_err().to_string();
         assert!(
             rendered.contains('\u{1b}'),
             "persistable path was transformed early: {rendered:?}"

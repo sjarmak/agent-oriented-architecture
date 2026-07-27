@@ -37,10 +37,10 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use anyhow::{anyhow, Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use aoa_bench::{
-    discover_tasks_isolating_names, leg_pass, load_task, scoring_path, transcript_path,
+    discover_tasks_isolating_names, load_task, scoring_path, transcript_path, TrialScoring,
 };
 use aoa_codeprobe_shim::parse_transcript_file;
 use aoa_construct::{BehavioralSignal, InsufficientDataNote};
@@ -56,44 +56,11 @@ use aoa_scip_graph::{build_symbol_graph, degraded, IndexSource, IndexedRepo};
 use aoa_trace::Trace;
 
 use crate::cli::EvalRunArgs;
-use crate::commands::fsutil::load_json_capped;
 use crate::output::{eprint_human, escape_terminal, print_human, print_json};
 
 /// Mutation-surface reachability depth and retrieval cutoff. Fixed to the value
 /// the metric crate's own integration tests exercise; not yet a CLI knob (YAGNI).
 const DEFAULT_K: u32 = 2;
-
-/// The subset of codeprobe's `scoring.json` this post-processor reads.
-///
-/// Deliberately NOT `aoa_bench::DualScoring`: that type hard-requires
-/// `scorer_family == "dual_composite"` and reads the per-leg fields, whereas
-/// `eval run` accepts any codeprobe scorer and reads the top-level composite
-/// (see the module doc on `visible_unobserved`). The two decode different fields
-/// of the same file on purpose; the pass *rule* is shared so they cannot drift.
-///
-/// Being a declared subset, it must tolerate unknown fields: `deny_unknown_fields`
-/// would reject every real codeprobe file. `scoring_tolerates_unknown_codeprobe_fields`
-/// pins that. Orthogonal to the known-bad `#[serde(default)]` on `score` (aoa-vme7).
-#[derive(Debug, Deserialize)]
-struct Scoring {
-    /// `None` when the field is absent or null — a trial reporting no outcome,
-    /// which is not the same thing as reporting `0.0`.
-    score: Option<f64>,
-    /// Present for binary scorers; preferred over the score threshold.
-    passed: Option<bool>,
-    /// A scorer that failed may still persist fallback `score`/`passed` values.
-    /// Those values are diagnostics, not held-out evidence.
-    error: Option<String>,
-}
-
-impl Scoring {
-    /// `None` when the file carries neither outcome field, i.e. no held-out
-    /// signal at all. Kept a pure decoder: the diagnostic is raised at the call
-    /// site, which holds the path.
-    fn held_out_success(&self) -> Option<bool> {
-        leg_pass(self.passed, self.score)
-    }
-}
 
 #[derive(Debug, Serialize)]
 struct EvalRunReport {
@@ -312,8 +279,8 @@ fn process_task(
     let transcript_warnings = shim.warnings.len();
 
     let scoring_path = scoring_path(&args.codeprobe_run, task_id);
-    let scoring: Scoring = load_json_capped(&scoring_path, "scoring")?;
-    if let Some(error) = &scoring.error {
+    let scoring = TrialScoring::load(&args.codeprobe_run, task_id)?;
+    if let Some(error) = scoring.scorer_error() {
         return Err(anyhow!(
             "{} reports scorer error: {error}",
             scoring_path.display()
@@ -322,7 +289,7 @@ fn process_task(
     // No outcome field at all means this trial measured nothing. Reporting it as
     // a held-out failure would feed a malformed trial into the run's behavioral
     // signal, so it errors out and is excluded instead (aoa-vme7).
-    let held_out_success = scoring.held_out_success().with_context(|| {
+    let held_out_success = scoring.composite().with_context(|| {
         format!(
             "{} carries neither `passed` nor `score`: no held-out signal",
             scoring_path.display()
@@ -533,39 +500,6 @@ mod tests {
     use super::*;
     use aoa_trace::{Span, SpanSource, SpanType};
     use serde_json::Value;
-
-    /// Pins the unknown-field tolerance documented on `Scoring`, so the
-    /// decision fails CI rather than only asserting itself in prose.
-    #[test]
-    fn scoring_tolerates_unknown_codeprobe_fields() {
-        let scoring: Scoring = serde_json::from_str(
-            r#"{ "score": 1.0, "passed": true, "scorer_family": "dual_composite",
-                 "passed_direct": true, "details": { "nested": 1 } }"#,
-        )
-        .expect("a real codeprobe scoring.json carries fields this subset ignores");
-        assert_eq!(scoring.held_out_success(), Some(true));
-    }
-
-    fn scoring(json: &str) -> Scoring {
-        serde_json::from_str(json).expect("scoring parses")
-    }
-
-    /// A trial reporting no outcome at all is distinct from one reporting
-    /// failure (aoa-vme7). Only the two real signals may decide a pass; the
-    /// absent case yields `None` so the caller can exclude the trial.
-    #[test]
-    fn held_out_success_separates_no_signal_from_failure() {
-        assert_eq!(scoring(r#"{"reward":0.0}"#).held_out_success(), None);
-        assert_eq!(scoring(r#"{"score":null}"#).held_out_success(), None);
-        assert_eq!(scoring(r#"{"score":0.0}"#).held_out_success(), Some(false));
-        assert_eq!(scoring(r#"{"score":1.0}"#).held_out_success(), Some(true));
-        assert_eq!(scoring(r#"{"passed":true}"#).held_out_success(), Some(true));
-        // An explicit `passed` wins over the score, as on the dual path.
-        assert_eq!(
-            scoring(r#"{"score":1.0,"passed":false}"#).held_out_success(),
-            Some(false)
-        );
-    }
 
     /// `F_edit` must stay non-empty for a transcript whose write succeeded.
     ///

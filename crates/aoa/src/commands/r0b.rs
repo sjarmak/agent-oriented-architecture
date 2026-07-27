@@ -33,7 +33,7 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use aoa_bench::{aggregate_provenance, discover_tasks, load_task, DualScoring};
+use aoa_bench::{aggregate_provenance, discover_tasks, load_task, TrialScoring};
 use aoa_gap::{
     compare, CanaryItem, CompareOutcome, CompareWarning, GapError, HeldOutProvenance, Label,
     RunResult, TaskOutcome,
@@ -103,7 +103,8 @@ fn aggregate_run(
     let mut canaries = Vec::new();
 
     for task_id in task_ids {
-        let scoring = DualScoring::load(run_dir, task_id)?;
+        let scoring = TrialScoring::load(run_dir, task_id)?;
+        let scoring = scoring.dual()?;
 
         let visible_success = scoring.visible_success()?;
         let held_out_success = scoring.held_out_success()?;

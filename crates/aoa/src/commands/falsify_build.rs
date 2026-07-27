@@ -40,7 +40,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use answer::AnswerContext;
-use aoa_bench::{aggregate_provenance, discover_tasks, load_task, DualScoring};
+use aoa_bench::{aggregate_provenance, discover_tasks, load_task, TrialScoring};
 use aoa_falsify::{
     is_eligible, ConventionInputs, Eligibility, FalsifyConfig, FalsifyInput, PairTask, RepoResult,
     RepoRun, ScoringConvention,
@@ -245,7 +245,10 @@ fn read_arm(run_dir: &Path) -> Result<ArmOutcomes> {
     let mut held_out = BTreeMap::new();
     let mut excluded = BTreeMap::new();
     for task_id in task_ids {
-        match DualScoring::load(run_dir, &task_id).and_then(|s| s.held_out_success()) {
+        match TrialScoring::load(run_dir, &task_id)
+            .and_then(|s| s.dual())
+            .and_then(|s| s.held_out_success())
+        {
             Ok(success) => {
                 held_out.insert(task_id, success);
             }
