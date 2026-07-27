@@ -1,3 +1,11 @@
+//! Compatibility shell for the historical `aoa gap` command group.
+//!
+//! The crate split intentionally moved these implementations to
+//! `aoa-construct` and `aoa-corpus`; this module is not an ownership boundary.
+//! Existing subcommands remain grouped here for CLI compatibility, but new
+//! construct-validity or corpus features should be placed with their owning
+//! command surface rather than extending this residual namespace by default.
+
 use std::fmt::Write as _;
 use std::io::IsTerminal;
 
