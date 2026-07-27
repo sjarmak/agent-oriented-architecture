@@ -154,6 +154,7 @@ fn write_trace_rejects_escaping_names() {
         "..",
         ".",
         "a/b.json",
+        "nul\0name.json",
         "",
     ] {
         let err = write_trace(&outcome, name, &valid_trace())
@@ -252,6 +253,51 @@ fn write_trace_refuses_to_follow_a_symlink_out_of_the_trace_dir() {
         std::fs::read_to_string(&secret).expect("read secret"),
         "original",
         "write escaped the trace dir through the symlink"
+    );
+}
+
+// Criterion (aoa-vpgx): an ordinary-looking file can still share its inode
+// with a file outside the trace directory. Whole traces are create-only, so a
+// planted hardlink must be treated as a collision and its peer left untouched.
+#[cfg(unix)]
+#[test]
+fn write_trace_refuses_to_overwrite_a_hardlinked_file() {
+    let repo = fixture_repo();
+    let outcome = observe(repo.path()).expect("observe succeeds");
+    let victim = repo.path().join("tracked.txt");
+    std::fs::write(&victim, "original").expect("seed victim");
+    std::fs::hard_link(&victim, outcome.traces_dir.join("escape.json")).expect("plant hardlink");
+
+    let err = write_trace(&outcome, "escape.json", &valid_trace())
+        .expect_err("write_trace must refuse an existing hardlink");
+    assert!(
+        matches!(err, aoa_audit::AuditError::TraceExists { .. }),
+        "wrong error: {err:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&victim).expect("read victim"),
+        "original",
+        "write_trace modified the hardlink peer"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn write_trace_refuses_a_fifo_without_hanging() {
+    let repo = fixture_repo();
+    let outcome = observe(repo.path()).expect("observe succeeds");
+    let fifo = outcome.traces_dir.join("blocked.json");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("mkfifo is available");
+    assert!(made.success(), "mkfifo failed");
+
+    let err = write_trace(&outcome, "blocked.json", &valid_trace())
+        .expect_err("write_trace must refuse a FIFO");
+    assert!(
+        matches!(err, aoa_audit::AuditError::TraceExists { .. }),
+        "wrong error: {err:?}"
     );
 }
 
@@ -360,6 +406,47 @@ mod install_path_symlinks {
         let err = observe(repo.path()).expect_err("observe must refuse a symlinked .gitignore");
         assert_unsafe_install_path(err, &planted);
         assert_outside_untouched(outside.path(), &seeded);
+    }
+
+    #[test]
+    fn observe_refuses_to_truncate_a_hardlinked_gitignore() {
+        let repo = fixture_repo();
+        std::fs::create_dir(repo.path().join(".aoa")).expect("create .aoa");
+        let victim = repo.path().join("src.rs");
+        let planted = repo.path().join(".aoa/.gitignore");
+        std::fs::hard_link(&victim, &planted).expect("plant hardlink");
+
+        observe(repo.path()).expect_err("observe must refuse a hardlinked .gitignore");
+        assert_eq!(
+            std::fs::read_to_string(&victim).expect("read victim"),
+            "fn main() {}\n",
+            "observe truncated the tracked hardlink peer"
+        );
+    }
+
+    #[test]
+    fn observe_refuses_a_fifo_gitignore_without_hanging() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let repo = fixture_repo();
+        std::fs::create_dir(repo.path().join(".aoa")).expect("create .aoa");
+        let planted = repo.path().join(".aoa/.gitignore");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&planted)
+            .status()
+            .expect("mkfifo is available");
+        assert!(made.success(), "mkfifo failed");
+
+        let (tx, rx) = mpsc::channel();
+        let repo_path = repo.path().to_path_buf();
+        std::thread::spawn(move || {
+            let _ = tx.send(observe(&repo_path).is_err());
+        });
+        let refused = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("observe must return rather than block on the FIFO");
+        assert!(refused, "a FIFO at .aoa/.gitignore must be refused");
     }
 
     // The guard runs at WRITE time too, not only at install time: `observe()`

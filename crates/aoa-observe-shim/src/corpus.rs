@@ -92,6 +92,30 @@ impl TraceCorpus {
 /// crafted traces dir cannot pull out-of-tree files into the corpus.
 pub fn load_corpus(repo: &Path) -> Result<TraceCorpus, ObserveShimError> {
     let dir = repo.join(TRACES_SUBDIR);
+    // Refuse links in the AOA-owned directory chain before traversal. Checking
+    // only each `read_dir` entry leaves the directory itself able to redirect
+    // the entire corpus out of the caller-selected repository.
+    for node in [repo.join(".aoa"), dir.clone()] {
+        match std::fs::symlink_metadata(&node) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(ObserveShimError::Io {
+                    path: node,
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "refusing symlinked trace corpus directory",
+                    ),
+                });
+            }
+            Ok(_) => {}
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(TraceCorpus {
+                    sessions: Vec::new(),
+                    skipped: Vec::new(),
+                });
+            }
+            Err(source) => return Err(ObserveShimError::Io { path: node, source }),
+        }
+    }
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {

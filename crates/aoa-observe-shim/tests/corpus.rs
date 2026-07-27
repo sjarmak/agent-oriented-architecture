@@ -180,6 +180,32 @@ fn symlinked_corpus_file_is_skipped() {
     assert_eq!(corpus.skipped.len(), 1);
 }
 
+#[cfg(unix)]
+#[test]
+fn symlinked_traces_directory_is_rejected() {
+    use std::os::unix::fs::symlink;
+
+    let repo = TempDir::new().expect("tempdir");
+    let outside = TempDir::new().expect("outside dir");
+    write_live_log(
+        outside.path(),
+        "forged",
+        &[SPAN_TEST_RUN, SPAN_WRITE, SPAN_COMMITTED],
+    );
+    std::fs::create_dir(repo.path().join(".aoa")).expect("create .aoa");
+    symlink(
+        outside.path().join(".aoa/traces"),
+        repo.path().join(".aoa/traces"),
+    )
+    .expect("plant traces-dir symlink");
+
+    let err = load_corpus(repo.path()).expect_err("a symlinked traces dir must be refused");
+    assert!(
+        matches!(err, ObserveShimError::Io { .. }),
+        "wrong error for symlinked traces dir: {err:?}"
+    );
+}
+
 #[test]
 fn corrupt_live_log_fails_loud_naming_the_file() {
     let repo = TempDir::new().expect("tempdir");

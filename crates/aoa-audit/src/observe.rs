@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 #[cfg(not(unix))]
@@ -258,20 +258,64 @@ mod unix {
         after_aoa_open();
 
         let _traces_fd = open_or_create_dir_at(&aoa_fd, "traces", &traces_dir)?;
-        let gitignore_fd = fs::openat(
+        let gitignore_fd = match fs::openat(
             &aoa_fd,
             ".gitignore",
-            OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC | OFlags::NOFOLLOW,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::NONBLOCK,
             FILE_MODE,
-        )
-        .map_err(|source| map_nofollow_error(&aoa_fd, ".gitignore", &gitignore, source))?;
-        let mut gitignore_file = File::from(gitignore_fd);
-        gitignore_file
-            .write_all(b"*\n")
-            .map_err(|source| AuditError::Io {
-                path: gitignore.clone(),
-                source,
-            })?;
+        ) {
+            Ok(fd) => Some(fd),
+            Err(Errno::EXIST) => None,
+            Err(source) => {
+                return Err(map_nofollow_error(
+                    &aoa_fd,
+                    ".gitignore",
+                    &gitignore,
+                    source,
+                ))
+            }
+        };
+        if let Some(fd) = gitignore_fd {
+            File::from(fd)
+                .write_all(b"*\n")
+                .map_err(|source| AuditError::Io {
+                    path: gitignore.clone(),
+                    source,
+                })?;
+        } else {
+            // Existing ignore files are never rewritten. Rewriting would let a
+            // hardlink share the truncation with a tracked file. Open without
+            // blocking, verify the acquired object is one ordinary inode, and
+            // accept it only when it already carries the exact install bytes.
+            let fd = fs::openat(
+                &aoa_fd,
+                ".gitignore",
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+                Mode::empty(),
+            )
+            .map_err(|source| map_nofollow_error(&aoa_fd, ".gitignore", &gitignore, source))?;
+            let stat = fs::fstat(&fd).map_err(|source| io(&gitignore, source))?;
+            if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
+                || stat.st_nlink != 1
+                || stat.st_size != 2
+            {
+                return Err(AuditError::UnsafeInstallPath {
+                    path: gitignore.clone(),
+                });
+            }
+            let mut existing = [0_u8; 2];
+            File::from(fd)
+                .read_exact(&mut existing)
+                .map_err(|source| AuditError::Io {
+                    path: gitignore.clone(),
+                    source,
+                })?;
+            if existing != *b"*\n" {
+                return Err(AuditError::UnsafeInstallPath {
+                    path: gitignore.clone(),
+                });
+            }
+        }
 
         Ok(ObserveOutcome {
             traces_dir,
