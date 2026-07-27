@@ -202,12 +202,35 @@ fn trial_id(run_dir: &Path, name: std::ffi::OsString) -> Result<String, BenchErr
 /// makes. Rejecting the name is what makes the returned ids unique by
 /// construction, since dirent names are unique within a directory.
 pub fn discover_tasks(run_dir: &Path) -> Result<Vec<String>, BenchError> {
+    discover_tasks_impl(run_dir, false).map(|(task_ids, _)| task_ids)
+}
+
+/// Discover trials for a caller that can isolate unaddressable names.
+///
+/// Valid UTF-8 ids retain the same deterministic ordering as
+/// [`discover_tasks`]. A trial whose name cannot round-trip through `String` is
+/// returned as a [`BenchError::TrialNameNotUtf8`] instead of aborting discovery;
+/// callers must report those errors rather than silently shrinking the batch.
+/// Pairing callers should continue to use [`discover_tasks`], whose strict
+/// uniqueness guarantee is required across arms.
+pub fn discover_tasks_isolating_names(
+    run_dir: &Path,
+) -> Result<(Vec<String>, Vec<BenchError>), BenchError> {
+    discover_tasks_impl(run_dir, true)
+}
+
+fn discover_tasks_impl(
+    run_dir: &Path,
+    isolate_invalid_names: bool,
+) -> Result<(Vec<String>, Vec<BenchError>), BenchError> {
     let entries = std::fs::read_dir(run_dir).map_err(|source| BenchError::RunDirUnreadable {
         run_dir: run_dir.to_path_buf(),
         source,
     })?;
 
     let mut task_ids: Vec<String> = Vec::new();
+    let mut rejected = Vec::new();
+    let mut trial_count = 0usize;
     for entry in entries {
         let entry = entry.map_err(|source| BenchError::RunDirUnreadable {
             run_dir: run_dir.to_path_buf(),
@@ -235,26 +258,29 @@ pub fn discover_tasks(run_dir: &Path) -> Result<Vec<String>, BenchError> {
             // The entry IS a trial, so its name has to serve as an addressable
             // id. Validated only after the probe, so a non-UTF-8 name that is
             // not a trial at all stays as ignorable as any other junk dir.
-            let id = trial_id(run_dir, name)?;
-            // Capped before the push, so the ceiling counts ACCEPTED trials
-            // rather than scanned entries.
-            if task_ids.len() >= MAX_TRIAL_DIRS {
+            if trial_count >= MAX_TRIAL_DIRS {
                 return Err(BenchError::TooManyTrialDirs {
                     run_dir: run_dir.to_path_buf(),
                     max: MAX_TRIAL_DIRS,
                 });
             }
-            task_ids.push(id);
+            trial_count += 1;
+            match trial_id(run_dir, name) {
+                Ok(id) => task_ids.push(id),
+                Err(error) if isolate_invalid_names => rejected.push(error),
+                Err(error) => return Err(error),
+            }
         }
     }
     task_ids.sort();
+    rejected.sort_by_key(ToString::to_string);
 
-    if task_ids.is_empty() {
+    if task_ids.is_empty() && rejected.is_empty() {
         return Err(BenchError::NoTaskTrials {
             run_dir: run_dir.to_path_buf(),
         });
     }
-    Ok(task_ids)
+    Ok((task_ids, rejected))
 }
 
 /// True only if `path` is a regular file, without following symlinks. A symlink

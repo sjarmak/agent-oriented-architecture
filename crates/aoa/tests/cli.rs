@@ -334,13 +334,12 @@ fn eval_run_excludes_a_trial_whose_scorer_errored() {
     }
 }
 
-// A trial dir whose NAME is not valid UTF-8 aborts the command instead of being
-// silently skipped. Discovery sits upstream of this command's per-trial
-// isolation, so the whole batch fails — pinned here so a future refactor cannot
-// return it to a skip. See aoa-m8rb for whether it should isolate instead.
+// A trial dir whose name is not valid UTF-8 cannot become an addressable task
+// id. Eval-run reports that trial as an error while preserving records from
+// valid siblings; pairing callers retain discover_tasks' fail-closed behavior.
 #[cfg(unix)]
 #[test]
-fn eval_run_aborts_on_a_non_utf8_trial_dir_name() {
+fn eval_run_isolates_a_non_utf8_trial_dir_name() {
     use std::os::unix::ffi::OsStringExt;
 
     let dir = TempDir::new().expect("tempdir");
@@ -371,17 +370,22 @@ fn eval_run_aborts_on_a_non_utf8_trial_dir_name() {
 
     assert!(
         !output.status.success(),
-        "a non-UTF-8 trial dir name must not be silently skipped"
+        "the rejected trial must still make the batch fail"
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid report JSON");
+    assert_eq!(parsed["record_count"], 1);
+    assert_eq!(parsed["error_count"], 1);
+    let error = parsed["errors"][0]["error"]
+        .as_str()
+        .expect("rejected trial error");
     assert!(
-        stderr.contains("not valid UTF-8"),
-        "error must name the cause: {stderr}"
+        error.contains("not valid UTF-8"),
+        "error must name the cause: {error}"
     );
-    // The offending name reaches stderr escaped, never as raw bytes.
+    // The offending name reaches JSON escaped, never as raw bytes.
     assert!(
-        !output.stderr.contains(&0xff),
-        "raw invalid byte survived into stderr: {stderr}"
+        !output.stdout.contains(&0xff),
+        "raw invalid byte survived into output"
     );
 }
 

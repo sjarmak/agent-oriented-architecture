@@ -39,7 +39,9 @@ use std::fmt::Write as _;
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use aoa_bench::{discover_tasks, leg_pass, load_task, scoring_path, transcript_path};
+use aoa_bench::{
+    discover_tasks_isolating_names, leg_pass, load_task, scoring_path, transcript_path,
+};
 use aoa_codeprobe_shim::parse_transcript_file;
 use aoa_construct::{BehavioralSignal, InsufficientDataNote};
 use aoa_gap::{compute_gap, GapOutcome, HeldOutProvenance, RunResult, TaskOutcome};
@@ -180,10 +182,16 @@ pub fn run(args: &EvalRunArgs) -> Result<i32> {
     // workspace. The mode switch is logged, never silent.
     let partition = detect_partition(args);
 
-    let task_ids = discover_tasks(&args.codeprobe_run)?;
+    let (task_ids, rejected_names) = discover_tasks_isolating_names(&args.codeprobe_run)?;
 
     let mut records = Vec::new();
-    let mut errors = Vec::new();
+    let mut errors: Vec<TaskError> = rejected_names
+        .into_iter()
+        .map(|error| TaskError {
+            task_id: "<non-UTF-8 trial name>".to_string(),
+            error: error.to_string(),
+        })
+        .collect();
     for task_id in task_ids {
         match process_task(&task_id, args, &indexed, partition.as_ref()) {
             Ok(record) => records.push(record),

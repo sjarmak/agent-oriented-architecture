@@ -39,7 +39,8 @@ mod task;
 
 pub use bridge::EditLocalityAnchors;
 pub use codeprobe_run::{
-    aggregate_provenance, discover_tasks, leg_pass, scoring_path, transcript_path, DualScoring,
+    aggregate_provenance, discover_tasks, discover_tasks_isolating_names, leg_pass, scoring_path,
+    transcript_path, DualScoring,
 };
 pub use error::BenchError;
 pub use loader::{is_task_dir, load_task};
