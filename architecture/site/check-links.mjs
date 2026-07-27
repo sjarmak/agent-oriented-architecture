@@ -30,7 +30,11 @@ function walk(dir) {
 }
 
 const files = walk(".");
-const linkRe = /\blink\s+("[^"]+"|'[^']+'|[^\s]+)/g;
+// LikeC4 link declarations begin a logical line. Anchoring here excludes both
+// `// link ...` comments and prose properties that merely contain the word.
+// Any non-external target is relative to the model file; LikeC4 does not require
+// a leading `./`, so bare paths must be checked too.
+const linkRe = /^\s*link\s+("[^"]+"|'[^']+'|[^\s]+)/gm;
 const missing = [];
 
 for (const f of files) {
@@ -39,7 +43,6 @@ for (const f of files) {
   while ((m = linkRe.exec(txt))) {
     let target = m[1].replace(/^['"]|['"]$/g, "");
     if (/^(https?:|mailto:|#)/.test(target)) continue; // external / anchor — skip
-    if (!/^\.\.?\//.test(target)) continue; // not a relative path
     target = target.split("#")[0]; // drop any anchor
     if (!existsSync(join(dirname(f), target))) missing.push(`${f} → ${target}`);
   }

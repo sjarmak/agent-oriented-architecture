@@ -56,3 +56,28 @@ test("a dead relative link exits non-zero and names the link", () => {
   assert.notEqual(res.status, 0, `expected non-zero exit: ${res.stdout}${res.stderr}`);
   assert.match(res.stdout, /gone\.rs/);
 });
+
+test("a bare relative target is checked from the model directory", () => {
+  const res = runInFixture({
+    "architecture/model.c4": "link local.md 'local source'",
+  });
+  assert.notEqual(res.status, 0, `expected non-zero exit: ${res.stdout}${res.stderr}`);
+  assert.match(res.stdout, /local\.md/);
+});
+
+test("commented links are ignored", () => {
+  const res = runInFixture({
+    "architecture/model.c4": [
+      "// link ../src/dead.rs",
+      "  // link local-dead.md",
+    ].join("\n"),
+  });
+  assert.equal(res.status, 0, `expected exit 0, got ${res.status}: ${res.stdout}${res.stderr}`);
+});
+
+test("prose containing the word link is not parsed as a declaration", () => {
+  const res = runInFixture({
+    "architecture/model.c4": "description 'follow this link to the guide'",
+  });
+  assert.equal(res.status, 0, `expected exit 0, got ${res.status}: ${res.stdout}${res.stderr}`);
+});
