@@ -29,6 +29,10 @@ fn crate_with_unused_import() -> TempDir {
     dir
 }
 
+// Keep this package name distinct from every crate in the outer workspace.
+// cargo-llvm-cov supplies a RUSTC_WRAPPER with an outer-crate allowlist; a name
+// collision would instrument this nested `cargo check` and couple the adapter
+// acceptance test to coverage-only compiler flags.
 const CARGO_TOML: &str = "[package]\nname = \"deadimport-fixture\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\n";
 
 #[test]
