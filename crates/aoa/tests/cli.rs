@@ -279,6 +279,61 @@ fn eval_run_excludes_a_trial_whose_scoring_carries_no_signal() {
     }
 }
 
+// aoa-qyo3: a numeric score is not held-out evidence when the scorer says it
+// errored. Codeprobe persists 0.0/false alongside the error for verifier
+// failures; treating those fallback values as a genuine failure silently
+// contaminates the behavioral signal.
+#[test]
+fn eval_run_excludes_a_trial_whose_scorer_errored() {
+    let dir = TempDir::new().expect("tempdir");
+    let run = dir.path().join("run");
+    let id = "native-consensus-001";
+    let trial = run.join(id);
+    std::fs::create_dir_all(&trial).expect("trial dir");
+    std::fs::copy(
+        run_dir().join(id).join("agent_output.txt"),
+        trial.join("agent_output.txt"),
+    )
+    .expect("copy transcript");
+    std::fs::write(
+        trial.join("scoring.json"),
+        br#"{
+            "score": 0.0,
+            "passed": false,
+            "error": "artifact verifier crashed",
+            "verdict": "verifier_error"
+        }"#,
+    )
+    .expect("write scoring");
+
+    let output = aoa()
+        .args(["eval", "run", "--json", "--codeprobe-run"])
+        .arg(&run)
+        .arg("--tasks")
+        .arg(tasks_dir())
+        .output()
+        .expect("run");
+
+    assert!(
+        !output.status.success(),
+        "a scorer error must fail the trial loud"
+    );
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert_eq!(parsed["record_count"], 0);
+    assert_eq!(parsed["error_count"], 1);
+    assert_eq!(
+        parsed["behavioral_signal"]["observations"], 0,
+        "fallback score 0.0 must not become held-out evidence"
+    );
+    let error = parsed["errors"][0]["error"].as_str().expect("error string");
+    for expected in ["scoring.json", "artifact verifier crashed"] {
+        assert!(
+            error.contains(expected),
+            "error must name {expected}: {error}"
+        );
+    }
+}
+
 // A trial dir whose NAME is not valid UTF-8 aborts the command instead of being
 // silently skipped. Discovery sits upstream of this command's per-trial
 // isolation, so the whole batch fails — pinned here so a future refactor cannot

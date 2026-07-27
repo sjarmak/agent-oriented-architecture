@@ -36,7 +36,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use aoa_bench::{discover_tasks, leg_pass, load_task, scoring_path, transcript_path};
@@ -79,6 +79,9 @@ struct Scoring {
     score: Option<f64>,
     /// Present for binary scorers; preferred over the score threshold.
     passed: Option<bool>,
+    /// A scorer that failed may still persist fallback `score`/`passed` values.
+    /// Those values are diagnostics, not held-out evidence.
+    error: Option<String>,
 }
 
 impl Scoring {
@@ -298,6 +301,12 @@ fn process_task(
 
     let scoring_path = scoring_path(&args.codeprobe_run, task_id);
     let scoring: Scoring = load_json_capped(&scoring_path, "scoring")?;
+    if let Some(error) = &scoring.error {
+        return Err(anyhow!(
+            "{} reports scorer error: {error}",
+            scoring_path.display()
+        ));
+    }
     // No outcome field at all means this trial measured nothing. Reporting it as
     // a held-out failure would feed a malformed trial into the run's behavioral
     // signal, so it errors out and is excluded instead (aoa-vme7).
