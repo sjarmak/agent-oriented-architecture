@@ -41,8 +41,9 @@ use aoa_recommend::RecommendationReport;
 /// mutation-surface item, so degrading would print a clean punch-list for a
 /// repo nobody managed to read.
 ///
-/// The indexer is stricter about source than the audit's own structural scan
-/// (aoa-kdqk); reconciling that belongs there, not in a per-caller policy.
+/// Unsupported contents in an individual source file (oversized or non-UTF-8)
+/// are isolated by the best-effort indexer; access failures still reach this
+/// fatal boundary.
 fn repo_audit_config(repo: &Path) -> Result<aoa_audit::AuditConfig> {
     let indexed = aoa_scip_graph::index_best_effort(repo)
         .with_context(|| format!("failed to index {}", repo.display()))?;

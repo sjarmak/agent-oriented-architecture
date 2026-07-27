@@ -3596,31 +3596,27 @@ fn report_and_recommend_agree_on_recommendations() {
     }
 }
 
-// aoa-ghwi: the third leg of the same agreement — the three commands must fail
-// the same way, not just succeed the same way. A repo the indexer cannot read is
-// fatal for all of them (the policy is argued at `pipeline::repo_audit_config`),
-// and before the seam existed `report` alone exited 0 here, printing a punch-list
-// that silently omitted every graph-derived item. Degrading in one command and
-// not the others is how aoa-d6t.35 and aoa-d6t.41 both shipped, so the guard is
-// agreement rather than any particular exit code.
+// aoa-ghwi: the third leg of the same agreement — all three commands must apply
+// the same indexing policy. A source file the heuristic scanner cannot decode
+// is isolated like an oversized generated file; valid siblings still supply
+// the graph instead of one irrelevant file aborting the repository-wide audit.
 #[test]
-fn audit_recommend_and_report_all_fail_on_an_unreadable_repo() {
+fn audit_recommend_and_report_isolate_a_non_utf8_source_file() {
     let repo = TempDir::new().expect("tempdir");
-    // Invalid UTF-8 in a `.py` file: the SCIP indexer insists on UTF-8, so this
-    // is the cheapest repo it genuinely cannot read.
     std::fs::write(
-        repo.path().join("app.py"),
+        repo.path().join("generated.py"),
         b"def f():\n    x = \"\xff\xfe\"\n",
     )
     .expect("write non-utf8 source");
+    std::fs::write(repo.path().join("app.py"), "def valid():\n    pass\n")
+        .expect("write valid source");
 
     for command in ["audit", "recommend", "report"] {
         aoa()
             .args([command, "--repo"])
             .arg(repo.path())
             .assert()
-            .failure()
-            .stderr(predicate::str::contains("failed to index"));
+            .success();
     }
 }
 

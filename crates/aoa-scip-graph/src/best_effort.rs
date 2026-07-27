@@ -32,13 +32,19 @@ pub fn index_best_effort(repo_dir: &Path) -> Result<IndexedRepo, ScipGraphError>
         let rel = file.strip_prefix(repo_dir).unwrap_or(file);
         let module = module_name(rel);
         let rel_path = rel_path_string(rel);
-        // An oversized single file is skipped, not fatal: a best-effort scan is
-        // already lossy by contract, so dropping one pathological file keeps the
-        // rest of the repo indexable while still bounding memory. A genuine read
-        // error (permissions, vanished file) still propagates.
+        // An oversized or non-UTF-8 single file is skipped, not fatal: this
+        // heuristic scanner cannot interpret either one, but dropping that file
+        // keeps valid siblings indexable. Genuine access errors (permissions,
+        // vanished files) still propagate because they may affect the whole
+        // repository rather than only unsupported source contents.
         let source = match read_capped(file, MAX_SOURCE_BYTES) {
             Ok(source) => source,
             Err(ScipGraphError::TooLarge { .. }) => continue,
+            Err(ScipGraphError::Io { source, .. })
+                if source.kind() == std::io::ErrorKind::InvalidData =>
+            {
+                continue;
+            }
             Err(other) => return Err(other),
         };
         scan_module(
@@ -311,6 +317,18 @@ mod tests {
         let src = "def f(x):\n    return f(x)\n";
         let (_nodes, edges) = scan("m", src);
         assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn non_utf8_source_is_isolated_from_valid_siblings() {
+        let repo = std::env::temp_dir().join(format!("aoa-be-non-utf8-{}", std::process::id()));
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(repo.join("bad.py"), b"def bad():\n    x = \"\xff\"\n").unwrap();
+        std::fs::write(repo.join("good.py"), "def good():\n    pass\n").unwrap();
+
+        let indexed = index_best_effort(&repo).unwrap();
+        assert_eq!(indexed.graph.nodes, vec!["good.good".to_string()]);
+        std::fs::remove_dir_all(&repo).ok();
     }
 
     #[cfg(unix)]
