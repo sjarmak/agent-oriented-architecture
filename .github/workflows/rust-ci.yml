@@ -47,6 +47,8 @@ jobs:
       - name: Install vendored ESLint (hermetic)
         run: npm ci
         working-directory: crates/aoa-migrate/assets/eslint
+      - name: Install ruff (pinned)
+        run: pipx install ruff==0.15.8
       - name: Test
         run: cargo test --workspace
   # Workspace coverage, measured and gated. Separate job so the instrumented
