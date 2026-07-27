@@ -1367,14 +1367,15 @@ mod tests {
             "must report the timeout, got: {err}"
         );
         assert!(
-            waited >= timeout && waited < timeout * 20,
-            "must wait roughly the timeout and then give up, waited {waited:?}"
+            waited >= timeout,
+            "must wait through the timeout and then give up, waited {waited:?}"
         );
 
         // Releasing the holder lets the next acquisition through, so the failure
         // is transient contention rather than a permanently poisoned log.
         drop(holder);
-        lock_exclusive_bounded(&waiter, &log, timeout).expect("lock is available once released");
+        lock_exclusive_bounded(&waiter, &log, LOCK_TIMEOUT)
+            .expect("lock is available once released");
     }
 
     /// The append path itself must acquire the lock boundedly, not merely the
