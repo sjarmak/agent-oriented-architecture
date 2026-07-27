@@ -92,6 +92,14 @@ This repo dogfoods its own runtime enforcement plane: the tracked `.claude/setti
 
 Know what you are opting into: once you accept Claude Code's one-time project-trust prompt for this repo, these hooks run automatically on every matching tool call for the rest of the session, and the command names are resolved through your PATH at execution time, so whatever binary answers to `aoa` there is what runs. The gate is also fail-open by construction: a missing or erroring `aoa` produces a non-blocking hook error rather than a blocked write, which keeps the repo usable without the toolkit but means the enforcement only binds on machines where the real binary is installed and healthy.
 
+## Pre-commit checks
+
+The tracked `.pre-commit-config.yaml` mirrors CI's Rust format and strict
+Clippy checks. Install it with `pre-commit install`; commits then run
+`cargo fmt --all -- --check` and
+`cargo clippy --workspace --all-targets -- -D warnings`. As with every local
+Git hook, `--no-verify` can bypass it; the CI job remains the backstop.
+
 ## Layout
 
 The workspace is split so each crate owns one responsibility.
