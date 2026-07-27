@@ -136,11 +136,32 @@ fn reject_symlink(node: &Path) -> Result<(), AuditError> {
 /// acquire each directory with `openat(O_NOFOLLOW | O_DIRECTORY)` and perform
 /// the mutation relative to the acquired descriptor.
 pub fn reject_symlinked_trace_dir(traces_dir: &Path) -> Result<(), AuditError> {
-    let depth = Path::new(TRACES_SUBDIR).components().count();
-    traces_dir
-        .ancestors()
-        .take(depth)
-        .try_for_each(reject_symlink)
+    let repo = traces_dir.parent().and_then(Path::parent).ok_or_else(|| {
+        AuditError::UnsafeInstallPath {
+            path: traces_dir.to_path_buf(),
+        }
+    })?;
+    reject_symlinked_path(repo, Path::new(TRACES_SUBDIR)).map(|_| ())
+}
+
+/// Join a relative path beneath `root`, rejecting illegal components and every
+/// existing symlink encountered from the root downward.
+///
+/// This is the shared check-then-act fallback for AOA write paths that cannot
+/// use descriptor-relative `openat`. A missing component is safe to create;
+/// every other metadata failure is surfaced instead of being treated as absent.
+pub fn reject_symlinked_path(root: &Path, relative: &Path) -> Result<PathBuf, AuditError> {
+    let mut resolved = root.to_path_buf();
+    for component in relative.components() {
+        let Component::Normal(part) = component else {
+            return Err(AuditError::UnsafeInstallPath {
+                path: root.join(relative),
+            });
+        };
+        resolved.push(part);
+        reject_symlink(&resolved)?;
+    }
+    Ok(resolved)
 }
 
 #[cfg(unix)]
@@ -509,6 +530,38 @@ mod tests {
             traces_dir: PathBuf::from("/repo/.aoa/traces"),
             gitignore: PathBuf::from("/repo/.aoa/.gitignore"),
         }
+    }
+
+    #[test]
+    fn shared_nofollow_walker_joins_only_relative_normal_components() {
+        let root = tempfile::tempdir().expect("create root");
+        let target = reject_symlinked_path(root.path(), Path::new("nested/file"))
+            .expect("missing normal components are safe to create");
+        assert_eq!(target, root.path().join("nested/file"));
+
+        for relative in [Path::new("../escape"), Path::new("/absolute")] {
+            assert!(matches!(
+                reject_symlinked_path(root.path(), relative),
+                Err(AuditError::UnsafeInstallPath { .. })
+            ));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shared_nofollow_walker_rejects_a_symlinked_intermediate_component() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("create root");
+        let outside = tempfile::tempdir().expect("create outside");
+        symlink(outside.path(), root.path().join("nested")).expect("plant link");
+
+        let err = reject_symlinked_path(root.path(), Path::new("nested/file"))
+            .expect_err("walker must reject the planted link");
+        assert!(matches!(
+            err,
+            AuditError::UnsafeInstallPath { path } if path == root.path().join("nested")
+        ));
     }
 
     #[test]

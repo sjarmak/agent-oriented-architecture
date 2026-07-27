@@ -15,7 +15,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -293,25 +293,11 @@ fn project_name(repo: &Path) -> Result<String> {
 /// a planted symlink (a file link, or a symlinked directory component) would
 /// otherwise let a write escape the repo. Walk every component of `rel` from
 /// the repo root down and reject the first that already exists as a symlink,
-/// mirroring the no-follow discipline in `aoa-audit`. Only plain `Normal`
-/// components are allowed, so `..`/absolute segments can never widen the path.
+/// using `aoa-audit`'s shared no-follow boundary. Only plain `Normal` components
+/// are allowed, so `..`/absolute segments can never widen the path.
 fn safe_target(repo: &Path, rel: &str) -> Result<PathBuf> {
-    let mut cur = repo.to_path_buf();
-    for component in Path::new(rel).components() {
-        match component {
-            Component::Normal(part) => cur.push(part),
-            other => bail!("unsafe template path {rel:?}: illegal component {other:?}"),
-        }
-        if let Ok(meta) = std::fs::symlink_metadata(&cur) {
-            if meta.file_type().is_symlink() {
-                bail!(
-                    "refusing to write through a symlink at {} (aoa init does not follow links)",
-                    cur.display()
-                );
-            }
-        }
-    }
-    Ok(cur)
+    aoa_audit::reject_symlinked_path(repo, Path::new(rel))
+        .with_context(|| format!("unsafe template path {rel:?}"))
 }
 
 /// No-follow existence check: reports `true` for a real file/dir AND for a

@@ -39,8 +39,8 @@ pub enum AuditError {
     /// name is joined onto, which `create_dir_all` and `fs::write` would
     /// otherwise follow straight out of the repo.
     #[error(
-        "refusing to install or write through a symlink at {path} \
-         (aoa observe does not follow links)"
+        "refusing to install or write through an unsafe path at {path} \
+         (AOA does not follow symlinks or accept non-relative components)"
     )]
     UnsafeInstallPath { path: PathBuf },
 

@@ -24,7 +24,9 @@ mod tier;
 
 pub use audit::{audit, AuditConfig};
 pub use error::AuditError;
-pub use observe::{observe, reject_symlinked_trace_dir, write_trace, ObserveOutcome};
+pub use observe::{
+    observe, reject_symlinked_path, reject_symlinked_trace_dir, write_trace, ObserveOutcome,
+};
 pub use punch::{rank, FindingKind, MeasuredCost, PunchItem};
 pub use report::{exit_code, AuditReport};
 pub use structure::{
