@@ -2215,6 +2215,43 @@ fn enforce_check_fails_closed_when_the_span_log_is_unusable() {
         .stderr(predicate::str::contains("blocked"));
 }
 
+#[test]
+fn enforce_writer_repairs_and_reports_an_unterminated_tail() {
+    let repo = TempDir::new().unwrap();
+    let log = live_log_path(repo.path());
+    std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+    std::fs::write(
+        &log,
+        concat!(
+            r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#,
+            "\n",
+            r#"{"type":"write.attempt""#
+        ),
+    )
+    .unwrap();
+
+    aoa_stdin()
+        .args(["enforce", "record"])
+        .write_stdin(hook_payload(
+            "Bash",
+            Some("cargo test --workspace"),
+            repo.path(),
+        ))
+        .assert()
+        .success()
+        .stderr(
+            predicate::str::contains("repaired").and(predicate::str::contains("unterminated tail")),
+        );
+
+    let spans: Vec<Value> = live_log(repo.path())
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("every retained line is valid JSON"))
+        .collect();
+    assert_eq!(spans.len(), 2);
+    assert_eq!(spans[0]["seq"], 0);
+    assert_eq!(spans[1]["seq"], 1);
+}
+
 /// A FIFO at the log path is the one squatter that does not simply error: `open`
 /// blocks on it until a counterpart appears, so without an explicit file-type
 /// check the hook hangs rather than failing, never reaches the fail-closed

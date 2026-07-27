@@ -161,23 +161,35 @@ struct HookEvent {
 /// session-wide stop is recoverable by a human where a silently disabled gate is
 /// not.
 pub fn run(args: &EnforceArgs) -> Result<i32> {
-    let outcome = read_event().and_then(|event| match args.command {
-        EnforceCommand::Record => run_record(&event),
-        EnforceCommand::Check => run_check(&event),
-        EnforceCommand::Commit => run_outcome(&event, SpanType::WriteCommitted),
-        EnforceCommand::Fail => run_outcome(&event, SpanType::WriteFailed),
-        EnforceCommand::Deny => run_outcome(&event, SpanType::WriteDenied),
-    });
+    run_with_failure_posture(args.command, || {
+        read_event().and_then(|event| match args.command {
+            EnforceCommand::Record => run_record(&event),
+            EnforceCommand::Check => run_check(&event),
+            EnforceCommand::Commit => run_outcome(&event, SpanType::WriteCommitted),
+            EnforceCommand::Fail => run_outcome(&event, SpanType::WriteFailed),
+            EnforceCommand::Deny => run_outcome(&event, SpanType::WriteDenied),
+        })
+    })
+}
 
-    match outcome {
-        Err(err) if denies_on_failure(args.command) => {
+fn run_with_failure_posture(
+    command: EnforceCommand,
+    operation: impl FnOnce() -> Result<i32>,
+) -> Result<i32> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation)) {
+        Ok(Err(err)) if denies_on_failure(command) => {
             // The tool name lives in the payload, which may be the thing that
             // failed to parse, so the message names the gate rather than the
             // call it is denying.
             eprintln!("aoa: blocked — the write gate could not evaluate this call: {err:#}");
             Ok(BLOCK_EXIT_CODE)
         }
-        outcome => outcome,
+        Ok(outcome) => outcome,
+        Err(_) if denies_on_failure(command) => {
+            eprintln!("aoa: blocked — the write gate panicked while evaluating this call");
+            Ok(BLOCK_EXIT_CODE)
+        }
+        Err(payload) => std::panic::resume_unwind(payload),
     }
 }
 
@@ -595,6 +607,12 @@ fn append_span_within(
     // misplace the append below.
     let mut file = open_log(log, LogAccess::AppendCreate)?;
     lock_exclusive_bounded(&file, log, lock_timeout)?;
+    if let Some(discarded) = repair_torn_tail(&mut file, log)? {
+        eprintln!(
+            "aoa: repaired {} by discarding its {discarded}-byte unterminated tail",
+            log.display()
+        );
+    }
 
     let end = file
         .metadata()
@@ -630,6 +648,38 @@ fn append_span_within(
         return Err(anyhow!(err)).with_context(|| format!("failed to append to {}", log.display()));
     }
     Ok(())
+}
+
+/// Remove an unterminated final fragment while holding the writer's exclusive
+/// lock. A complete log is untouched; a file containing only a fragment is
+/// reset to empty. The backward scan has no corpus-sized allocation and runs
+/// only on the exceptional recovery path.
+fn repair_torn_tail(file: &mut File, log: &Path) -> Result<Option<u64>> {
+    let len = file
+        .metadata()
+        .with_context(|| format!("failed to stat {}", log.display()))?
+        .len();
+    if len == 0 || read_at(file, log, len - 1, 1)? == b"\n" {
+        return Ok(None);
+    }
+
+    let mut end = len;
+    loop {
+        let start = end.saturating_sub(SEQ_TAIL_WINDOW);
+        let buf = read_at(file, log, start, end - start)?;
+        if let Some(index) = buf.iter().rposition(|byte| *byte == b'\n') {
+            let retained = start + index as u64 + 1;
+            file.set_len(retained)
+                .with_context(|| format!("failed to repair torn tail in {}", log.display()))?;
+            return Ok(Some(len - retained));
+        }
+        if start == 0 {
+            file.set_len(0)
+                .with_context(|| format!("failed to repair torn tail in {}", log.display()))?;
+            return Ok(Some(len));
+        }
+        end = start;
+    }
 }
 
 /// The sequence number the next span should carry: one past the log's last.
@@ -1754,24 +1804,54 @@ mod tests {
         assert_eq!(last_seq(&log), 4);
     }
 
-    /// A log with no final newline is a torn write, and appending onto it would
-    /// glue the new span's JSON onto the partial line — one permanently corrupt
-    /// line that fails at corpus ingest, on an append-only file. Refuse instead.
+    /// A killed writer can leave a partial final line after a committed prefix.
+    /// The next writer owns the exclusive lock needed to repair that tail:
+    /// truncate to the last newline, then continue sequence numbering from the
+    /// final complete span.
     #[test]
-    fn append_refuses_a_log_whose_final_line_is_torn() {
+    fn append_repairs_a_log_whose_final_line_is_torn() {
         let dir = tempfile::tempdir().unwrap();
-        let torn = format!("{}{{\"type\":\"test.run\"", span_line(0));
+        let committed = span_line(0);
+        let torn = format!("{committed}{{\"type\":\"test.run\"");
         let log = seed_log(&dir, &torn);
 
-        let err = append_span(&log, SpanType::TestRun, Map::new()).unwrap_err();
+        append_span(&log, SpanType::TestRun, Map::new()).unwrap();
+        let repaired = std::fs::read_to_string(&log).unwrap();
+        assert!(repaired.starts_with(&committed));
+        assert!(!repaired.contains(r#"{"type":"test.run"{"#));
+        assert_eq!(last_seq(&log), 1);
+    }
+
+    #[test]
+    fn append_repairs_a_fragment_with_no_committed_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = seed_log(&dir, r#"{"type":"test.run""#);
+
+        append_span(&log, SpanType::TestRun, Map::new()).unwrap();
+        let spans = read_spans(&log).unwrap();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].seq, 0);
+    }
+
+    #[test]
+    fn check_posture_converts_a_panic_to_the_block_exit_code() {
+        let code = run_with_failure_posture(EnforceCommand::Check, || {
+            panic!("intentional write-gate panic")
+        })
+        .unwrap();
+        assert_eq!(code, BLOCK_EXIT_CODE);
+    }
+
+    #[test]
+    fn non_gating_posture_does_not_swallow_a_panic() {
+        let panic = std::panic::catch_unwind(|| {
+            let _ = run_with_failure_posture(EnforceCommand::Record, || {
+                panic!("intentional recorder panic")
+            });
+        });
         assert!(
-            err.to_string().contains("no trailing newline"),
-            "must name the torn write, got: {err}"
-        );
-        assert_eq!(
-            std::fs::read_to_string(&log).unwrap(),
-            torn,
-            "refusing must leave the log byte-identical, never a partial append"
+            panic.is_err(),
+            "non-gating hooks must retain normal panic behavior"
         );
     }
 }
