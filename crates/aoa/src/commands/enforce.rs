@@ -971,6 +971,11 @@ pub(crate) fn merge_enforce_hooks(mut settings: Value) -> Result<Value> {
     };
 
     let matcher = mutation_tool_matcher();
+    // Deliberately portable, team-shared commands: an absolute installer path
+    // would break on every other checkout. The accepted trust boundary is PATH
+    // on the host that executes committed project hooks; README's Runtime hooks
+    // section discloses that requirement to operators. Keep the spelling here,
+    // in the generator, so repositories cannot make the decision independently.
     add_hook(hooks, "PostToolUse", "Bash", "aoa enforce record")?;
     add_hook(hooks, "PreToolUse", &matcher, "aoa enforce check")?;
     // One hook per write outcome, each with its own command string. The distinct

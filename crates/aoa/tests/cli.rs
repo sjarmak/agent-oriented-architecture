@@ -960,7 +960,19 @@ fn audit_fail_on_tier1_exits_zero_without_tier1_gap() {
     // pre-commit plane is missing; --fail-on tier1 must then exit 0.
     let repo = TempDir::new().expect("tempdir");
     std::fs::create_dir_all(repo.path().join(".claude")).unwrap();
-    std::fs::write(repo.path().join(".claude/settings.json"), "{}").unwrap();
+    std::fs::write(
+        repo.path().join(".claude/settings.json"),
+        r#"{"hooks":{
+            "PostToolUse":[{"hooks":[
+                {"command":"aoa enforce record"},
+                {"command":"aoa enforce commit"}
+            ]}],
+            "PreToolUse":[{"hooks":[{"command":"aoa enforce check"}]}],
+            "PostToolUseFailure":[{"hooks":[{"command":"aoa enforce fail"}]}],
+            "PermissionDenied":[{"hooks":[{"command":"aoa enforce deny"}]}]
+        }}"#,
+    )
+    .unwrap();
     std::fs::create_dir_all(repo.path().join(".github/workflows")).unwrap();
 
     aoa()
@@ -968,6 +980,23 @@ fn audit_fail_on_tier1_exits_zero_without_tier1_gap() {
         .arg(repo.path())
         .assert()
         .success();
+}
+
+#[test]
+fn audit_fail_on_tier1_rejects_a_gutted_runtime_hook_file() {
+    let repo = TempDir::new().expect("tempdir");
+    std::fs::create_dir_all(repo.path().join(".claude")).unwrap();
+    std::fs::write(repo.path().join(".claude/settings.json"), "{}").unwrap();
+    std::fs::create_dir_all(repo.path().join(".github/workflows")).unwrap();
+
+    aoa()
+        .args(["audit", "--fail-on", "tier1", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "missing enforcement plane: runtime hook",
+        ));
 }
 
 #[test]
