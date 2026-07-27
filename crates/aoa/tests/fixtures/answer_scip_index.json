@@ -20,5 +20,7 @@
       ]
     }
   ],
-  "writable": ["pkg/app#app().", "pkg/core#core().", "pkg/util#util()."]
+  "aoa": {
+    "writable": ["pkg/app#app().", "pkg/core#core().", "pkg/util#util()."]
+  }
 }

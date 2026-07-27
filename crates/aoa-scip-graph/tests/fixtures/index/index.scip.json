@@ -29,7 +29,9 @@
       ]
     }
   ],
-  "writable": ["pkg.auth.login", "pkg.auth.logout"],
-  "gold": ["pkg.tokens.issue_token"],
-  "invariants": ["pkg.tokens.issue_token"]
+  "aoa": {
+    "writable": ["pkg.auth.login", "pkg.auth.logout"],
+    "gold": ["pkg.tokens.issue_token"],
+    "invariants": ["pkg.tokens.issue_token"]
+  }
 }

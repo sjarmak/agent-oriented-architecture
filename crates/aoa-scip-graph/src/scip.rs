@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer};
 
 use aoa_trace::{IndexQuality, SymbolGraph};
 
@@ -14,17 +15,36 @@ use crate::index::IndexedRepo;
 /// and occurrences with semantic roles — without the full protobuf surface, so
 /// tests run fully offline against committed data.
 ///
-/// A hybrid boundary, hence no `deny_unknown_fields`: the document shape is a
-/// declared subset of a tool export, so strictness would reject real indexes
-/// over the top-level keys this type ignores. But `writable`/`gold`/`invariants`
-/// are AOA extensions no SCIP tool emits — only a human writes them — and each
-/// defaults to empty, so a misspelled `gold` silently yields an empty gold set
-/// feeding `AuditConfig::gold_set`, i.e. verification reachability measured
-/// against nothing. Splitting the operator-authored keys onto their own strict
-/// struct is aoa-t49j.
+/// This top-level shape deliberately tolerates fields from real SCIP exports.
+/// AOA-only annotations live under the strict `aoa` namespace so operator
+/// mistakes cannot be confused with future tool-emitted fields.
 #[derive(Debug, Deserialize)]
 struct ScipIndex {
     documents: Vec<ScipDocument>,
+    #[serde(default)]
+    aoa: AoaExtensions,
+    #[serde(rename = "writable")]
+    _legacy_writable: Option<RejectLegacyExtension>,
+    #[serde(rename = "gold")]
+    _legacy_gold: Option<RejectLegacyExtension>,
+    #[serde(rename = "invariants")]
+    _legacy_invariants: Option<RejectLegacyExtension>,
+}
+
+#[derive(Debug)]
+struct RejectLegacyExtension;
+
+impl<'de> Deserialize<'de> for RejectLegacyExtension {
+    fn deserialize<D: Deserializer<'de>>(_deserializer: D) -> Result<Self, D::Error> {
+        Err(D::Error::custom(
+            "AOA extension fields must be nested under the `aoa` key",
+        ))
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AoaExtensions {
     #[serde(default)]
     writable: Vec<String>,
     #[serde(default)]
@@ -105,15 +125,15 @@ pub fn index_with_scip(index_path: &Path) -> Result<IndexedRepo, ScipGraphError>
     let graph = SymbolGraph {
         nodes: nodes.into_iter().collect(),
         edges: edges.into_iter().collect(),
-        writable: index.writable.into_iter().collect(),
+        writable: index.aoa.writable.into_iter().collect(),
         node_paths,
         quality: IndexQuality::Scip,
     };
 
     Ok(IndexedRepo {
         graph,
-        gold_set: index.gold.into_iter().collect(),
-        invariant_set: index.invariants.into_iter().collect(),
+        gold_set: index.aoa.gold.into_iter().collect(),
+        invariant_set: index.aoa.invariants.into_iter().collect(),
         degrade_reason: None,
     })
 }
@@ -161,6 +181,42 @@ mod tests {
         .unwrap();
         let repo = index_with_scip(&path).unwrap();
         assert_eq!(repo.graph.nodes, vec!["f".to_string()]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn scip_index_rejects_unknown_aoa_extension_fields() {
+        let dir = std::env::temp_dir().join(format!("aoa-scip-strict-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("idx.json");
+        std::fs::write(
+            &path,
+            r#"{ "documents": [], "aoa": { "writable": [], "goold": ["target"] } }"#,
+        )
+        .unwrap();
+
+        let error = index_with_scip(&path).unwrap_err();
+        assert!(
+            error.to_string().contains("unknown field `goold`"),
+            "{error}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn scip_index_rejects_legacy_flat_aoa_extension_fields() {
+        let dir = std::env::temp_dir().join(format!("aoa-scip-legacy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("idx.json");
+        std::fs::write(&path, r#"{ "documents": [], "gold": ["target"] }"#).unwrap();
+
+        let error = index_with_scip(&path).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("AOA extension fields must be nested under the `aoa` key"),
+            "{error}"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

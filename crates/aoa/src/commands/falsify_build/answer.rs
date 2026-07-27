@@ -166,7 +166,7 @@ mod tests {
             &index,
             r#"{"documents": [{"relative_path": "src/pkg/app.py",
                 "occurrences": [{"symbol": "pkg/app#app().", "roles": ["definition"]}]}],
-                "writable": []}"#,
+                "aoa": {"writable": []}}"#,
         )
         .unwrap();
         std::fs::write(

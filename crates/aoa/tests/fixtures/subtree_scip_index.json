@@ -14,7 +14,9 @@
       ]
     }
   ],
-  "writable": ["core.lib.entry", "legacy.old.helper"],
-  "gold": ["legacy.old.helper"],
-  "invariants": ["legacy.old.helper"]
+  "aoa": {
+    "writable": ["core.lib.entry", "legacy.old.helper"],
+    "gold": ["legacy.old.helper"],
+    "invariants": ["legacy.old.helper"]
+  }
 }
