@@ -153,6 +153,12 @@ fn structure_measure_spec_is_documented() {
             !definition.trim().is_empty(),
             "spec metric {metric} has no pre-registered definition"
         );
+        assert!(
+            !definition.contains("aoa-audit")
+                && !definition.contains("_item")
+                && !definition.contains("_sites"),
+            "spec metric {metric} leaks a provider implementation detail: {definition}"
+        );
     }
 }
 

@@ -312,9 +312,11 @@ pub const GATING_CANDIDATES: [(MetricName, MetricOrientation); MetricName::ALL.l
 };
 
 /// The pre-registered spec for the code-structure measures: each metric paired
-/// with the mechanical fact `aoa-audit` measures for it. This is the spec AOA
-/// *verifies* — "better-organized / migrated" is fixed by these definitions,
-/// never by AOA's own pass-state (anti-Goodhart; runbook guardrail 3). Keyed on
+/// with the public mechanical fact a measurement provider must report. The
+/// definitions belong here with the hypotheses they constrain; `aoa-audit` is
+/// one provider of those facts, not their owner. This is the spec AOA *verifies*
+/// — "better-organized / migrated" is fixed by these definitions, never by
+/// AOA's own pass-state (anti-Goodhart; runbook guardrail 3). Keyed on
 /// [`MetricName`], so each spec names a registered [`GATING_CANDIDATES`] entry
 /// by type, and the orientation lives on [`MetricName::orientation`] alone —
 /// this table adds only the definition, so the two cannot drift on direction.
@@ -345,24 +347,24 @@ pub const STRUCTURE_MEASURE_SPECS: &[(MetricName, &str)] = &[
     (
         MetricName::NavigabilityAnchorAbsence,
         "count of package roots (repo root + workspace member crates) lacking a \
-README navigability anchor, per aoa-audit navigability_sites",
+README navigability anchor",
     ),
     (
         MetricName::ModuleSizeOutliers,
         "count of source files exceeding size_outlier_k × the repo's own median \
-source-file line count (self-calibrating), per aoa-audit module_size_outlier_item; \
+source-file line count (self-calibrating); \
 the LowerIsBetter orientation is a registered falsifiable hypothesis (no backing \
 migration), promotable only by external-outcome correlation",
     ),
     (
         MetricName::UnusedImportProxy,
         "count of likely-unused imports by a syntactic proxy (a use-bound name \
-absent from the file body), per aoa-audit unused_import_proxy_item",
+absent from the file body)",
     ),
     (
         MetricName::BuildDeterminismAbsence,
         "1 when no well-known dependency-pinning lockfile exists at the repo root \
-(0 otherwise), per aoa-audit build_determinism_item; a pure fixed-path existence \
+(0 otherwise); a pure fixed-path existence \
 fact (Factory build-system pillar); the LowerIsBetter orientation is a registered \
 falsifiable hypothesis (no backing migration), promotable only by external-outcome \
 correlation",
@@ -371,7 +373,7 @@ correlation",
         MetricName::DevEnvironmentDeclarationAbsence,
         "1 when no reproducible dev-environment declaration (devcontainer / nix \
 flake / toolchain or runtime version pin) exists at its well-known path (0 \
-otherwise), per aoa-audit dev_environment_item; a pure fixed-path existence fact \
+otherwise); a pure fixed-path existence fact \
 (Factory dev-environment pillar); the LowerIsBetter orientation is a registered \
 falsifiable hypothesis (no backing migration), promotable only by external-outcome \
 correlation",
@@ -379,16 +381,16 @@ correlation",
     (
         MetricName::TaskDiscoverySurfaceAbsence,
         "1 when no task-discovery surface (issue-template path or in-repo issue \
-tracker) exists at its well-known location (0 otherwise), per aoa-audit \
-task_discovery_item; a pure fixed-path existence fact (Factory task-discovery \
+tracker) exists at its well-known location (0 otherwise); a pure fixed-path \
+existence fact (Factory task-discovery \
 pillar); the LowerIsBetter orientation is a registered falsifiable hypothesis (no \
 backing migration), promotable only by external-outcome correlation",
     ),
     (
         MetricName::GeneratedArtifactProtectionAbsence,
         "count (0 or 1) of the well-known generated-artifact-protection marker \
-(a root .gitattributes declaring linguist-generated) that is absent, per aoa-audit \
-generated_artifact_protection_item; a pure convention-existence fact (R6 'mark \
+(a root .gitattributes declaring linguist-generated) that is absent; \
+this is a pure convention-existence fact (R6 'mark \
 generated files off-limits'), never a classification of which files are generated; \
 the LowerIsBetter orientation is a registered falsifiable hypothesis (no backing \
 migration), promotable only by external-outcome correlation",
@@ -396,8 +398,8 @@ migration), promotable only by external-outcome correlation",
     (
         MetricName::WriteSafetyZoneAbsence,
         "count of well-known write-boundary declaration surfaces (CODEOWNERS \
-ownership map; .aoa safe-write-zone policy) absent from the repo, per aoa-audit \
-write_safety_zone_item; a pure file-existence fact (R5 'narrow mutation gateway / \
+ownership map; .aoa safe-write-zone policy) absent from the repo; a pure \
+file-existence fact (R5 'narrow mutation gateway / \
 ownership metadata'); the LowerIsBetter orientation is a registered falsifiable \
 hypothesis (no backing migration), promotable only by external-outcome correlation",
     ),
