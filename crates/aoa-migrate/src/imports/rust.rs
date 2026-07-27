@@ -78,19 +78,11 @@ impl ImportAdapter for RustImportAdapter {
 /// ([`ToolchainUnavailable`](MigrateError::ToolchainUnavailable)) from a successful
 /// invocation (whose diagnostics are classified and returned).
 fn run_cargo_check(workdir: &Path) -> Result<Vec<Value>, MigrateError> {
-    let output = Command::new("cargo")
-        .current_dir(workdir)
-        .args([
-            "check",
-            "--all-features",
-            "--all-targets",
-            "--offline",
-            "--message-format=json",
-        ])
-        .output()
-        .map_err(|source| MigrateError::ToolchainUnavailable {
+    let output = cargo_check_command(workdir).output().map_err(|source| {
+        MigrateError::ToolchainUnavailable {
             detail: format!("could not run `cargo`: {source}"),
-        })?;
+        }
+    })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -104,6 +96,24 @@ fn run_cargo_check(workdir: &Path) -> Result<Vec<Value>, MigrateError> {
     let diagnostics = compiler_messages(&stdout);
     classify_build(&diagnostics, &stderr, output.status.success())?;
     Ok(diagnostics)
+}
+
+fn cargo_check_command(workdir: &Path) -> Command {
+    let mut command = Command::new("cargo");
+    command
+        .current_dir(workdir)
+        // Each copied fixture is an independent crate. Sharing the caller's
+        // target directory lets Cargo reuse another fixture's "fresh" result
+        // and omit the diagnostics this adapter is measuring.
+        .env_remove("CARGO_TARGET_DIR")
+        .args([
+            "check",
+            "--all-features",
+            "--all-targets",
+            "--offline",
+            "--message-format=json",
+        ]);
+    command
 }
 
 /// Decide whether the build is usable, inspecting the parsed diagnostics — never
@@ -294,6 +304,19 @@ mod tests {
     use crate::fix::{ChangeAction, CodeFix};
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn cargo_check_does_not_inherit_the_callers_target_directory() {
+        let command = cargo_check_command(Path::new("/isolated-copy"));
+        let target_dir = command
+            .get_envs()
+            .find(|(key, _)| *key == "CARGO_TARGET_DIR")
+            .expect("the command must explicitly scrub CARGO_TARGET_DIR");
+        assert!(
+            target_dir.1.is_none(),
+            "the isolated fixture must not share the caller's cargo cache"
+        );
+    }
 
     /// A cargo `compiler-message` line wrapping an `unused_imports` diagnostic
     /// with a `MachineApplicable` deletion of `use std::collections::HashMap;`.
