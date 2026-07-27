@@ -154,7 +154,7 @@ impl Corpus {
 /// [`CorrelationError::NonFiniteObservation`]. The "not computable on this
 /// corpus" outcomes ([`CorrelationError::TooFewObservations`],
 /// [`CorrelationError::ZeroVariance`]) are absorbed upstream in
-/// [`revert_correlations`] and never surface as this error.
+/// `revert_correlations` and never surface as this error.
 #[derive(Debug, Clone, PartialEq, Error)]
 #[error("metric {metric}: {source}")]
 pub struct CorpusMetricError {
@@ -392,7 +392,7 @@ pub fn parse_reverted_shas(git_log: &str) -> Vec<String> {
 /// anywhere in the ref graph is seen. The cost of the broader scope (a revert on
 /// an abandoned topic branch counts) is the correct direction: a revert anywhere
 /// is evidence the change was backed out, and the alternative is a silent, non-
-/// obvious undercount. Enforced by [`tests::revert_log_command_shape_is_stable`].
+/// obvious undercount. Enforced by `tests::revert_log_command_shape_is_stable`.
 ///
 /// Errs with [`RevertMinerError`] when `dir` is not valid UTF-8: git's `-C`
 /// argument is a string, and silently lossy-converting the path would point the
