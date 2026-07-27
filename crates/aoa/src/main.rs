@@ -30,7 +30,7 @@ fn main() -> ExitCode {
     match result {
         Ok(code) => ExitCode::from(code as u8),
         Err(err) => {
-            eprintln!("error: {err:#}");
+            output::eprint_error(&err);
             ExitCode::FAILURE
         }
     }

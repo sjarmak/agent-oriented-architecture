@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use crate::cli::RecommendArgs;
 use crate::commands::pipeline::{self, Readiness};
-use crate::output::{print_human, print_json};
+use crate::output::{eprint_human, print_human, print_json};
 
 /// Join the audit punch-list, the R9c construct-validity determination, and the
 /// migration registry into per-finding recommendations, rendered in the requested
@@ -30,7 +30,7 @@ pub fn run(args: &RecommendArgs) -> Result<i32> {
     // on the wire, so warning from `readiness` would give `aoa report` a stderr
     // line it has never printed.
     if let Some(warning) = &audit.subtree_discovery_warning {
-        eprintln!("warning: {warning}");
+        eprint_human(&format!("warning: {warning}"));
     }
     if args.json {
         print_json(&report)?;

@@ -457,38 +457,31 @@ mod tests {
     }
 
     #[test]
-    fn untrusted_text_cannot_inject_terminal_escapes() {
-        // Both the task id (a directory name) and the leg error text come from
-        // outside; neither may reach stderr as a live control sequence.
+    fn external_error_text_stays_raw_for_persisted_evidence() {
+        // Both fields can enter a persisted exclusion reason. The library keeps
+        // them faithful; a CLI terminal boundary, not the evidence value,
+        // neutralises controls when a human register is printed.
         let mut errored = dual(Some("dual_composite"));
         errored.task_id = "task\u{1b}[2J".to_string();
         errored.error_direct = Some("boom\u{1b}[31mRED".to_string());
 
         let rendered = errored.ensure_dual().unwrap_err().to_string();
         assert!(
-            !rendered.contains('\u{1b}'),
-            "raw ESC survived into the error message: {rendered:?}"
+            rendered.contains("task\u{1b}[2J") && rendered.contains("boom\u{1b}[31mRED"),
+            "evidence text was transformed early: {rendered:?}"
         );
-        assert!(rendered.contains("\\u{1b}"));
 
-        // The non-dual path renders `scorer_family` from the same untrusted file.
+        // Debug-rendered optional values remain unambiguous by construction.
         let rendered = dual(Some("evil\u{1b}[2J"))
             .ensure_dual()
             .unwrap_err()
             .to_string();
-        assert!(
-            !rendered.contains('\u{1b}'),
-            "raw ESC survived via scorer_family: {rendered:?}"
-        );
+        assert!(rendered.contains("\\u{1b}"));
     }
 
     #[cfg(unix)]
     #[test]
-    fn a_hostile_trial_dir_name_cannot_inject_escapes_via_the_path() {
-        // The escaping above covers free-text fields. A trial DIRECTORY name is
-        // also untrusted and reaches errors as part of a joined path — and
-        // `Path::display()` does not escape control characters, so the
-        // path-carrying variants need their own guard.
+    fn trial_path_stays_raw_until_the_output_boundary() {
         let base = std::env::temp_dir().join(format!("aoa-hostile-name-{}", std::process::id()));
         let trial = base.join("task\u{1b}[2Jevil");
         std::fs::create_dir_all(&trial).unwrap();
@@ -501,8 +494,8 @@ mod tests {
 
         let rendered = DualScoring::load(&base, &ids[0]).unwrap_err().to_string();
         assert!(
-            !rendered.contains('\u{1b}'),
-            "raw ESC survived via the path: {rendered:?}"
+            rendered.contains('\u{1b}'),
+            "persistable path was transformed early: {rendered:?}"
         );
 
         std::fs::remove_dir_all(&base).ok();

@@ -14,7 +14,7 @@ use crate::commands::enforce::install_enforce_hooks;
 use crate::commands::generated::write_gitattributes_plane;
 use crate::commands::git;
 use crate::forge::compile_enforcement;
-use crate::output::{print_human, print_json};
+use crate::output::{eprint_human, print_human, print_json};
 
 /// The repo-relative CODEOWNERS location both `compile` and `infer-owners`
 /// target.
@@ -122,7 +122,7 @@ fn guard_staged(repo: &Path, files: &[PathBuf], json: bool) -> Result<i32> {
         print_json(&view)?;
     } else {
         for f in &view.blocked {
-            eprintln!("aoa: protected path may not be committed: {f}");
+            eprint_human(&format!("aoa: protected path may not be committed: {f}"));
         }
     }
     Ok(i32::from(!view.blocked.is_empty()))

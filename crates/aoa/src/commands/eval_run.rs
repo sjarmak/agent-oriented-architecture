@@ -57,7 +57,7 @@ use aoa_trace::Trace;
 
 use crate::cli::EvalRunArgs;
 use crate::commands::fsutil::load_json_capped;
-use crate::output::{escape_terminal, print_human, print_json};
+use crate::output::{eprint_human, escape_terminal, print_human, print_json};
 
 /// Mutation-surface reachability depth and retrieval cutoff. Fixed to the value
 /// the metric crate's own integration tests exercise; not yet a CLI knob (YAGNI).
@@ -174,7 +174,9 @@ pub fn run(args: &EvalRunArgs) -> Result<i32> {
     // graph degrades — loudly, via `degrade_reason`, not silently.
     let indexed = build_graph(args);
     if let Some(reason) = &indexed.degrade_reason {
-        eprintln!("warning: {reason}; all records will score weight=0.0 (R0-ineligible)");
+        eprint_human(&format!(
+            "warning: {reason}; all records will score weight=0.0 (R0-ineligible)"
+        ));
     }
 
     // Per-subtree scoping (aoa-d6t.26): automatic when the partition root
@@ -263,12 +265,12 @@ fn detect_partition(args: &EvalRunArgs) -> Option<SubtreePartition> {
     let root = explicit.or(args.repo.as_deref())?;
     match discover_partition(root) {
         Ok(partition) if partition.is_partitioned() => {
-            eprintln!(
+            eprint_human(&format!(
                 "per-subtree metrics enabled: {} workspace members detected via {} in {}",
                 partition.members().len(),
                 partition.source().label(),
                 root.display()
-            );
+            ));
             Some(partition)
         }
         Ok(_) => {
@@ -278,15 +280,17 @@ fn detect_partition(args: &EvalRunArgs) -> Option<SubtreePartition> {
                 } else {
                     "not a directory"
                 };
-                eprintln!(
+                eprint_human(&format!(
                     "warning: --subtree-root {}: {reason}; reporting repo-wide metrics only",
                     root.display()
-                );
+                ));
             }
             None
         }
         Err(e) => {
-            eprintln!("warning: subtree discovery failed ({e}); reporting repo-wide metrics only");
+            eprint_human(&format!(
+                "warning: subtree discovery failed ({e}); reporting repo-wide metrics only"
+            ));
             None
         }
     }

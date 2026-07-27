@@ -40,6 +40,26 @@ fn validate_trace_invalid_exits_non_zero() {
         .failure();
 }
 
+#[cfg(unix)]
+#[test]
+fn cli_error_boundary_neutralises_terminal_controls_from_paths() {
+    let dir = TempDir::new().expect("tempdir");
+    let hostile = dir.path().join("repo\u{1b}[2Jname");
+    let output = aoa()
+        .args(["audit", "--repo"])
+        .arg(&hostile)
+        .output()
+        .expect("run");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr is UTF-8");
+    assert!(!stderr.contains('\u{1b}'), "raw ESC leaked: {stderr:?}");
+    assert!(
+        stderr.contains("\\u{1b}[2J"),
+        "escaped path remains diagnosable: {stderr:?}"
+    );
+}
+
 /// Both post-parse failures used to reach the CLI path-free and were named only
 /// by an anyhow context here. Now `aoa-trace` names the file at its own boundary,
 /// so assert the rendered diagnostic identifies the offending file and that

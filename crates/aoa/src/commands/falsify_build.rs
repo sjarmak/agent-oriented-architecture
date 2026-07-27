@@ -732,6 +732,33 @@ mod tests {
     }
 
     #[test]
+    fn exclusion_evidence_preserves_raw_external_error_text() {
+        let dir = std::env::temp_dir().join(format!(
+            "aoa-experiment-raw-evidence-{}",
+            std::process::id()
+        ));
+        let trial = dir.join("task-1");
+        std::fs::create_dir_all(&trial).unwrap();
+        std::fs::write(
+            trial.join("scoring.json"),
+            r#"{"scorer_family":"dual_composite","error_direct":"boom\u001b[31mRED"}"#,
+        )
+        .unwrap();
+
+        let outcomes = read_arm(&dir).unwrap();
+        let reason = outcomes.excluded.get("task-1").unwrap().clone();
+        assert!(reason.contains("boom\u{1b}[31mRED"));
+
+        let json = serde_json::to_value(ExcludedTask {
+            task_id: "task-1".to_string(),
+            reason,
+        })
+        .unwrap();
+        assert!(json["reason"].as_str().unwrap().contains('\u{1b}'));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn run_rejects_oversized_manifest() {
         let dir = std::env::temp_dir().join(format!("aoa-experiment-cap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

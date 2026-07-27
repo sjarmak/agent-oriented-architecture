@@ -71,6 +71,7 @@ use aoa_trace::{Span, SpanSource, SpanType};
 
 use crate::cli::{EnforceArgs, EnforceCommand};
 use crate::commands::generated::generated_rules;
+use crate::output::eprint_human;
 
 /// The tools whose writes the gate guards. A pending call to any of these is a
 /// mutation and must be preceded by a reproduction (`test.run`) span.
@@ -181,12 +182,14 @@ fn run_with_failure_posture(
             // The tool name lives in the payload, which may be the thing that
             // failed to parse, so the message names the gate rather than the
             // call it is denying.
-            eprintln!("aoa: blocked — the write gate could not evaluate this call: {err:#}");
+            eprint_human(&format!(
+                "aoa: blocked — the write gate could not evaluate this call: {err:#}"
+            ));
             Ok(BLOCK_EXIT_CODE)
         }
         Ok(outcome) => outcome,
         Err(_) if denies_on_failure(command) => {
-            eprintln!("aoa: blocked — the write gate panicked while evaluating this call");
+            eprint_human("aoa: blocked — the write gate panicked while evaluating this call");
             Ok(BLOCK_EXIT_CODE)
         }
         Err(payload) => std::panic::resume_unwind(payload),
@@ -327,7 +330,7 @@ fn block(event: &HookEvent, reason: BlockReason) -> Result<i32> {
     let log = live_log_path(event)?;
     let message = reason.to_string();
     append_span_with(&log, |seq| blocked_span(seq, reason))?;
-    eprintln!("aoa: blocked {} — {message}", event.tool_name);
+    eprint_human(&format!("aoa: blocked {} — {message}", event.tool_name));
     Ok(BLOCK_EXIT_CODE)
 }
 
@@ -608,10 +611,10 @@ fn append_span_within(
     let mut file = open_log(log, LogAccess::AppendCreate)?;
     lock_exclusive_bounded(&file, log, lock_timeout)?;
     if let Some(discarded) = repair_torn_tail(&mut file, log)? {
-        eprintln!(
+        eprint_human(&format!(
             "aoa: repaired {} by discarding its {discarded}-byte unterminated tail",
             log.display()
-        );
+        ));
     }
 
     let end = file

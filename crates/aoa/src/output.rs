@@ -1,3 +1,4 @@
+use std::io::Write as _;
 use std::str::EscapeDebug;
 
 use anyhow::Result;
@@ -31,10 +32,48 @@ pub fn print_json<T: Serialize>(value: &T) -> Result<()> {
 /// Print human-facing text to stdout (the human register). Kept distinct from
 /// [`print_json`] so every audit/eval command exposes both registers (R17).
 pub fn print_human(text: &str) {
-    print!("{text}");
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    write_human(&mut out, text).expect("failed to write human output");
+}
+
+/// Print human-facing text to stderr through the same terminal-safe boundary.
+pub fn eprint_human(text: &str) {
+    let stderr = std::io::stderr();
+    let mut out = stderr.lock();
+    write_terminal(&mut out, text, false).expect("failed to write human error output");
+    writeln!(out).expect("failed to terminate human error output");
+}
+
+/// Print an anyhow error chain to stderr without allowing terminal controls
+/// carried by any source error to survive the boundary.
+pub fn eprint_error(error: &anyhow::Error) {
+    eprint_human(&format!("error: {error:#}"));
+}
+
+fn write_human(mut out: impl std::io::Write, text: &str) -> std::io::Result<()> {
+    write_terminal(&mut out, text, true)?;
     if !text.ends_with('\n') {
-        println!();
+        writeln!(out)?;
     }
+    Ok(())
+}
+
+fn write_terminal(
+    mut out: impl std::io::Write,
+    text: &str,
+    preserve_newlines: bool,
+) -> std::io::Result<()> {
+    for character in text.chars() {
+        if (preserve_newlines && character == '\n') || !character.is_control() {
+            write!(out, "{character}")?;
+        } else {
+            for escaped in character.escape_debug() {
+                write!(out, "{escaped}")?;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -57,5 +96,16 @@ mod tests {
     #[test]
     fn escape_terminal_leaves_ordinary_text_readable() {
         assert_eq!(escape_terminal("repo/pkg-1.2").to_string(), "repo/pkg-1.2");
+    }
+
+    #[test]
+    fn human_boundary_preserves_layout_but_neutralises_terminal_controls() {
+        let mut output = Vec::new();
+        write_human(&mut output, "first\nhostile\u{1b}[2J\ttext\n").unwrap();
+        let rendered = String::from_utf8(output).unwrap();
+
+        assert_eq!(rendered, "first\nhostile\\u{1b}[2J\\ttext\n");
+        assert!(!rendered.contains('\u{1b}'));
+        assert!(!rendered.contains('\t'));
     }
 }
