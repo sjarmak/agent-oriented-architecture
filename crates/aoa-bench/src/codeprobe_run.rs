@@ -18,9 +18,9 @@ use serde::Deserialize;
 use crate::error::BenchError;
 use crate::loader::{read_capped, MAX_CODEPROBE_JSON_BYTES};
 
-/// A leg `score_*` at or above this counts as a pass when the explicit
-/// `passed_*` boolean is absent (exact-match scorers emit 0.0/1.0).
-pub(crate) const SCORE_PASS_THRESHOLD: f64 = 1.0;
+/// Codeprobe's canonical inclusive pass threshold. A leg `score_*` at or above
+/// this counts as a pass when the explicit `passed_*` boolean is absent.
+pub(crate) const SCORE_PASS_THRESHOLD: f64 = 0.5;
 
 /// Largest number of trial subdirectories accepted under one run dir. Bounds the
 /// work a crafted run dir of millions of empty subdirs can induce.
