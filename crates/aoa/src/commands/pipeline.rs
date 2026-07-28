@@ -6,7 +6,7 @@
 //! per-finding recommendations. Each of them used to spell that chain out by
 //! hand, and `report` drifted from `recommend` twice (aoa-d6t.35 dropped the
 //! signal conditioning, aoa-d6t.41 rebuilt the config as `AuditConfig::default()`
-//! and silently lost the measured mutation-surface item). Both shipped: the
+//! and silently lost the symbol graph required by live metrics). Both shipped: the
 //! command exits 0 and prints a plausible readiness view that under-reports.
 //!
 //! So the chain lives here once, and the commands destructure it. The rule of
@@ -27,19 +27,16 @@ use aoa_migrate::CodeFix;
 use aoa_recommend::RecommendationReport;
 
 /// The audit configuration measured from the repo itself: the defaults plus a
-/// best-effort symbol graph indexed from the repo's source (aoa-d6t.23). A
-/// repo the indexer cannot see into yields an empty graph, and the audit then
-/// withholds the mutation-surface item rather than scoring an empty default —
-/// the punch-list must never carry a cost that was not measured.
+/// best-effort symbol graph indexed from the repo's source. A repo the indexer
+/// cannot see into yields an empty graph, and every live session is explicitly
+/// excluded rather than scored against an empty default.
 ///
 /// An index failure is FATAL here, deliberately and uniformly for all three
 /// commands. `aoa_scip_graph::build_symbol_graph` offers the other policy —
 /// degrade to an empty graph, never abort — which is right for the R0 scoring
 /// path it was built for, where one broken repo should lose its vote rather
 /// than sink the run. These commands instead answer a go/no-go question about a
-/// single repo, and an empty graph makes the audit withhold the
-/// mutation-surface item, so degrading would print a clean punch-list for a
-/// repo nobody managed to read.
+/// single repo, and an empty graph excludes every live metric observation.
 ///
 /// Unsupported contents in an individual source file (oversized or non-UTF-8)
 /// are isolated by the best-effort indexer; access failures still reach this
@@ -49,7 +46,6 @@ fn repo_audit_config(repo: &Path) -> Result<aoa_audit::AuditConfig> {
         .with_context(|| format!("failed to index {}", repo.display()))?;
     Ok(aoa_audit::AuditConfig {
         graph: indexed.graph,
-        gold_set: indexed.gold_set,
         ..aoa_audit::AuditConfig::default()
     })
 }

@@ -14,11 +14,10 @@
 //! wire-version guard.
 //!
 //! [`load_corpus`] turns both into one stream of validated
-//! [`ObservedSession`]s. A session counts as one held-out behavioral
-//! observation only when it carries held-out ground truth — at least one
-//! landed edit ([`held_out_edits`]); a session that merely parses supplies no
-//! signal (the corpus aggregation unit; a repo is still ONE observation in
-//! cross-repo R0 voting).
+//! [`ObservedSession`]s. A landed edit ([`held_out_edits`]) makes a session a
+//! candidate for behavioral measurement, but not a complete metric
+//! observation: the audit also requires same-task invariant and
+//! accepted-solution context. File count alone never promotes metric modes.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -62,17 +61,13 @@ pub struct TraceCorpus {
 }
 
 impl TraceCorpus {
-    /// Held-out behavioral observations this corpus supplies: the sessions
-    /// whose trace carries at least one landed edit ([`held_out_edits`]).
+    /// Sessions carrying held-out edited-file truth. This is a candidate count,
+    /// not the number of complete metric observations.
     ///
-    /// The count feeds the greenfield/cold-start precondition
-    /// (`aoa_construct::BehavioralSignal`), which measures *available signal*, not
-    /// session-file count: a session with no `write.committed` span (or an
-    /// empty file) parses and accumulates on [`TraceCorpus::sessions`], but
-    /// holds nothing out and must not satisfy the window (aoa-d6t.23). A
-    /// session that only *attempted* a write holds nothing out either — the
-    /// attempt is intent, not a landed edit.
-    pub fn observations(&self) -> usize {
+    /// The audit layer consumes the actual edit sets and counts only
+    /// sessions that also have enough evidence to compute all four metrics.
+    /// A session that only attempted a write holds nothing out.
+    pub fn landed_edit_sessions(&self) -> usize {
         self.sessions
             .iter()
             .filter(|s| !held_out_edits(&s.trace).is_empty())

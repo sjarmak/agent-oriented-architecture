@@ -89,10 +89,9 @@ fn report_json_conditions_the_determination_on_the_behavioral_signal() {
     );
 }
 
-// The mirror: once the corpus crosses the window, `report` stops reporting the
-// shortfall — the conditioning is a real precondition, not a constant.
+// Raw landed edits are not complete four-metric evidence, regardless of count.
 #[test]
-fn report_json_omits_insufficient_data_with_a_sufficient_corpus() {
+fn report_json_keeps_uncontextualized_live_edits_insufficient() {
     let repo = TempDir::new().expect("tempdir");
     seed_live_sessions(repo.path(), 10);
     let output = aoa()
@@ -102,14 +101,14 @@ fn report_json_omits_insufficient_data_with_a_sufficient_corpus() {
         .expect("run");
     let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
 
-    assert!(parsed["audit"].get("insufficient_data").is_none());
-    assert!(parsed["recommendations"].get("insufficient_data").is_none());
+    assert!(parsed["audit"].get("insufficient_data").is_some());
+    assert!(parsed["recommendations"].get("insufficient_data").is_some());
     let metrics = parsed["construct_validity"]["metrics"]
         .as_array()
         .expect("metrics");
     assert!(
-        !metrics.iter().any(|m| m["mode"] == "insufficient_data"),
-        "a sufficient corpus leaves no metric in insufficient_data: {metrics:#?}"
+        metrics.iter().any(|m| m["mode"] == "insufficient_data"),
+        "uncontextualized edits leave metrics insufficient: {metrics:#?}"
     );
 }
 
@@ -131,15 +130,13 @@ fn report_and_audit_agree_on_findings_for_an_indexable_repo() {
     let mut report_view = aoa_json(repo.path(), &["report", "--json", "--repo"]);
     let from_report = report_view["audit"].take();
 
-    let kinds: Vec<&str> = from_audit["items"]
-        .as_array()
-        .expect("items")
-        .iter()
-        .map(|i| i["kind"].as_str().expect("kind"))
-        .collect();
-    assert!(
-        kinds.contains(&"mutation_surface"),
-        "precondition: the fixture repo indexes into a real graph: {kinds:?}"
+    assert_eq!(
+        from_audit["live_observations"]
+            .as_array()
+            .expect("live observations")
+            .len(),
+        10,
+        "precondition: the fixture carries raw live sessions"
     );
     assert_eq!(
         from_report, from_audit,
@@ -204,16 +201,14 @@ fn report_and_recommend_agree_on_recommendations() {
     let indexable_view = agreeing_report(indexable.path());
 
     // Precondition: the two fixtures must actually exercise the two different
-    // legs, or the pair above is one assertion run twice. `mutation_surface` is
-    // measurable only through a real symbol graph (the config leg), and
-    // `insufficient_data` metrics appear only without a held-out corpus (the
-    // signal-conditioning leg). Each fixture must show exactly one of them.
-    let has_mutation_surface = |view: &Value| -> bool {
-        view["audit"]["items"]
-            .as_array()
-            .expect("items")
-            .iter()
-            .any(|i| i["kind"] == "mutation_surface")
+    // legs, or the pair above is one assertion run twice. The indexable fixture
+    // has live edit candidates, while the greenfield fixture has none. Both
+    // remain insufficient because ambient sessions lack same-task context.
+    let live_observation_count = |view: &Value| -> usize {
+        view["audit"]
+            .get("live_observations")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len)
     };
     let has_insufficient_data = |view: &Value| -> bool {
         view["construct_validity"]["metrics"]
@@ -223,19 +218,18 @@ fn report_and_recommend_agree_on_recommendations() {
             .any(|m| m["mode"] == "insufficient_data")
     };
 
-    for (name, view, graph, insufficient) in [
-        ("greenfield", &greenfield_view, false, true),
-        ("indexable", &indexable_view, true, false),
+    for (name, view, observations) in [
+        ("greenfield", &greenfield_view, 0),
+        ("indexable", &indexable_view, 10),
     ] {
         assert_eq!(
-            has_mutation_surface(view),
-            graph,
-            "precondition: only the indexable fixture measures a real symbol graph ({name})"
+            live_observation_count(view),
+            observations,
+            "precondition: only the indexable fixture carries live candidates ({name})"
         );
-        assert_eq!(
+        assert!(
             has_insufficient_data(view),
-            insufficient,
-            "precondition: only the greenfield fixture leaves metrics in insufficient_data ({name})"
+            "ambient live candidates remain insufficient without task context ({name})"
         );
     }
 }

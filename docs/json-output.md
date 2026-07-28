@@ -22,7 +22,7 @@ removed without a major version note. Field types are given as JSON types.
 
 | Command | Top-level JSON fields | Source of truth |
 |---|---|---|
-| `aoa audit --json` | `items` (array of punch items: `title`, `kind`, `tier`, `measured_cost`, `plane`) | `aoa_audit::AuditReport` |
+| `aoa audit --json` | `items` (array of punch items), `behavioral_signal`, `insufficient_data?`, `live_observations?` (per-session `measured` metrics or stable typed `excluded` reason) | `aoa_audit::AuditReport` |
 | `aoa recommend --json` | `items` (array: finding + fix + mode join), `actionable_now` (number), `advisory_only` (number) | `aoa_recommend::RecommendationReport` |
 | `aoa gap --json` | `data_source` (string), `thresholds` (object), `metrics` (array of per-metric classifications) | `aoa_construct::ConstructValidityReport` |
 | `aoa migrate --json` | dry-run: `grounding_navigability_sites`, `fix_ids`, `changes`, `eligibility_notes`, `provenance`; `--apply`: `fixes_applied`, `files_written`, `navigability_sites_remaining`, `manifest_path`, `eligibility_notes`, `provenance`; `--rollback`: `files_reverted` | `MigrateView` in `crates/aoa/src/commands/migrate.rs` |

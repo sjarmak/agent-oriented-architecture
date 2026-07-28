@@ -446,8 +446,14 @@ mod tests {
             );
             // The bytes must not survive in numeric form either, which is how a
             // derived `Debug` on a `Vec<u8>` would render them.
+            let byte_prefix = format!(
+                "[{}, {}, {}",
+                SECRET.as_bytes()[0],
+                SECRET.as_bytes()[1],
+                SECRET.as_bytes()[2]
+            );
             assert!(
-                !rendered.contains(&format!("{}", SECRET.as_bytes()[0])),
+                !rendered.contains(&byte_prefix),
                 "error must not carry the file's bytes: {rendered}"
             );
             assert!(

@@ -6,10 +6,11 @@
 //!   only creates the explicitly-ignored `.aoa/` tree. [`write_trace`] is the
 //!   instrumentation path that lands a validated trace under `.aoa/traces/`.
 //! - [`audit`] builds a ranked, tiered punch-list grounded in measured numbers
-//!   (context-file token closure via `aoa-budget`, mutation-surface and
-//!   retrieval-locality proxies via `aoa-metrics`, structural enforcement-plane
-//!   checks) and renders it both as human text and structured JSON. It writes
-//!   nothing. [`exit_code`] maps a report to a process exit code.
+//!   and emits a typed measured/excluded record for every live session.
+//!   [`LiveMetricContext`] supplies same-task evidence that ambient traces
+//!   cannot infer; without it, sessions remain explicit exclusions and do not
+//!   promote behavioral metric modes. The audit writes nothing. [`exit_code`]
+//!   maps a report to a process exit code.
 //!
 //! A later CLI unit drives these entrypoints; this crate builds no binary.
 
@@ -22,7 +23,10 @@ mod report;
 mod structure;
 mod tier;
 
-pub use audit::{audit, AuditConfig};
+pub use audit::{
+    audit, AuditConfig, LiveExclusionReason, LiveMetricContext, LiveMetricObservation,
+    LiveObservationState,
+};
 pub use error::AuditError;
 pub use observe::{
     observe, reject_symlinked_path, reject_symlinked_trace_dir, write_trace, ObserveOutcome,

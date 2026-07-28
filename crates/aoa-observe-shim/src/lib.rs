@@ -15,12 +15,10 @@
 //! - `live-<session>.jsonl` — appended span-per-line by the enforce hooks;
 //! - `<name>.json` — whole traces landed via `aoa_audit::write_trace`.
 //!
-//! A session counts as one held-out behavioral observation only when it
-//! carries a landed edit ([`held_out_edits`]); edit-free sessions accumulate
-//! but supply no signal. The observation count feeds the greenfield/cold-start
-//! precondition (`aoa_construct::BehavioralSignal`): below the behavioral-signal
-//! window the behavioral metrics report insufficient-data; once enough
-//! edit-carrying sessions accumulate they light up.
+//! A landed edit makes a session a measurement candidate, not a complete
+//! behavioral observation. The audit layer combines that truth with explicit
+//! same-task invariant/solution context and a graph; missing inputs become
+//! typed exclusions and do not promote the greenfield/cold-start precondition.
 //!
 //! [`ObserveLiveLog`] implements the versioned cross-agent
 //! [`aoa_codeprobe_shim::TraceBackend`] contract with `native` provenance —

@@ -111,11 +111,10 @@ fn audit_reports_insufficient_data_without_observe_captured_signal() {
     );
 }
 
-// Once enough observe-captured sessions accumulate AND the repo indexes into
-// a real symbol graph, the behavioral item lights up with a measured (not
-// fabricated) cost.
+// Landed edits without same-task invariant and accepted-solution context remain
+// inspectable exclusions; file count alone cannot unlock four metrics.
 #[test]
-fn audit_lights_up_behavioral_metrics_once_corpus_is_sufficient() {
+fn audit_keeps_uncontextualized_live_edits_insufficient() {
     let repo = seeded_indexable_repo();
 
     let output = aoa()
@@ -124,19 +123,19 @@ fn audit_lights_up_behavioral_metrics_once_corpus_is_sufficient() {
         .output()
         .expect("run");
     let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert_eq!(parsed["behavioral_signal"]["observations"], 0);
+    assert!(parsed.get("insufficient_data").is_some());
     assert_eq!(
-        parsed["behavioral_signal"]["observations"],
+        parsed["live_observations"]
+            .as_array()
+            .expect("live observations")
+            .len(),
         MIN_HELD_OUT_OBSERVATIONS
     );
-    assert!(parsed.get("insufficient_data").is_none());
     let items = parsed["items"].as_array().expect("items");
-    let surface = items
-        .iter()
-        .find(|i| i["kind"] == "mutation_surface")
-        .expect("sufficient corpus re-enables the behavioral item");
     assert!(
-        surface["measured_cost"]["value"].as_u64().unwrap() > 0,
-        "the cost is measured from the repo's own graph: {surface}"
+        !items.iter().any(|i| i["kind"] == "mutation_surface"),
+        "uncontextualized edits cannot produce a behavioral score"
     );
 }
 
@@ -154,10 +153,7 @@ fn audit_withholds_the_surface_score_when_nothing_indexes() {
         .output()
         .expect("run");
     let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
-    assert_eq!(
-        parsed["behavioral_signal"]["observations"],
-        MIN_HELD_OUT_OBSERVATIONS
-    );
+    assert_eq!(parsed["behavioral_signal"]["observations"], 0);
     let items = parsed["items"].as_array().expect("items");
     assert!(
         !items.iter().any(|i| i["kind"] == "mutation_surface"),
@@ -219,9 +215,9 @@ fn recommend_reports_insufficient_data_without_observe_captured_signal() {
     assert!(metrics.iter().any(|m| m == "retrieval_locality"));
 }
 
-// recommend with a sufficient corpus carries no InsufficientData note.
+// Recommend cannot promote raw edit logs that lack complete task context.
 #[test]
-fn recommend_omits_insufficient_data_with_a_sufficient_corpus() {
+fn recommend_keeps_uncontextualized_live_edits_insufficient() {
     let repo = TempDir::new().expect("tempdir");
     seed_live_sessions(repo.path(), MIN_HELD_OUT_OBSERVATIONS);
     let output = aoa()
@@ -230,7 +226,7 @@ fn recommend_omits_insufficient_data_with_a_sufficient_corpus() {
         .output()
         .expect("run");
     let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
-    assert!(parsed.get("insufficient_data").is_none());
+    assert!(parsed.get("insufficient_data").is_some());
 }
 
 // eval run: the report counts its held-out observations against the window and

@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
-use aoa_audit::{audit, exit_code, observe, write_trace, AuditConfig, AuditReport, Tier};
+use aoa_audit::{
+    audit, exit_code, observe, write_trace, AuditConfig, AuditReport, LiveExclusionReason,
+    LiveMetricContext, LiveObservationState, Tier,
+};
 use aoa_construct::MIN_HELD_OUT_OBSERVATIONS;
 use aoa_metrics::{IndexQuality, SymbolGraph};
 use aoa_trace::{Span, SpanSource, SpanType, Trace};
@@ -96,7 +99,6 @@ fn audit_config() -> AuditConfig {
         context_root: Some(PathBuf::from("AGENTS.md")),
         ceiling: 0,
         graph: graph_with_surface(),
-        trace: valid_trace(),
         ..AuditConfig::default()
     }
 }
@@ -753,6 +755,25 @@ fn seed_edit_sessions(repo: &Path, n: usize) {
     }
 }
 
+fn live_contexts(n: usize) -> BTreeMap<String, LiveMetricContext> {
+    (0..n)
+        .map(|i| {
+            (
+                format!("s{i}"),
+                LiveMetricContext {
+                    task_id: format!("task-{i}"),
+                    invariant_set: ["rules.md".to_string()].into(),
+                    accepted_solutions: vec![
+                        ["src/lib.rs".to_string()].into(),
+                        ["src/lib.rs".to_string(), "tests/lib.rs".to_string()].into(),
+                    ],
+                    ..LiveMetricContext::default()
+                },
+            )
+        })
+        .collect()
+}
+
 // aoa-d6t.23 criterion: a repo with no observe-captured held-out signal
 // reports InsufficientData for the behavioral metrics with the reason — never
 // a fabricated mutation-surface score and never a silent checkbox degradation.
@@ -793,29 +814,74 @@ fn greenfield_repo_reports_insufficient_data_not_a_fabricated_score() {
     );
 }
 
-// aoa-d6t.23 criterion: once enough observe-captured sessions accumulate under
-// .aoa/traces, the behavioral metrics light up (the mutation-surface item is
-// emitted again and the insufficient-data note disappears).
+// aoa-d6t.39: landed edits alone are held-out truth, not a complete metric
+// input. They remain inspectable exclusions and cannot unlock all four
+// behavioral metrics by file count.
 #[test]
-fn accumulated_trace_corpus_lights_the_behavioral_metrics_up() {
+fn accumulated_trace_corpus_without_task_context_stays_insufficient() {
     let repo = fixture_repo();
     seed_edit_sessions(repo.path(), MIN_HELD_OUT_OBSERVATIONS);
 
     let report = audit(repo.path(), &audit_config()).expect("audit succeeds");
+    assert_eq!(report.behavioral_signal.observations, 0);
+    assert_eq!(report.live_observations.len(), MIN_HELD_OUT_OBSERVATIONS);
+    assert!(report
+        .live_observations
+        .iter()
+        .all(|observation| matches!(observation.state, LiveObservationState::Excluded { .. })));
+    assert!(report.insufficient_data.is_some());
+    assert!(
+        report.render_human().contains(&format!(
+            "live metric observations: 0 measured, {MIN_HELD_OUT_OBSERVATIONS} excluded"
+        )),
+        "the human register must not hide typed exclusions"
+    );
+}
+
+#[test]
+fn complete_same_task_context_measures_each_live_session() {
+    let repo = fixture_repo();
+    seed_edit_sessions(repo.path(), MIN_HELD_OUT_OBSERVATIONS);
+    let mut cfg = audit_config();
+    cfg.live_metric_contexts = live_contexts(MIN_HELD_OUT_OBSERVATIONS);
+
+    let report = audit(repo.path(), &cfg).expect("audit succeeds");
+
     assert_eq!(
         report.behavioral_signal.observations,
         MIN_HELD_OUT_OBSERVATIONS
     );
-    assert!(report.behavioral_signal.is_sufficient());
+    assert!(report
+        .live_observations
+        .iter()
+        .all(|observation| matches!(observation.state, LiveObservationState::Measured { .. })));
     assert!(report.insufficient_data.is_none());
-    assert!(
-        report
-            .items
-            .iter()
-            .any(|i| i.kind == aoa_audit::FindingKind::MutationSurface),
-        "with sufficient signal the behavioral item is measured again"
-    );
-    assert!(!report.render_human().contains("InsufficientData"));
+    assert!(report
+        .items
+        .iter()
+        .any(|item| item.kind == aoa_audit::FindingKind::MutationSurface));
+}
+
+#[test]
+fn empty_accepted_solution_is_excluded_not_used_as_a_zero_denominator() {
+    let repo = fixture_repo();
+    seed_edit_sessions(repo.path(), 1);
+    let mut contexts = live_contexts(1);
+    contexts.get_mut("s0").unwrap().accepted_solutions[0].clear();
+    let cfg = AuditConfig {
+        live_metric_contexts: contexts,
+        ..audit_config()
+    };
+
+    let report = audit(repo.path(), &cfg).expect("audit succeeds");
+
+    assert!(matches!(
+        report.live_observations[0].state,
+        LiveObservationState::Excluded {
+            reason: LiveExclusionReason::AcceptedSolutionsMissing
+        }
+    ));
+    assert_eq!(report.behavioral_signal.observations, 0);
 }
 
 // aoa-d6t.23 review finding: crossing the window must not re-enable a score
@@ -827,9 +893,13 @@ fn accumulated_trace_corpus_lights_the_behavioral_metrics_up() {
 fn sufficient_signal_with_an_empty_graph_emits_no_fabricated_surface_score() {
     let repo = fixture_repo();
     seed_edit_sessions(repo.path(), MIN_HELD_OUT_OBSERVATIONS);
+    let cfg = AuditConfig {
+        live_metric_contexts: live_contexts(MIN_HELD_OUT_OBSERVATIONS),
+        ..AuditConfig::default()
+    };
 
-    let report = audit(repo.path(), &AuditConfig::default()).expect("audit succeeds");
-    assert!(report.behavioral_signal.is_sufficient());
+    let report = audit(repo.path(), &cfg).expect("audit succeeds");
+    assert!(!report.behavioral_signal.is_sufficient());
     assert!(
         !report
             .items

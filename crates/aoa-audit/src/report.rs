@@ -6,6 +6,7 @@ use aoa_construct::{BehavioralSignal, ConstructValidityReport, InsufficientDataN
 
 use crate::punch::PunchItem;
 use crate::tier::Tier;
+use crate::LiveMetricObservation;
 
 /// Exit code returned when `fail_on_tier1` is set and a Tier-1 gap exists.
 const TIER1_FAILURE_CODE: i32 = 2;
@@ -13,7 +14,7 @@ const TIER1_FAILURE_CODE: i32 = 2;
 /// The full audit result: a ranked punch-list plus the repo's held-out
 /// behavioral signal. Serializes to structured JSON and renders to a
 /// human-readable ranked list.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AuditReport {
     pub items: Vec<PunchItem>,
     /// Present when a workspace manifest exists but could not be used for
@@ -23,8 +24,9 @@ pub struct AuditReport {
     /// a failure. Omitted from the wire form when `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtree_discovery_warning: Option<String>,
-    /// The repo's held-out behavioral signal (observe-captured sessions under
-    /// `.aoa/traces/` counted against [`aoa_construct::MIN_HELD_OUT_OBSERVATIONS`]).
+    /// The repo's held-out behavioral signal (fully measured live-session
+    /// observations counted against
+    /// [`aoa_construct::MIN_HELD_OUT_OBSERVATIONS`]).
     /// Reports from producers that predate the field deserialize to zero
     /// observations.
     #[serde(default)]
@@ -34,6 +36,9 @@ pub struct AuditReport {
     /// Their punch items are withheld rather than fabricated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub insufficient_data: Option<InsufficientDataNote>,
+    /// Per-session measured or typed-excluded live metric evidence.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub live_observations: Vec<LiveMetricObservation>,
 }
 
 #[derive(Deserialize)]
@@ -47,6 +52,8 @@ struct AuditReportWire {
     // `behavioral_signal`, never independent input.
     #[serde(default, rename = "insufficient_data")]
     _insufficient_data: Option<InsufficientDataNote>,
+    #[serde(default)]
+    live_observations: Vec<LiveMetricObservation>,
 }
 
 impl<'de> Deserialize<'de> for AuditReport {
@@ -57,6 +64,7 @@ impl<'de> Deserialize<'de> for AuditReport {
             subtree_discovery_warning: wire.subtree_discovery_warning,
             insufficient_data: wire.behavioral_signal.insufficient_data(),
             behavioral_signal: wire.behavioral_signal,
+            live_observations: wire.live_observations,
         })
     }
 }
@@ -78,6 +86,7 @@ impl AuditReport {
             subtree_discovery_warning: None,
             insufficient_data: behavioral_signal.insufficient_data(),
             behavioral_signal,
+            live_observations: Vec::new(),
         }
     }
 
@@ -115,6 +124,23 @@ impl AuditReport {
                 item.title,
                 item.measured_cost.value,
                 item.measured_cost.unit,
+            );
+        }
+        if !self.live_observations.is_empty() {
+            let measured = self
+                .live_observations
+                .iter()
+                .filter(|observation| {
+                    matches!(
+                        observation.state,
+                        crate::LiveObservationState::Measured { .. }
+                    )
+                })
+                .count();
+            let _ = writeln!(
+                out,
+                "live metric observations: {measured} measured, {} excluded",
+                self.live_observations.len() - measured
             );
         }
         if let Some(note) = &self.insufficient_data {

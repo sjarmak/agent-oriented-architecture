@@ -4,10 +4,11 @@ use std::path::{Path, PathBuf};
 use aoa_budget::{count_budget, resolve_closure, Config};
 use aoa_construct::BehavioralSignal;
 use aoa_metrics::{
-    compute_mutation_surface, discover_partition, IndexQuality, MetricInput, SubtreePartition,
+    compute_metrics, discover_partition, IndexQuality, MetricInput, MetricRecord, SubtreePartition,
     SymbolGraph, TransformMap,
 };
 use aoa_trace::Trace;
+use serde::{Deserialize, Serialize};
 
 use crate::error::AuditError;
 use crate::planes::missing_planes;
@@ -51,10 +52,10 @@ pub struct AuditConfig {
     pub graph: SymbolGraph,
     /// Mutation-surface reachability depth.
     pub k: u32,
-    /// Trace used to ground the retrieval-locality proxy.
-    pub trace: Trace,
-    /// Gold artifact symbols anchoring the retrieval-locality proxy.
-    pub gold_set: BTreeSet<String>,
+    /// Explicit same-task context for each observe session. Ambient session
+    /// files do not carry invariant or accepted-solution evidence, so absence
+    /// excludes the session rather than fabricating complete metric inputs.
+    pub live_metric_contexts: BTreeMap<String, LiveMetricContext>,
     /// Multiplier for the module-size outlier check: a source file longer than
     /// `size_outlier_k ×` the repo's own median source-file line count is
     /// counted. Documented, overridable; never an absolute size threshold.
@@ -75,11 +76,49 @@ impl Default for AuditConfig {
                 quality: IndexQuality::BestEffort,
             },
             k: DEFAULT_MUTATION_K,
-            trace: Trace { spans: Vec::new() },
-            gold_set: BTreeSet::new(),
+            live_metric_contexts: BTreeMap::new(),
             size_outlier_k: DEFAULT_SIZE_OUTLIER_K,
         }
     }
+}
+
+/// Evidence that cannot be inferred from an ambient trace and must be supplied
+/// by the task producer for the named session.
+#[derive(Debug, Clone, Default)]
+pub struct LiveMetricContext {
+    pub task_id: String,
+    pub invariant_set: BTreeSet<String>,
+    pub accepted_solutions: Vec<BTreeSet<String>>,
+    pub transform: TransformMap,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LiveExclusionReason {
+    NoLandedEdit,
+    TaskContextMissing,
+    InvariantEvidenceMissing,
+    AcceptedSolutionsMissing,
+    SymbolGraphMissing,
+    MetricComputationFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum LiveObservationState {
+    Measured { metrics: Box<MetricRecord> },
+    Excluded { reason: LiveExclusionReason },
+}
+
+/// One observe-captured session's inspectable metric outcome.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LiveMetricObservation {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    pub held_out_edits: BTreeSet<String>,
+    pub state: LiveObservationState,
 }
 
 /// Run a read-only audit of `repo`. Builds a ranked, tiered punch-list grounded
@@ -88,17 +127,22 @@ impl Default for AuditConfig {
 /// and the code-structure family (navigability anchors, module-size outliers —
 /// born Tier-3/advisory). Writes nothing.
 ///
-/// Greenfield/cold-start precondition (aoa-d6t.23): the observe-captured trace
-/// corpus under `.aoa/traces/` is counted first. Below the behavioral-signal
-/// window the behavioral punch item (mutation surface) is withheld — a repo
-/// with no held-out signal must report InsufficientData on
-/// [`AuditReport::insufficient_data`], never a fabricated score. Crossing the
-/// window is not enough on its own: the item also needs a real symbol graph to
-/// measure against (see [`mutation_surface_item`]). Structural items need no
-/// traces and are unaffected.
+/// Greenfield/cold-start precondition: each observe-captured session under
+/// `.aoa/traces/` is evaluated as measured or explicitly excluded. Only
+/// sessions with landed edits, a graph, and complete same-task context count
+/// toward the behavioral window. Structural items need no traces and are
+/// unaffected.
 pub fn audit(repo: &Path, cfg: &AuditConfig) -> Result<AuditReport, AuditError> {
     let corpus = aoa_observe_shim::load_corpus(repo)?;
-    let signal = BehavioralSignal::from_observations(corpus.observations());
+    let live_observations = live_metric_observations(&corpus.sessions, cfg);
+    let measured: Vec<&MetricRecord> = live_observations
+        .iter()
+        .filter_map(|observation| match &observation.state {
+            LiveObservationState::Measured { metrics } => Some(&**metrics),
+            LiveObservationState::Excluded { .. } => None,
+        })
+        .collect();
+    let signal = BehavioralSignal::from_observations(measured.len());
 
     let mut items = Vec::new();
 
@@ -121,7 +165,7 @@ pub fn audit(repo: &Path, cfg: &AuditConfig) -> Result<AuditReport, AuditError> 
         items.push(item);
     }
     if signal.is_sufficient() {
-        items.extend(mutation_surface_item(cfg));
+        items.extend(mutation_surface_item(&measured));
     }
     items.extend(plane_items(repo));
     items.extend(structure_items(repo, cfg.size_outlier_k, &partition)?);
@@ -129,8 +173,92 @@ pub fn audit(repo: &Path, cfg: &AuditConfig) -> Result<AuditReport, AuditError> 
     rank(&mut items);
     Ok(AuditReport {
         subtree_discovery_warning,
+        live_observations,
         ..AuditReport::with_signal(items, signal)
     })
+}
+
+fn live_metric_observations(
+    sessions: &[aoa_observe_shim::ObservedSession],
+    cfg: &AuditConfig,
+) -> Vec<LiveMetricObservation> {
+    sessions
+        .iter()
+        .map(|session| {
+            let edited_files = aoa_observe_shim::held_out_edits(&session.trace);
+            let context = cfg.live_metric_contexts.get(&session.session_id);
+            let state = match measure_live_session(session, &edited_files, context, cfg) {
+                Ok(metrics) => LiveObservationState::Measured {
+                    metrics: Box::new(metrics),
+                },
+                Err(reason) => LiveObservationState::Excluded { reason },
+            };
+            LiveMetricObservation {
+                session_id: session.session_id.clone(),
+                task_id: context
+                    .filter(|context| !context.task_id.trim().is_empty())
+                    .map(|context| context.task_id.clone()),
+                held_out_edits: edited_files,
+                state,
+            }
+        })
+        .collect()
+}
+
+fn measure_live_session(
+    session: &aoa_observe_shim::ObservedSession,
+    edited_files: &BTreeSet<String>,
+    context: Option<&LiveMetricContext>,
+    cfg: &AuditConfig,
+) -> Result<MetricRecord, LiveExclusionReason> {
+    if edited_files.is_empty() {
+        return Err(LiveExclusionReason::NoLandedEdit);
+    }
+    if cfg.graph.nodes.is_empty() || cfg.graph.quality == IndexQuality::Degraded {
+        return Err(LiveExclusionReason::SymbolGraphMissing);
+    }
+    let context = context.ok_or(LiveExclusionReason::TaskContextMissing)?;
+    if context.task_id.trim().is_empty() {
+        return Err(LiveExclusionReason::TaskContextMissing);
+    }
+    if context.invariant_set.is_empty() {
+        return Err(LiveExclusionReason::InvariantEvidenceMissing);
+    }
+    if context.accepted_solutions.len() < 2
+        || context.accepted_solutions.iter().any(BTreeSet::is_empty)
+    {
+        return Err(LiveExclusionReason::AcceptedSolutionsMissing);
+    }
+
+    let input = MetricInput {
+        trace: trace_before_first_write(&session.trace),
+        gold_set: edited_files.clone(),
+        invariant_set: context.invariant_set.clone(),
+        transform: context.transform.clone(),
+        edited_files: edited_files.clone(),
+        accepted_solutions: context.accepted_solutions.clone(),
+        graph: cfg.graph.clone(),
+        k: cfg.k,
+        held_out_success: true,
+    };
+    compute_metrics(input.as_view()).map_err(|_| LiveExclusionReason::MetricComputationFailed)
+}
+
+fn trace_before_first_write(trace: &Trace) -> Trace {
+    let boundary = trace
+        .spans
+        .iter()
+        .filter(|span| span.span_type.opens_write_boundary())
+        .map(|span| span.seq)
+        .min();
+    Trace {
+        spans: trace
+            .spans
+            .iter()
+            .filter(|span| boundary.is_none_or(|seq| span.seq < seq))
+            .cloned()
+            .collect(),
+    }
 }
 
 /// Measure the context-file token closure and, when over the ceiling, emit an
@@ -164,32 +292,17 @@ fn context_budget_item(repo: &Path, cfg: &AuditConfig) -> Result<Option<PunchIte
     }))
 }
 
-/// Emit the mutation-surface punch item. Cost = count of writable files
-/// reachable within depth k (the writable blast radius is the actionable
-/// number). `None` when the symbol graph carries no nodes: with nothing
-/// indexed there is no measurement, and "0 writable files reachable" would be
-/// a fabricated claim, not a measured one (aoa-d6t.23) — the same skip-probe
-/// discipline as [`context_budget_item`] without its context root.
-fn mutation_surface_item(cfg: &AuditConfig) -> Option<PunchItem> {
-    if cfg.graph.nodes.is_empty() {
-        return None;
-    }
-    let input = MetricInput {
-        trace: cfg.trace.clone(),
-        gold_set: cfg.gold_set.clone(),
-        invariant_set: BTreeSet::new(),
-        transform: TransformMap::default(),
-        edited_files: BTreeSet::new(),
-        accepted_solutions: Vec::new(),
-        graph: cfg.graph.clone(),
-        k: cfg.k,
-        held_out_success: true,
-    };
-
-    let surface = compute_mutation_surface(input.as_view());
+/// Emit the conservative maximum mutation surface across fully measured live
+/// observations. The maximum is deterministic and keeps the largest observed
+/// writable blast radius actionable; an empty measured set emits no item.
+fn mutation_surface_item(metrics: &[&MetricRecord]) -> Option<PunchItem> {
+    let surface = metrics
+        .iter()
+        .map(|record| &record.mutation_surface)
+        .max_by_key(|surface| surface.writable_reachable)?;
 
     Some(PunchItem {
-        title: format!("writable mutation surface within depth {}", cfg.k),
+        title: format!("writable mutation surface within depth {}", surface.k),
         kind: FindingKind::MutationSurface,
         tier: Tier::Tier2,
         measured_cost: MeasuredCost::new(
@@ -215,4 +328,27 @@ fn plane_items(repo: &Path) -> Vec<PunchItem> {
             subtree: None,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_metric_trace_stops_before_the_first_write_boundary() {
+        let trace: Trace = serde_json::from_str(
+            r#"{"spans":[
+                {"type":"file.read","source":"native","seq":1,"attributes":{"path":"before.rs"}},
+                {"type":"write.attempt","source":"native","seq":2,"attributes":{"path":"edit.rs"}},
+                {"type":"file.read","source":"native","seq":3,"attributes":{"path":"after.rs"}},
+                {"type":"write.committed","source":"native","seq":4,"attributes":{"path":"edit.rs"}}
+            ]}"#,
+        )
+        .expect("valid trace");
+
+        let before = trace_before_first_write(&trace);
+
+        assert_eq!(before.spans.len(), 1);
+        assert_eq!(before.spans[0].seq, 1);
+    }
 }
