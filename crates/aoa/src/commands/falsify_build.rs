@@ -16,31 +16,39 @@
 //!
 //! # Honesty boundaries
 //!
-//! - **Eligibility is never fabricated.** `confidence` (SCIP-grade index) and
-//!   `calibrated` are operator assertions, REQUIRED per repo in the manifest —
-//!   no default toward eligible. `native_span` is derived from the mined task
-//!   oracle (held-out provenance), never declared.
+//! - **Eligibility is never fabricated.** `confidence` (SCIP-grade index), a
+//!   pinned repository commit, both arm configs, and typed calibration evidence
+//!   are REQUIRED per repo in the manifest. Calibration eligibility follows
+//!   only from a complete artifact whose conclusion is `calibrated`;
+//!   `native_span` is derived from the mined task oracle.
 //! - **Convention inputs are real or the gate abstains.** For answer-shaped
 //!   repos (`task_shape: "answer"` + `scip_index`) the builder computes real
-//!   per-task trace-locality/trace-reach inputs by joining each pair's two
-//!   trial traces, the task's oracle chain, and the SCIP symbol graph (module
-//!   [`answer`]); a pair whose inputs cannot be computed is excluded with the
-//!   reason. For edit-shaped repos no symbol-graph edit pipeline exists yet, so
-//!   the builder emits sentinels and flags `convention_inputs_degraded` —
-//!   rather than emit the midpoint values every admissible convention silently
-//!   admits, which would let the R0' convention-invariance check *pass* on no
-//!   evidence — and `aoa falsify` abstains.
+//!   per-task trace-locality/trace-reach inputs by joining trial traces, the
+//!   task's oracle chain, and the SCIP symbol graph (module [`answer`]).
+//! - **Missing evidence remains data.** Every discovered candidate produces a
+//!   content-addressed `Measured` or typed `Excluded` observation. A pair is
+//!   admitted only when both arm observations are measured; edit-shaped repos
+//!   remain excluded until their four required metrics can be computed.
 
 mod answer;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs::File;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use answer::AnswerContext;
-use aoa_bench::{aggregate_provenance, discover_tasks, load_task, TrialScoring};
+use aoa_bench::{
+    aggregate_provenance, discover_tasks, load_task, scoring_path, transcript_path,
+    AnswerMetricsV1, ArmIdentity, ArtifactDigestSetV1, CalibrationConclusion,
+    CalibrationEvidenceV1, ExclusionReasonV1, GitObjectId, MeasurementMetricsV1,
+    MeasurementObservationV1, MeasurementStateV1, MetricValueV1, Sha256Digest, TrialScoring,
+    TRACE_LOCALITY_DEFINITION_VERSION, TRACE_REACH_DEPTH_DEFINITION_VERSION,
+};
 use aoa_falsify::{
     is_eligible, ConventionInputs, Eligibility, FalsifyConfig, FalsifyInput, PairTask, RepoResult,
     RepoRun, ScoringConvention,
@@ -52,12 +60,8 @@ use crate::cli::ExperimentArgs;
 use crate::commands::fsutil::load_json_capped;
 use crate::output::{escape_terminal, print_human, print_json};
 
-/// Sentinel convention inputs emitted for edit-shaped repos while a per-repo
-/// symbol-graph edit pipeline is not constructed. They are NOT the admitting
-/// midpoint: the builder pairs them with `convention_inputs_degraded` so the
-/// gate abstains rather than reads them as real evidence.
-const DEGRADED_EDIT_LOCALITY: f64 = 0.0;
-const DEGRADED_MUTATION_DEPTH: u32 = 0;
+/// Per-artifact and aggregate task-evidence read bound.
+const MAX_EVIDENCE_BYTES: u64 = 128 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Manifest (operator-authored)
@@ -87,24 +91,21 @@ struct Manifest {
 #[serde(deny_unknown_fields)]
 struct RepoManifest {
     repo_id: String,
+    /// Exact source revision whose task and graph evidence is being measured.
+    repo_commit: GitObjectId,
     /// Operator assertion that the repo carries a SCIP-grade (high-confidence)
     /// index. REQUIRED — there is no safe default toward eligibility.
     confidence: ConfidenceDecl,
-    /// Operator assertion that the repo's scoring is calibrated. REQUIRED.
-    calibrated: bool,
-    /// What backs the `calibrated` assertion. The pre-registered R11 scope
-    /// note (`docs/r0_runbook.md` § "R11 scope note for answer-shaped tasks")
-    /// instructs answer-shape operators to declare this key, so
-    /// `deny_unknown_fields` must not reject it. It is an operator attestation
-    /// for human/audit consumption; the builder does not read it (whether to
-    /// REQUIRE it for answer shape is aoa-j7tg).
-    #[serde(default)]
-    #[expect(dead_code)]
-    calibrated_basis: Option<String>,
+    /// Typed, content-addressed evidence backing calibration eligibility.
+    calibration_artifact: PathBuf,
+    /// Exact configuration bytes used by every repo-arm replication.
+    repo_arm_config: PathBuf,
+    /// Exact configuration bytes used by every harness-arm replication.
+    harness_arm_config: PathBuf,
     /// The task shape this repo's trials carry. `answer` (comprehension tasks)
     /// computes real trace-locality/trace-reach convention inputs and REQUIRES
-    /// `scip_index`; `edit` (the default) emits degraded sentinels until an
-    /// edit-task pipeline exists.
+    /// `scip_index`; `edit` (the default) emits excluded observations until an
+    /// edit-task metric pipeline exists.
     #[serde(default)]
     task_shape: TaskShape,
     /// Vendored SCIP JSON index for this repo (the `aoa eval run --scip-index`
@@ -188,6 +189,10 @@ struct RepoBuild {
 #[derive(Debug, Serialize)]
 pub(crate) struct BuildReport {
     out_path: String,
+    observations_path: String,
+    observations_sha256: String,
+    observation_count: usize,
+    observation_ids: Vec<String>,
     repo_count: usize,
     total_identical_pairs: usize,
     /// The (uniform) task shape of the manifest's repos, as data.
@@ -245,12 +250,15 @@ fn read_arm(run_dir: &Path) -> Result<ArmOutcomes> {
     let mut held_out = BTreeMap::new();
     let mut excluded = BTreeMap::new();
     for task_id in task_ids {
-        match TrialScoring::load(run_dir, &task_id)
-            .and_then(|s| s.dual())
-            .and_then(|s| s.held_out_success())
-        {
-            Ok(success) => {
+        match TrialScoring::load(run_dir, &task_id).and_then(|s| s.held_out_outcome()) {
+            Ok(Some(success)) => {
                 held_out.insert(task_id, success);
+            }
+            Ok(None) => {
+                excluded.insert(
+                    task_id,
+                    "scoring carries neither `passed` nor `score`: no held-out signal".to_string(),
+                );
             }
             Err(e) => {
                 // `e` is a `BenchError`, not an `anyhow::Error`: its
@@ -266,8 +274,383 @@ fn read_arm(run_dir: &Path) -> Result<ArmOutcomes> {
 /// One repo's build outcome: included in the input, or dropped (no identical
 /// pairs) with its per-task exclusion reasons preserved.
 enum RepoOutcome {
-    Included(Box<(RepoResult, RepoBuild)>),
-    Dropped(DroppedRepo),
+    Included(Box<(RepoResult, RepoBuild, Vec<MeasurementObservationV1>)>),
+    Dropped(DroppedRepo, Vec<MeasurementObservationV1>),
+}
+
+struct LoadedArtifact<T> {
+    digest: Option<Sha256Digest>,
+    value: Option<T>,
+    reason: Option<ExclusionReasonV1>,
+    diagnostic: Option<String>,
+}
+
+fn read_artifact(path: &Path) -> LoadedArtifact<Vec<u8>> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => metadata,
+        Ok(_) => {
+            return LoadedArtifact {
+                digest: None,
+                value: None,
+                reason: Some(ExclusionReasonV1::ArtifactMalformed),
+                diagnostic: Some(format!("{} is not a regular file", path.display())),
+            };
+        }
+        Err(error) => {
+            return LoadedArtifact {
+                digest: None,
+                value: None,
+                reason: Some(ExclusionReasonV1::ArtifactMissing),
+                diagnostic: Some(format!("cannot read {}: {error}", path.display())),
+            };
+        }
+    };
+    if metadata.len() > MAX_EVIDENCE_BYTES {
+        return LoadedArtifact {
+            digest: None,
+            value: None,
+            reason: Some(ExclusionReasonV1::ArtifactMalformed),
+            diagnostic: Some(format!(
+                "{} exceeds {MAX_EVIDENCE_BYTES} byte evidence cap",
+                path.display()
+            )),
+        };
+    }
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) => {
+            return LoadedArtifact {
+                digest: None,
+                value: None,
+                reason: Some(ExclusionReasonV1::ArtifactMissing),
+                diagnostic: Some(format!("cannot open {}: {error}", path.display())),
+            };
+        }
+    };
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    if let Err(error) = std::io::Read::by_ref(&mut file)
+        .take(MAX_EVIDENCE_BYTES + 1)
+        .read_to_end(&mut bytes)
+    {
+        return LoadedArtifact {
+            digest: None,
+            value: None,
+            reason: Some(ExclusionReasonV1::ArtifactMalformed),
+            diagnostic: Some(format!("cannot read {}: {error}", path.display())),
+        };
+    }
+    if bytes.len() as u64 > MAX_EVIDENCE_BYTES {
+        return LoadedArtifact {
+            digest: None,
+            value: None,
+            reason: Some(ExclusionReasonV1::ArtifactMalformed),
+            diagnostic: Some(format!(
+                "{} exceeds {MAX_EVIDENCE_BYTES} byte evidence cap",
+                path.display()
+            )),
+        };
+    }
+    LoadedArtifact {
+        digest: Some(Sha256Digest::of_bytes(&bytes)),
+        value: Some(bytes),
+        reason: None,
+        diagnostic: None,
+    }
+}
+
+fn read_calibration(path: &Path) -> LoadedArtifact<CalibrationEvidenceV1> {
+    let raw = read_artifact(path);
+    let Some(bytes) = raw.value else {
+        return LoadedArtifact {
+            digest: raw.digest,
+            value: None,
+            reason: Some(match raw.reason {
+                Some(ExclusionReasonV1::ArtifactMissing) => ExclusionReasonV1::CalibrationMissing,
+                _ => ExclusionReasonV1::CalibrationMalformed,
+            }),
+            diagnostic: raw.diagnostic,
+        };
+    };
+    match serde_json::from_slice::<CalibrationEvidenceV1>(&bytes) {
+        Ok(value) => match value.validate() {
+            Ok(()) => LoadedArtifact {
+                digest: raw.digest,
+                value: Some(value),
+                reason: None,
+                diagnostic: None,
+            },
+            Err(error) => LoadedArtifact {
+                digest: raw.digest,
+                value: None,
+                reason: Some(ExclusionReasonV1::CalibrationMalformed),
+                diagnostic: Some(error.to_string()),
+            },
+        },
+        Err(error) => LoadedArtifact {
+            digest: raw.digest,
+            value: None,
+            reason: Some(ExclusionReasonV1::CalibrationMalformed),
+            diagnostic: Some(format!(
+                "invalid calibration artifact {}: {error}",
+                path.display()
+            )),
+        },
+    }
+}
+
+/// Digest every regular file below a task directory using a deterministic
+/// filename-length/content-length framing. This covers every oracle input the
+/// bench loader may consume without making relocation part of identity.
+fn task_artifact_digest(task_dir: &Path) -> LoadedArtifact<()> {
+    fn visit(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                visit(&entry.path(), files)?;
+            } else if file_type.is_file() {
+                files.push(entry.path());
+            } else if file_type.is_symlink() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "symlinked task artifact refused: {}",
+                        entry.path().display()
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    let mut files = Vec::new();
+    if let Err(error) = visit(task_dir, &mut files) {
+        return LoadedArtifact {
+            digest: None,
+            value: None,
+            reason: Some(ExclusionReasonV1::ArtifactMissing),
+            diagnostic: Some(format!(
+                "cannot enumerate task artifacts under {}: {error}",
+                task_dir.display()
+            )),
+        };
+    }
+    files.sort();
+    let mut framed = Vec::new();
+    for path in files {
+        let relative = path.strip_prefix(task_dir).expect("visited below root");
+        let loaded = read_artifact(&path);
+        let Some(bytes) = loaded.value else {
+            return LoadedArtifact {
+                digest: loaded.digest,
+                value: None,
+                reason: loaded.reason,
+                diagnostic: loaded.diagnostic,
+            };
+        };
+        let Some(name) = relative.to_str() else {
+            return LoadedArtifact {
+                digest: None,
+                value: None,
+                reason: Some(ExclusionReasonV1::ArtifactMalformed),
+                diagnostic: Some(format!(
+                    "task artifact path {:?} is not valid UTF-8",
+                    relative.as_os_str()
+                )),
+            };
+        };
+        if framed
+            .len()
+            .saturating_add(name.len())
+            .saturating_add(bytes.len())
+            .saturating_add(16)
+            > MAX_EVIDENCE_BYTES as usize
+        {
+            return LoadedArtifact {
+                digest: None,
+                value: None,
+                reason: Some(ExclusionReasonV1::ArtifactMalformed),
+                diagnostic: Some(format!(
+                    "task artifact bundle under {} exceeds {MAX_EVIDENCE_BYTES} byte cap",
+                    task_dir.display()
+                )),
+            };
+        }
+        framed.extend_from_slice(&(name.len() as u64).to_be_bytes());
+        framed.extend_from_slice(name.as_bytes());
+        framed.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+        framed.extend_from_slice(&bytes);
+    }
+    LoadedArtifact {
+        digest: Some(Sha256Digest::of_bytes(&framed)),
+        value: Some(()),
+        reason: None,
+        diagnostic: None,
+    }
+}
+
+struct RepoEvidence {
+    calibration: LoadedArtifact<CalibrationEvidenceV1>,
+    repo_config: LoadedArtifact<Vec<u8>>,
+    harness_config: LoadedArtifact<Vec<u8>>,
+    index: Option<LoadedArtifact<Vec<u8>>>,
+}
+
+fn first_evidence_problem(
+    values: &[(&LoadedArtifact<Vec<u8>>, ExclusionReasonV1)],
+) -> Option<(ExclusionReasonV1, String)> {
+    values.iter().find_map(|(loaded, fallback)| {
+        loaded.value.is_none().then(|| {
+            (
+                loaded.reason.unwrap_or(*fallback),
+                loaded
+                    .diagnostic
+                    .clone()
+                    .unwrap_or_else(|| "required evidence unavailable".to_string()),
+            )
+        })
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_observation(
+    repo: &RepoManifest,
+    seed: u64,
+    arm: ArmIdentity,
+    run_dir: &Path,
+    task_id: &str,
+    outcome: Option<Result<bool, String>>,
+    tasks_dir: &Path,
+    repo_evidence: &RepoEvidence,
+    answer_ctx: Option<&mut AnswerContext>,
+    answer_context_error: Option<&str>,
+) -> Result<(MeasurementObservationV1, Option<String>)> {
+    let scoring = read_artifact(&scoring_path(run_dir, task_id));
+    let trace = read_artifact(&transcript_path(run_dir, task_id));
+    let oracle = task_artifact_digest(&tasks_dir.join(task_id));
+    let config = match arm {
+        ArmIdentity::Repo => &repo_evidence.repo_config,
+        ArmIdentity::Harness => &repo_evidence.harness_config,
+    };
+    let evidence = ArtifactDigestSetV1 {
+        scoring: scoring.digest.clone(),
+        oracle: oracle.digest.clone(),
+        trace: trace.digest.clone(),
+        index: repo_evidence
+            .index
+            .as_ref()
+            .and_then(|loaded| loaded.digest.clone()),
+        config: config.digest.clone(),
+        calibration: repo_evidence.calibration.digest.clone(),
+    };
+
+    let excluded =
+        |reason, diagnostic: String| (MeasurementStateV1::Excluded { reason }, diagnostic);
+    let (state, diagnostic) = match outcome {
+        None => excluded(
+            ExclusionReasonV1::ArmArtifactMissing,
+            format!("{arm:?} arm has no trial artifacts for task {task_id}"),
+        ),
+        Some(Err(diagnostic)) => excluded(ExclusionReasonV1::ArtifactMalformed, diagnostic),
+        Some(Ok(held_out_success)) => {
+            let required = [
+                (&scoring, ExclusionReasonV1::ArtifactMissing),
+                (&trace, ExclusionReasonV1::ArtifactMissing),
+                (config, ExclusionReasonV1::ArtifactMissing),
+            ];
+            if let Some((reason, diagnostic)) = first_evidence_problem(&required) {
+                excluded(reason, diagnostic)
+            } else if oracle.value.is_none() {
+                excluded(
+                    oracle.reason.unwrap_or(ExclusionReasonV1::ArtifactMissing),
+                    oracle
+                        .diagnostic
+                        .clone()
+                        .unwrap_or_else(|| "oracle evidence unavailable".to_string()),
+                )
+            } else if let Some(reason) = repo_evidence.calibration.reason {
+                excluded(
+                    reason,
+                    repo_evidence
+                        .calibration
+                        .diagnostic
+                        .clone()
+                        .unwrap_or_else(|| "calibration evidence unavailable".to_string()),
+                )
+            } else {
+                let calibration = repo_evidence
+                    .calibration
+                    .value
+                    .clone()
+                    .expect("reason-free calibration has a value");
+                if calibration.conclusion != CalibrationConclusion::Calibrated {
+                    excluded(
+                        ExclusionReasonV1::CalibrationNotEstablished,
+                        "calibration artifact conclusion is not calibrated".to_string(),
+                    )
+                } else if repo.task_shape == TaskShape::Edit {
+                    excluded(
+                        ExclusionReasonV1::MetricEvidenceMissing,
+                        "edit-shaped observation requires retrieval, invariant, mutation, and edit-locality evidence; degraded sentinels are forbidden".to_string(),
+                    )
+                } else if let Some(error) = answer_context_error {
+                    excluded(ExclusionReasonV1::MetricEvidenceMissing, error.to_string())
+                } else {
+                    let Some(ctx) = answer_ctx else {
+                        unreachable!("answer context or its error is present")
+                    };
+                    match ctx.observation_inputs(
+                        task_id,
+                        run_dir,
+                        match arm {
+                            ArmIdentity::Repo => "repo",
+                            ArmIdentity::Harness => "harness",
+                        },
+                    ) {
+                        Ok((trace_locality, trace_reach_depth)) => {
+                            let task = load_task(tasks_dir.join(task_id)).with_context(|| {
+                                format!("failed to load task {task_id} provenance")
+                            })?;
+                            (
+                                MeasurementStateV1::Measured {
+                                    held_out_success,
+                                    held_out_provenance: task.held_out_provenance(),
+                                    calibration,
+                                    metrics: Box::new(MeasurementMetricsV1::Answer(
+                                        AnswerMetricsV1 {
+                                            trace_locality: MetricValueV1::new(
+                                                TRACE_LOCALITY_DEFINITION_VERSION,
+                                                trace_locality,
+                                            ),
+                                            trace_reach_depth: MetricValueV1::new(
+                                                TRACE_REACH_DEPTH_DEFINITION_VERSION,
+                                                trace_reach_depth,
+                                            ),
+                                        },
+                                    )),
+                                },
+                                String::new(),
+                            )
+                        }
+                        Err(error) => excluded(
+                            ExclusionReasonV1::MetricComputationFailed,
+                            format!("{error:#}"),
+                        ),
+                    }
+                }
+            }
+        }
+    };
+    let observation = MeasurementObservationV1::new(
+        repo.repo_id.clone(),
+        repo.repo_commit.clone(),
+        task_id.to_string(),
+        seed,
+        arm,
+        evidence,
+        state,
+    )?;
+    Ok((observation, (!diagnostic.is_empty()).then_some(diagnostic)))
 }
 
 /// Assemble one repo's `RepoResult` over its fixed-seed runs, collecting the
@@ -279,7 +662,20 @@ fn build_repo(
     base_dir: &Path,
     k_runs: u32,
     mut answer_ctx: Option<AnswerContext>,
+    answer_context_error: Option<String>,
 ) -> Result<RepoOutcome> {
+    repo.repo_commit
+        .validate()
+        .with_context(|| format!("repo {}: invalid repo_commit", repo.repo_id))?;
+    let repo_evidence = RepoEvidence {
+        calibration: read_calibration(&base_dir.join(&repo.calibration_artifact)),
+        repo_config: read_artifact(&base_dir.join(&repo.repo_arm_config)),
+        harness_config: read_artifact(&base_dir.join(&repo.harness_arm_config)),
+        index: repo
+            .scip_index
+            .as_ref()
+            .map(|path| read_artifact(&base_dir.join(path))),
+    };
     if (repo.runs.len() as u32) < k_runs {
         bail!(
             "repo {}: manifest supplies {} run(s) but k_runs is {}; each repo needs \
@@ -334,6 +730,7 @@ fn build_repo(
     // Each run's admitted identical-pair ids (already sorted). Retained for EVERY
     // run, not just run 0, so the cross-run identity check below can compare them.
     let mut admitted_per_run: Vec<Vec<String>> = Vec::with_capacity(repo.runs.len());
+    let mut observations = Vec::new();
 
     for run in &repo.runs {
         // Arm paths in the manifest are resolved relative to the manifest file's
@@ -343,11 +740,12 @@ fn build_repo(
         let repo_arm = read_arm(&repo_arm_dir)?;
         let harness_arm = read_arm(&harness_arm_dir)?;
 
-        // Identical-pair candidates: present in BOTH arms.
-        let in_both: BTreeSet<&String> = repo_arm
-            .held_out
-            .keys()
-            .filter(|id| harness_arm.held_out.contains_key(*id))
+        // Observation candidates are the union across arms. A missing
+        // counterpart still emits an Excluded observation.
+        let candidates: BTreeSet<String> = repo_arm
+            .discovered()
+            .union(&harness_arm.discovered())
+            .cloned()
             .collect();
 
         // Record exclusions for THIS run: an un-clean dual result in either arm,
@@ -373,41 +771,105 @@ fn build_repo(
             });
         }
 
-        let mut ids: Vec<String> = in_both.into_iter().cloned().collect();
-        ids.sort();
-
-        let mut tasks: Vec<PairTask> = Vec::with_capacity(ids.len());
-        let mut admitted_ids: Vec<String> = Vec::with_capacity(ids.len());
-        for id in ids {
-            // Answer shape: real per-pair inputs from both arms' trial traces;
-            // a pair whose inputs cannot be computed is excluded with the
-            // reason (a pair the conventions cannot score is not evidence).
-            // Edit shape: degraded sentinels, flagged for abstention.
-            let convention_inputs = match answer_ctx.as_mut() {
-                Some(ctx) => match ctx.pair_inputs(&id, &repo_arm_dir, &harness_arm_dir) {
-                    Ok(inputs) => inputs,
-                    Err(e) => {
-                        excluded
-                            .entry(id)
-                            .or_insert_with(|| format!("seed {seed}: {e:#}"));
-                        continue;
-                    }
+        let mut tasks: Vec<PairTask> = Vec::with_capacity(candidates.len());
+        let mut admitted_ids: Vec<String> = Vec::with_capacity(candidates.len());
+        for id in candidates {
+            let repo_outcome = repo_arm
+                .held_out
+                .get(&id)
+                .copied()
+                .map(Ok)
+                .or_else(|| repo_arm.excluded.get(&id).cloned().map(Err));
+            let harness_outcome = harness_arm
+                .held_out
+                .get(&id)
+                .copied()
+                .map(Ok)
+                .or_else(|| harness_arm.excluded.get(&id).cloned().map(Err));
+            let (repo_observation, repo_diagnostic) = build_observation(
+                repo,
+                seed,
+                ArmIdentity::Repo,
+                &repo_arm_dir,
+                &id,
+                repo_outcome,
+                tasks_dir,
+                &repo_evidence,
+                answer_ctx.as_mut(),
+                answer_context_error.as_deref(),
+            )?;
+            let (harness_observation, harness_diagnostic) = build_observation(
+                repo,
+                seed,
+                ArmIdentity::Harness,
+                &harness_arm_dir,
+                &id,
+                harness_outcome,
+                tasks_dir,
+                &repo_evidence,
+                answer_ctx.as_mut(),
+                answer_context_error.as_deref(),
+            )?;
+            let convention_inputs = match (&repo_observation.state, &harness_observation.state) {
+                (
+                    MeasurementStateV1::Measured {
+                        metrics: repo_metrics,
+                        ..
+                    },
+                    MeasurementStateV1::Measured {
+                        metrics: harness_metrics,
+                        ..
+                    },
+                ) => match (&**repo_metrics, &**harness_metrics) {
+                    (
+                        MeasurementMetricsV1::Answer(repo_metrics),
+                        MeasurementMetricsV1::Answer(harness_metrics),
+                    ) => ConventionInputs::Answer {
+                        repo_trace_locality: repo_metrics.trace_locality.value,
+                        harness_trace_locality: harness_metrics.trace_locality.value,
+                        repo_trace_reach_depth: repo_metrics.trace_reach_depth.value,
+                        harness_trace_reach_depth: harness_metrics.trace_reach_depth.value,
+                    },
+                    _ => unreachable!("measured pair metrics share the manifest task shape"),
                 },
-                None => ConventionInputs::Edit {
-                    edit_locality: DEGRADED_EDIT_LOCALITY,
-                    mutation_depth: DEGRADED_MUTATION_DEPTH,
-                },
+                _ => {
+                    let diagnostic = repo_diagnostic
+                        .or(harness_diagnostic)
+                        .unwrap_or_else(|| "pair observation excluded".to_string());
+                    excluded
+                        .entry(id.clone())
+                        .or_insert_with(|| format!("seed {seed}: {diagnostic}"));
+                    observations.push(repo_observation);
+                    observations.push(harness_observation);
+                    continue;
+                }
             };
+            let (repo_success, harness_success) =
+                match (&repo_observation.state, &harness_observation.state) {
+                    (
+                        MeasurementStateV1::Measured {
+                            held_out_success: repo,
+                            ..
+                        },
+                        MeasurementStateV1::Measured {
+                            held_out_success: harness,
+                            ..
+                        },
+                    ) => (*repo, *harness),
+                    _ => unreachable!("convention inputs require measured observations"),
+                };
             tasks.push(PairTask {
-                // The crate treats task_id as an opaque label; a stable per-repo
-                // enumeration keeps it deterministic and inspectable.
-                task_id: tasks.len() as u64,
+                task_id: id.clone(),
+                repo_observation_id: repo_observation.id.to_string(),
+                harness_observation_id: harness_observation.id.to_string(),
                 is_identical_pair: true,
-                repo_held_out_success: repo_arm.held_out[&id],
-                harness_held_out_success: harness_arm.held_out[&id],
+                repo_held_out_success: repo_success,
+                harness_held_out_success: harness_success,
                 convention_inputs,
             });
             admitted_ids.push(id);
+            observations.push(repo_observation);
+            observations.push(harness_observation);
         }
 
         admitted_per_run.push(admitted_ids);
@@ -425,13 +887,16 @@ fn build_repo(
     // below: a zero-pair run is an ABSENCE of evidence, handled by dropping the
     // repo, not a misaligned-identity integrity failure.
     if min_pairs == 0 {
-        return Ok(RepoOutcome::Dropped(DroppedRepo {
-            repo_id: repo.repo_id.clone(),
-            excluded_tasks: excluded
-                .into_iter()
-                .map(|(task_id, reason)| ExcludedTask { task_id, reason })
-                .collect(),
-        }));
+        return Ok(RepoOutcome::Dropped(
+            DroppedRepo {
+                repo_id: repo.repo_id.clone(),
+                excluded_tasks: excluded
+                    .into_iter()
+                    .map(|(task_id, reason)| ExcludedTask { task_id, reason })
+                    .collect(),
+            },
+            observations,
+        ));
     }
 
     // Every run must admit the SAME identical-pair task identities, not merely
@@ -478,10 +943,15 @@ fn build_repo(
 
     let confidence: Confidence = repo.confidence.into();
     let holdout_size = min_pairs as u32;
+    let calibrated = repo_evidence
+        .calibration
+        .value
+        .as_ref()
+        .is_some_and(|evidence| evidence.conclusion == CalibrationConclusion::Calibrated);
     let eligibility = Eligibility {
         confidence,
         native_span,
-        calibrated: repo.calibrated,
+        calibrated,
     };
     // Reuse the gate's own predicate so the build report's `eligible` flag cannot
     // drift from the eligibility rule `aoa falsify` actually applies.
@@ -497,7 +967,7 @@ fn build_repo(
         holdout_size,
         native_span,
         confidence,
-        calibrated: repo.calibrated,
+        calibrated,
         eligible,
         excluded_tasks,
     };
@@ -507,7 +977,11 @@ fn build_repo(
         runs,
         holdout_size,
     };
-    Ok(RepoOutcome::Included(Box::new((result, build))))
+    Ok(RepoOutcome::Included(Box::new((
+        result,
+        build,
+        observations,
+    ))))
 }
 
 /// Validate the manifest's task-shape declarations: one uniform shape per
@@ -545,7 +1019,7 @@ fn build(
     manifest: &Manifest,
     tasks_dir: &Path,
     base_dir: &Path,
-) -> Result<(FalsifyInput, BuildReport)> {
+) -> Result<(FalsifyInput, BuildReport, Vec<MeasurementObservationV1>)> {
     if manifest.repos.is_empty() {
         bail!("manifest declares no repos");
     }
@@ -555,30 +1029,41 @@ fn build(
     let mut repo_builds = Vec::new();
     let mut dropped_repos = Vec::new();
     let mut notes = Vec::new();
+    let mut observations = Vec::new();
 
     for repo in &manifest.repos {
-        let answer_ctx = match &repo.scip_index {
+        let (answer_ctx, answer_context_error) = match &repo.scip_index {
             // validated_shape guarantees: Some(index) <=> answer shape.
-            Some(index) => Some(AnswerContext::load(
-                &repo.repo_id,
-                &base_dir.join(index),
-                tasks_dir,
-            )?),
-            None => None,
+            Some(index) => {
+                match AnswerContext::load(&repo.repo_id, &base_dir.join(index), tasks_dir) {
+                    Ok(context) => (Some(context), None),
+                    Err(error) => (None, Some(format!("{error:#}"))),
+                }
+            }
+            None => (None, None),
         };
-        match build_repo(repo, tasks_dir, base_dir, manifest.k_runs, answer_ctx)? {
+        match build_repo(
+            repo,
+            tasks_dir,
+            base_dir,
+            manifest.k_runs,
+            answer_ctx,
+            answer_context_error,
+        )? {
             RepoOutcome::Included(included) => {
-                let (result, build) = *included;
+                let (result, build, repo_observations) = *included;
                 repos.push(result);
                 repo_builds.push(build);
+                observations.extend(repo_observations);
             }
-            RepoOutcome::Dropped(dropped) => {
+            RepoOutcome::Dropped(dropped, repo_observations) => {
                 notes.push(format!(
                     "repo {}: no identical-pair tasks across both arms; excluded from the input \
                      (per-task reasons under dropped_repos)",
                     dropped.repo_id
                 ));
                 dropped_repos.push(dropped);
+                observations.extend(repo_observations);
             }
         }
     }
@@ -615,8 +1100,12 @@ fn build(
         conventions,
     };
     let input = FalsifyInput { repos, config };
-    let report = BuildReport {
+    let mut report = BuildReport {
         out_path: String::new(), // filled by the caller once the path is known
+        observations_path: String::new(),
+        observations_sha256: String::new(),
+        observation_count: observations.len(),
+        observation_ids: Vec::new(),
         repo_count: repo_builds.len(),
         total_identical_pairs,
         task_shape: shape,
@@ -625,7 +1114,19 @@ fn build(
         dropped_repos,
         notes,
     };
-    Ok((input, report))
+    observations.sort_by(|left, right| {
+        (&left.repo_id, left.seed, &left.original_task_id, left.arm).cmp(&(
+            &right.repo_id,
+            right.seed,
+            &right.original_task_id,
+            right.arm,
+        ))
+    });
+    report.observation_ids = observations
+        .iter()
+        .map(|observation| observation.id.to_string())
+        .collect();
+    Ok((input, report, observations))
 }
 
 /// Path the build report is written to: the `--out` path with a `.build.json`
@@ -634,22 +1135,65 @@ fn build_report_path(out: &Path) -> PathBuf {
     out.with_extension("build.json")
 }
 
+fn observations_path(out: &Path) -> PathBuf {
+    out.with_extension("observations.jsonl")
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("output path must have a UTF-8 file name")?;
+    let temporary = parent.join(format!(
+        ".{name}.{}.{}.tmp",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result = (|| -> Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .with_context(|| format!("failed to create {}", temporary.display()))?;
+        file.write_all(bytes)
+            .with_context(|| format!("failed to write {}", temporary.display()))?;
+        file.sync_all()
+            .with_context(|| format!("failed to sync {}", temporary.display()))?;
+        std::fs::rename(&temporary, path)
+            .with_context(|| format!("failed to install {}", path.display()))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
 /// Run `aoa eval experiment`.
 pub(crate) fn run(args: &ExperimentArgs) -> Result<i32> {
     let manifest: Manifest = load_json_capped(&args.manifest, "manifest")?;
 
     let base_dir = args.manifest.parent().unwrap_or_else(|| Path::new("."));
-    let (input, mut report) = build(&manifest, &args.tasks, base_dir)?;
+    let (input, mut report, observations) = build(&manifest, &args.tasks, base_dir)?;
 
     let input_json = serde_json::to_string_pretty(&input)?;
-    std::fs::write(&args.out, &input_json)
-        .with_context(|| format!("failed to write {}", args.out.display()))?;
 
+    let mut observations_jsonl = Vec::new();
+    for observation in &observations {
+        serde_json::to_writer(&mut observations_jsonl, observation)?;
+        observations_jsonl.push(b'\n');
+    }
+    let observation_path = observations_path(&args.out);
     report.out_path = args.out.display().to_string();
+    report.observations_path = observation_path.display().to_string();
+    report.observations_sha256 = Sha256Digest::of_bytes(&observations_jsonl).to_string();
     let report_path = build_report_path(&args.out);
     let report_json = serde_json::to_string_pretty(&report)?;
-    std::fs::write(&report_path, format!("{report_json}\n"))
-        .with_context(|| format!("failed to write {}", report_path.display()))?;
+    write_atomic(&args.out, input_json.as_bytes())?;
+    write_atomic(&observation_path, &observations_jsonl)?;
+    write_atomic(&report_path, format!("{report_json}\n").as_bytes())?;
 
     if args.json {
         print_json(&report)?;
@@ -686,7 +1230,7 @@ fn render_human(report: &BuildReport, report_path: &Path) -> String {
                 out,
                 "      excluded {}: {}",
                 escape_terminal(&ex.task_id),
-                ex.reason
+                escape_terminal(&ex.reason)
             );
         }
     }
@@ -701,7 +1245,7 @@ fn render_human(report: &BuildReport, report_path: &Path) -> String {
                 out,
                 "      excluded {}: {}",
                 escape_terminal(&ex.task_id),
-                ex.reason
+                escape_terminal(&ex.reason)
             );
         }
     }
@@ -758,6 +1302,55 @@ mod tests {
         })
         .unwrap();
         assert!(json["reason"].as_str().unwrap().contains('\u{1b}'));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn human_report_escapes_external_exclusion_diagnostics() {
+        let report = BuildReport {
+            out_path: "out.json".to_string(),
+            observations_path: "out.observations.jsonl".to_string(),
+            observations_sha256: "a".repeat(64),
+            observation_count: 1,
+            observation_ids: vec!["b".repeat(64)],
+            repo_count: 0,
+            total_identical_pairs: 0,
+            task_shape: TaskShape::Answer,
+            convention_inputs_degraded: false,
+            repos: Vec::new(),
+            dropped_repos: vec![DroppedRepo {
+                repo_id: "repo".to_string(),
+                excluded_tasks: vec![ExcludedTask {
+                    task_id: "task".to_string(),
+                    reason: "boom\u{1b}[31mRED".to_string(),
+                }],
+            }],
+            notes: Vec::new(),
+        };
+        let rendered = render_human(&report, Path::new("out.build.json"));
+        assert!(!rendered.contains('\u{1b}'));
+        assert!(rendered.contains(r"\u{1b}"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn evidence_reader_refuses_a_symlink_without_hashing_its_target() {
+        use std::os::unix::fs::symlink;
+
+        let dir = std::env::temp_dir().join(format!(
+            "aoa-experiment-symlink-evidence-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let victim = dir.join("victim.json");
+        let planted = dir.join("config.json");
+        std::fs::write(&victim, br#"{"secret":"outside"}"#).unwrap();
+        symlink(&victim, &planted).unwrap();
+
+        let loaded = read_artifact(&planted);
+        assert!(loaded.value.is_none());
+        assert!(loaded.digest.is_none());
+        assert_eq!(loaded.reason, Some(ExclusionReasonV1::ArtifactMalformed));
         std::fs::remove_dir_all(&dir).ok();
     }
 

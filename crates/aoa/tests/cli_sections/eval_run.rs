@@ -190,6 +190,43 @@ fn eval_run_excludes_a_trial_whose_scorer_errored() {
     }
 }
 
+#[test]
+fn eval_run_uses_the_artifact_leg_as_held_out_for_dual_composite() {
+    let dir = TempDir::new().expect("tempdir");
+    let run = dir.path().join("run");
+    let id = "native-consensus-001";
+    let trial = run.join(id);
+    std::fs::create_dir_all(&trial).expect("trial dir");
+    std::fs::copy(
+        run_dir().join(id).join("agent_output.txt"),
+        trial.join("agent_output.txt"),
+    )
+    .expect("copy transcript");
+    std::fs::write(
+        trial.join("scoring.json"),
+        br#"{
+            "scorer_family": "dual_composite",
+            "passed": false,
+            "passed_direct": false,
+            "passed_artifact": true
+        }"#,
+    )
+    .expect("write scoring");
+
+    let output = aoa()
+        .args(["eval", "run", "--json", "--codeprobe-run"])
+        .arg(&run)
+        .arg("--tasks")
+        .arg(tasks_dir())
+        .output()
+        .expect("run");
+
+    assert!(output.status.success());
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert_eq!(parsed["records"][0]["held_out_success"], true);
+    assert_eq!(parsed["records"][0]["counted_as_success"], true);
+}
+
 // A trial dir whose name is not valid UTF-8 cannot become an addressable task
 // id. Eval-run reports that trial as an error while preserving records from
 // valid siblings; pairing callers retain discover_tasks' fail-closed behavior.

@@ -1,19 +1,16 @@
 use super::*;
+use sha2::Digest;
 
 // --- aoa-dhk: R0 falsification as a codeprobe experiment ----------------------
 
-// AC2 SMOKE: the full pipeline runs end-to-end on a fixture experiment (1 repo /
-// 1 identical-pair task across two arms) and emits falsification.json with a
-// verdict field. With a single repo the gate cannot establish a cross-repo
-// majority, so the verdict is an honest `inconclusive` carrying the
-// `too_few_repos` precondition discriminator — never mistakable for a real
-// 5-repo abstention. AC4: codeprobe bias warnings are surfaced alongside.
+// Edit-shaped runs cannot honestly supply the four required metrics yet. The
+// builder emits content-addressed exclusions for every arm candidate rather
+// than laundering the historical degraded sentinels into measured evidence.
 #[test]
-fn experiment_pipeline_smoke_emits_verdict_and_surfaces_bias() {
+fn experiment_edit_shape_emits_observations_but_no_measured_pairs() {
     let dir = TempDir::new().expect("tempdir");
     let input = dir.path().join("falsify_input.json");
     let build_meta = dir.path().join("falsify_input.build.json");
-    let falsification = dir.path().join("falsification.json");
 
     // Step 1: build the FalsifyInput from the experiment's paired arms.
     aoa()
@@ -29,48 +26,22 @@ fn experiment_pipeline_smoke_emits_verdict_and_surfaces_bias() {
     let build: Value =
         serde_json::from_str(&std::fs::read_to_string(&build_meta).expect("build report written"))
             .expect("valid build json");
-    assert_eq!(build["repo_count"], 1);
-    assert_eq!(build["total_identical_pairs"], 1);
+    assert_eq!(build["repo_count"], 0);
+    assert_eq!(build["total_identical_pairs"], 0);
+    assert_eq!(build["observation_count"], 8);
     assert_eq!(build["convention_inputs_degraded"], true);
-    let repo0 = &build["repos"][0];
-    assert_eq!(repo0["identical_pairs"], 1);
-    assert_eq!(
-        repo0["eligible"], true,
-        "native+high+calibrated repo is eligible"
-    );
-    // H4: the task present only in the repo arm is excluded as a non-pair.
-    let excluded = repo0["excluded_tasks"].as_array().expect("excluded array");
+    let excluded = build["dropped_repos"][0]["excluded_tasks"]
+        .as_array()
+        .expect("excluded array");
     assert!(
         excluded.iter().any(|e| e["task_id"] == "solo-only-001"),
         "presence-mismatch task must be recorded as excluded, got {excluded:?}"
     );
-
-    // Step 2: run the gate over the built input, with bias warnings attached.
-    aoa()
-        .args(["falsify", "--repos"])
-        .arg(&input)
-        .arg("--build-meta")
-        .arg(&build_meta)
-        .arg("--bias-warnings")
-        .arg(fixture("experiment_aggregate.json"))
-        .arg("--out")
-        .arg(&falsification)
-        .assert()
-        // A precondition-driven verdict is a non-usable result: non-zero exit.
-        .failure();
-
-    let out: Value =
-        serde_json::from_str(&std::fs::read_to_string(&falsification).expect("falsification.json"))
-            .expect("valid json");
-    assert_eq!(out["verdict"], "inconclusive");
-    assert_eq!(out["precondition_unmet"], "too_few_repos");
-    // AC4: codeprobe bias warnings surfaced alongside the verdict, and the
-    // no_independent_baseline warning flagged as gate-invalidating.
-    let warnings = out["bias_warnings"]
-        .as_array()
-        .expect("bias warnings surfaced");
-    assert_eq!(warnings.len(), 2);
-    assert_eq!(out["bias_gate_invalidating"], true);
+    let observations = std::fs::read_to_string(dir.path().join("falsify_input.observations.jsonl"))
+        .expect("sidecar");
+    assert!(observations
+        .lines()
+        .all(|line| line.contains("\"status\":\"excluded\"")));
 }
 
 // Answer-task conventions (pre-registered 2026-07-04, aoa-dhk.1): an
@@ -85,6 +56,7 @@ fn experiment_answer_shape_computes_real_convention_inputs() {
     let dir = TempDir::new().expect("tempdir");
     let input = dir.path().join("falsify_input.json");
     let build_meta = dir.path().join("falsify_input.build.json");
+    let observations_path = dir.path().join("falsify_input.observations.jsonl");
     let falsification = dir.path().join("falsification.json");
 
     aoa()
@@ -106,6 +78,26 @@ fn experiment_answer_shape_computes_real_convention_inputs() {
         "every admitted pair carries real inputs, so the flag is computed false"
     );
     assert_eq!(build["repos"][0]["identical_pairs"], 1);
+    assert_eq!(build["observation_count"], 12);
+    assert_eq!(build["observation_ids"].as_array().unwrap().len(), 12);
+    assert_eq!(
+        build["observations_path"],
+        observations_path.display().to_string()
+    );
+    let observation_bytes = std::fs::read(&observations_path).expect("observation sidecar");
+    assert_eq!(
+        build["observations_sha256"],
+        format!("{:x}", sha2::Sha256::digest(&observation_bytes))
+    );
+    let observations: Vec<Value> = String::from_utf8(observation_bytes)
+        .expect("UTF-8 JSONL")
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("observation JSON"))
+        .collect();
+    assert_eq!(observations.len(), 12);
+    assert!(observations
+        .iter()
+        .all(|observation| observation["id"].as_str().unwrap().len() == 64));
     let excluded = build["repos"][0]["excluded_tasks"]
         .as_array()
         .expect("excluded array");
@@ -129,6 +121,16 @@ fn experiment_answer_shape_computes_real_convention_inputs() {
         serde_json::from_str(&std::fs::read_to_string(&input).expect("input written"))
             .expect("valid input json");
     let task = &parsed["repos"][0]["runs"][0]["tasks"][0];
+    assert_eq!(task["task_id"], "comprehension-boolean-000");
+    for field in ["repo_observation_id", "harness_observation_id"] {
+        let id = task[field].as_str().expect("observation id");
+        assert!(
+            observations
+                .iter()
+                .any(|observation| observation["id"] == id),
+            "{field} must reference the emitted sidecar"
+        );
+    }
     let inputs = &task["convention_inputs"];
     assert_eq!(inputs["family"], "answer");
     assert_eq!(inputs["repo_trace_locality"], 1.0);
@@ -166,6 +168,80 @@ fn experiment_answer_shape_computes_real_convention_inputs() {
     );
 }
 
+#[test]
+fn experiment_missing_calibration_is_excluded_data_not_a_command_failure() {
+    let dir = TempDir::new().expect("tempdir");
+    let fixture_dir = fixture("experiment_answer");
+    let mut manifest: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture_dir.join("manifest.json")).expect("manifest"),
+    )
+    .expect("manifest JSON");
+    let repo = &mut manifest["repos"][0];
+    repo["calibration_artifact"] = Value::String(
+        dir.path()
+            .join("missing-calibration.json")
+            .display()
+            .to_string(),
+    );
+    for field in ["repo_arm_config", "harness_arm_config", "scip_index"] {
+        let relative = repo[field].as_str().expect("relative path");
+        repo[field] = Value::String(fixture_dir.join(relative).display().to_string());
+    }
+    for run in repo["runs"].as_array_mut().expect("runs") {
+        for field in ["repo_arm", "harness_arm"] {
+            let relative = run[field].as_str().expect("relative run path");
+            run[field] = Value::String(fixture_dir.join(relative).display().to_string());
+        }
+    }
+    let manifest_path = dir.path().join("manifest.json");
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).expect("serialize"),
+    )
+    .expect("write manifest");
+
+    aoa()
+        .args(["eval", "experiment", "--manifest"])
+        .arg(&manifest_path)
+        .arg("--tasks")
+        .arg(fixture("answer_tasks"))
+        .arg("--out")
+        .arg(dir.path().join("falsify_input.json"))
+        .assert()
+        .success();
+
+    let build: Value = serde_json::from_slice(
+        &std::fs::read(dir.path().join("falsify_input.build.json")).expect("build report"),
+    )
+    .expect("build JSON");
+    assert_eq!(build["repo_count"], 0);
+    let observations = std::fs::read_to_string(dir.path().join("falsify_input.observations.jsonl"))
+        .expect("sidecar");
+    assert!(observations
+        .lines()
+        .all(|line| line.contains("\"reason\":\"calibration_missing\"")));
+}
+
+#[test]
+fn experiment_observation_sidecar_is_byte_reproducible() {
+    let dir = TempDir::new().expect("tempdir");
+    let run = |name: &str| {
+        let out = dir.path().join(format!("{name}.json"));
+        aoa()
+            .args(["eval", "experiment", "--manifest"])
+            .arg(fixture("experiment_answer/manifest.json"))
+            .arg("--tasks")
+            .arg(fixture("answer_tasks"))
+            .arg("--out")
+            .arg(&out)
+            .assert()
+            .success();
+        std::fs::read(out.with_extension("observations.jsonl")).expect("sidecar")
+    };
+
+    assert_eq!(run("first"), run("second"));
+}
+
 /// Writes `manifest_json` to a temp dir and runs the experiment builder over
 /// it against the `answer_tasks` fixture, expecting failure; callers assert
 /// on stderr.
@@ -192,7 +268,7 @@ fn experiment_answer_shape_without_index_fails_loud() {
         r#"{
           "k_runs": 3, "min_holdout_size": 1,
           "repos": [{
-            "repo_id": "sample/answers", "confidence": "high", "calibrated": true,
+            "repo_id": "sample/answers", "confidence": "high", "repo_commit": {"algorithm":"sha1","hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, "calibration_artifact":"calibration.json", "repo_arm_config":"repo-config.json", "harness_arm_config":"harness-config.json",
             "task_shape": "answer",
             "runs": [
               { "seed": 1, "repo_arm": "seed1/repo_arm", "harness_arm": "seed1/harness_arm" },
@@ -211,7 +287,7 @@ fn experiment_answer_shape_without_index_fails_loud() {
 // of `k_runs`. Rationale for the strictness lives on the Manifest doc.
 #[test]
 fn experiment_manifest_rejects_unknown_fields_at_every_boundary() {
-    let repo = r#""repo_id": "sample/repo", "confidence": "high", "calibrated": true"#;
+    let repo = r#""repo_id": "sample/repo", "confidence": "high", "repo_commit": {"algorithm":"sha1","hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, "calibration_artifact":"calibration.json", "repo_arm_config":"repo-config.json", "harness_arm_config":"harness-config.json""#;
     let run = r#""seed": 1, "repo_arm": "seed1/repo_arm", "harness_arm": "seed1/harness_arm""#;
     let cases = [
         (
@@ -244,17 +320,15 @@ fn experiment_manifest_rejects_unknown_fields_at_every_boundary() {
     }
 }
 
-// The strictness above must not reject the documented R11 attestation key
-// (docs/r0_runbook.md § "R11 scope note" tells answer-shape operators to
-// declare `calibrated_basis`). Reaching the post-parse `requires scip_index`
-// diagnostic proves the manifest deserialized cleanly with the key present.
+// The old free-text attestation is no longer accepted: calibration now names a
+// typed artifact whose raw bytes enter every observation identity.
 #[test]
-fn experiment_manifest_accepts_documented_calibrated_basis_key() {
+fn experiment_manifest_rejects_legacy_calibrated_basis_key() {
     experiment_manifest_failure(
         r#"{
           "k_runs": 3, "min_holdout_size": 1,
           "repos": [{
-            "repo_id": "sample/answers", "confidence": "high", "calibrated": true,
+            "repo_id": "sample/answers", "confidence": "high", "repo_commit": {"algorithm":"sha1","hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, "calibration_artifact":"calibration.json", "repo_arm_config":"repo-config.json", "harness_arm_config":"harness-config.json",
             "calibrated_basis": "consensus-verified-answer-oracles-r11-scope-note-2026-07-05",
             "task_shape": "answer",
             "runs": [
@@ -263,8 +337,8 @@ fn experiment_manifest_accepts_documented_calibrated_basis_key() {
           }]
         }"#,
     )
-    .stderr(predicate::str::contains("requires scip_index"))
-    .stderr(predicate::str::contains("unknown field").not());
+    .stderr(predicate::str::contains("unknown field"))
+    .stderr(predicate::str::contains("calibrated_basis"));
 }
 
 // aoa-g2g5: R0 determinism evidence is only valid across INDEPENDENT,
@@ -280,7 +354,7 @@ fn experiment_rejects_duplicate_seed_across_runs() {
         r#"{
           "k_runs": 3, "min_holdout_size": 1,
           "repos": [{
-            "repo_id": "sample/dup-seed", "confidence": "high", "calibrated": true,
+            "repo_id": "sample/dup-seed", "confidence": "high", "repo_commit": {"algorithm":"sha1","hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, "calibration_artifact":"calibration.json", "repo_arm_config":"repo-config.json", "harness_arm_config":"harness-config.json",
             "runs": [
               { "seed": 1, "repo_arm": "seed1/repo_arm", "harness_arm": "seed1/harness_arm" },
               { "seed": 1, "repo_arm": "seed2/repo_arm", "harness_arm": "seed2/harness_arm" },
@@ -303,7 +377,7 @@ fn experiment_rejects_reused_run_directory() {
         r#"{
           "k_runs": 3, "min_holdout_size": 1,
           "repos": [{
-            "repo_id": "sample/dup-dir", "confidence": "high", "calibrated": true,
+            "repo_id": "sample/dup-dir", "confidence": "high", "repo_commit": {"algorithm":"sha1","hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, "calibration_artifact":"calibration.json", "repo_arm_config":"repo-config.json", "harness_arm_config":"harness-config.json",
             "runs": [
               { "seed": 1, "repo_arm": "seed1/repo_arm", "harness_arm": "seed1/harness_arm" },
               { "seed": 2, "repo_arm": "seed1/repo_arm", "harness_arm": "seed2/harness_arm" },
@@ -328,7 +402,7 @@ fn experiment_rejects_aliased_run_directory() {
         r#"{{
           "k_runs": 3, "min_holdout_size": 1,
           "repos": [{{
-            "repo_id": "sample/alias", "confidence": "high", "calibrated": true,
+            "repo_id": "sample/alias", "confidence": "high", "repo_commit": {{"algorithm":"sha1","hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}, "calibration_artifact":"calibration.json", "repo_arm_config":"repo-config.json", "harness_arm_config":"harness-config.json",
             "runs": [
               {{ "seed": 1, "repo_arm": "{smoke}/seed1/repo_arm", "harness_arm": "{smoke}/seed1/harness_arm" }},
               {{ "seed": 2, "repo_arm": "{smoke}/seed2/../seed1/repo_arm", "harness_arm": "{smoke}/seed2/harness_arm" }},
@@ -341,16 +415,13 @@ fn experiment_rejects_aliased_run_directory() {
         .stderr(predicate::str::contains("used by more than one run/arm"));
 }
 
-// The core aoa-g2g5 case: two runs admit the SAME NUMBER of identical pairs but
-// DIFFERENT task identities (run 0/2 admit `alpha`, run 1 admits `beta`). The
-// old min/max-count check passed this (counts all equal 1); the identity check
-// must fail it, naming the missing/extra ids, because the positional PairTask
-// ids and run-indexed determinism check would otherwise compare mismatched
-// tasks.
+// The divergent fixture is edit-shaped and therefore has no measured metric
+// evidence. It is dropped as excluded data before cross-seed identity can be
+// claimed; positional task ordinals are never manufactured.
 #[test]
-fn experiment_rejects_equal_count_different_task_identities() {
+fn experiment_drops_divergent_unmeasured_edit_runs() {
     let dir = TempDir::new().expect("tempdir");
-    aoa()
+    let output = aoa()
         .args(["eval", "experiment", "--manifest"])
         .arg(fixture("experiment_divergent/manifest.json"))
         .arg("--tasks")
@@ -358,12 +429,12 @@ fn experiment_rejects_equal_count_different_task_identities() {
         .arg("--out")
         .arg(dir.path().join("falsify_input.json"))
         .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "admits a different identical-pair set than run 0",
-        ))
-        .stderr(predicate::str::contains("\"alpha\""))
-        .stderr(predicate::str::contains("\"beta\""));
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let rendered = String::from_utf8(output).expect("human output");
+    assert!(rendered.contains("DROPPED: no identical pairs"));
 }
 
 // H2/AC4: given a real >=5-repo input but a build report flagging degraded

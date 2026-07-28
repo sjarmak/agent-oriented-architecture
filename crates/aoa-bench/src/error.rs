@@ -94,6 +94,10 @@ pub enum BenchError {
     )]
     MissingScoringLeg { task_id: String, leg: &'static str },
 
+    /// The scorer itself failed before its outcome could be trusted.
+    #[error("task {}: scorer errored, cannot trust its outcome: {}", raw(.task_id), raw(.message))]
+    ScoringErrored { task_id: String, message: String },
+
     /// The run directory itself could not be enumerated. Distinct from [`Self::Io`]
     /// so the message still says *what* was being walked — `eval r0b` surfaces
     /// this straight to the operator with no context of its own, where a bare

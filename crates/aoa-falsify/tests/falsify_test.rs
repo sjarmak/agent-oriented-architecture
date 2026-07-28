@@ -19,7 +19,9 @@ fn eligible() -> Eligibility {
 /// inputs (mid locality, depth 1) that every default convention admits.
 fn pair(task_id: u64, repo_ok: bool, harness_ok: bool) -> PairTask {
     PairTask {
-        task_id,
+        task_id: format!("task-{task_id}"),
+        repo_observation_id: format!("repo-observation-{task_id}"),
+        harness_observation_id: format!("harness-observation-{task_id}"),
         is_identical_pair: true,
         repo_held_out_success: repo_ok,
         harness_held_out_success: harness_ok,
@@ -34,7 +36,9 @@ fn pair(task_id: u64, repo_ok: bool, harness_ok: bool) -> PairTask {
 /// 0 in both arms, admitted by every pre-registered answer convention.
 fn answer_pair(task_id: u64, repo_ok: bool, harness_ok: bool) -> PairTask {
     PairTask {
-        task_id,
+        task_id: format!("task-{task_id}"),
+        repo_observation_id: format!("repo-observation-{task_id}"),
+        harness_observation_id: format!("harness-observation-{task_id}"),
         is_identical_pair: true,
         repo_held_out_success: repo_ok,
         harness_held_out_success: harness_ok,
@@ -206,7 +210,7 @@ fn only_identical_pair_tasks_contribute() {
         .map(|i| RepoResult {
             repo_id: format!("r{i}"),
             eligibility: eligible(),
-            runs: stable_runs(3, vec![pair(1, true, false), non_paired]),
+            runs: stable_runs(3, vec![pair(1, true, false), non_paired.clone()]),
             holdout_size: 40,
         })
         .collect();
@@ -563,7 +567,7 @@ fn answer_total_exclusion_under_depth_k_is_inconclusive_not_proceed() {
         ..answer_pair(1, true, false)
     };
     let repos: Vec<RepoResult> = (0..5)
-        .map(|i| answer_repo(&format!("r{i}"), vec![saturated]))
+        .map(|i| answer_repo(&format!("r{i}"), vec![saturated.clone()]))
         .collect();
 
     let report = falsify(&answer_input(repos)).expect("falsify runs");
@@ -594,7 +598,7 @@ fn edit_total_exclusion_under_depth_k_is_inconclusive_not_proceed() {
         .map(|i| RepoResult {
             repo_id: format!("r{i}"),
             eligibility: eligible(),
-            runs: stable_runs(3, vec![deep]),
+            runs: stable_runs(3, vec![deep.clone()]),
             holdout_size: 40,
         })
         .collect();
@@ -661,7 +665,12 @@ fn answer_depth_flip_downgrades_to_inconclusive() {
     };
     let shallow_harness_win = answer_pair(2, false, true);
     let repos: Vec<RepoResult> = (0..5)
-        .map(|i| answer_repo(&format!("r{i}"), vec![deep_repo_win, shallow_harness_win]))
+        .map(|i| {
+            answer_repo(
+                &format!("r{i}"),
+                vec![deep_repo_win.clone(), shallow_harness_win.clone()],
+            )
+        })
         .collect();
 
     let report = falsify(&answer_input(repos)).expect("falsify runs");

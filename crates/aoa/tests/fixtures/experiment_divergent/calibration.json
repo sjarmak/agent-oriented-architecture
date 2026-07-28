@@ -1,0 +1,8 @@
+{
+  "method": "external_outcome_correlation",
+  "protocol_version": "r11",
+  "corpus_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "sample_size": 20,
+  "criteria": ["rho-significant"],
+  "conclusion": "calibrated"
+}

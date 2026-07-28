@@ -326,9 +326,9 @@ pub struct R0bArgs {
 
 #[derive(Debug, Args)]
 pub struct ExperimentArgs {
-    /// Build manifest JSON: per-repo confidence + calibration (operator-declared)
-    /// and, per fixed-seed run, the paths to the repo-arm and harness-arm
-    /// codeprobe config-label run dirs. See `docs/r0_runbook.md`.
+    /// Build manifest JSON: pinned repo commit, confidence, typed calibration
+    /// artifact, per-arm config artifacts, and each fixed-seed pair of codeprobe
+    /// run dirs. See `docs/r0_runbook.md`.
     #[arg(long, value_name = "FILE")]
     pub manifest: PathBuf,
 
@@ -338,6 +338,8 @@ pub struct ExperimentArgs {
     pub tasks: PathBuf,
 
     /// Where to write the `FalsifyInput` JSON `aoa falsify --repos` consumes.
+    /// A content-addressed `.observations.jsonl` sidecar and `.build.json`
+    /// report are written beside it.
     #[arg(long, value_name = "FILE", default_value = "falsify_input.json")]
     pub out: PathBuf,
 

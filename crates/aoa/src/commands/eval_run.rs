@@ -36,7 +36,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use serde::Serialize;
 
 use aoa_bench::{
@@ -280,21 +280,23 @@ fn process_task(
 
     let scoring_path = scoring_path(&args.codeprobe_run, task_id);
     let scoring = TrialScoring::load(&args.codeprobe_run, task_id)?;
-    if let Some(error) = scoring.scorer_error() {
-        return Err(anyhow!(
-            "{} reports scorer error: {error}",
-            scoring_path.display()
-        ));
-    }
     // No outcome field at all means this trial measured nothing. Reporting it as
     // a held-out failure would feed a malformed trial into the run's behavioral
     // signal, so it errors out and is excluded instead (aoa-vme7).
-    let held_out_success = scoring.composite().with_context(|| {
-        format!(
-            "{} carries neither `passed` nor `score`: no held-out signal",
-            scoring_path.display()
-        )
-    })?;
+    let held_out_success = scoring
+        .held_out_outcome()
+        .with_context(|| {
+            format!(
+                "failed to read canonical held-out outcome from {}",
+                scoring_path.display()
+            )
+        })?
+        .with_context(|| {
+            format!(
+                "{} carries neither `passed` nor `score`: no held-out signal",
+                scoring_path.display()
+            )
+        })?;
 
     // Oracle: when `--tasks` is given the task dir MUST load (fail loud); without
     // it we proceed oracle-less (empty gold set, no held-out provenance -> gap

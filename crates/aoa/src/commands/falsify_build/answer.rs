@@ -19,7 +19,7 @@ use anyhow::{anyhow, bail, Context, Result};
 
 use aoa_bench::{load_task, transcript_path};
 use aoa_codeprobe_shim::parse_transcript_file;
-use aoa_falsify::{ConventionInputs, UNREACHABLE_TRACE_REACH_DEPTH};
+use aoa_falsify::UNREACHABLE_TRACE_REACH_DEPTH;
 use aoa_metrics::{compute_trace_convention_inputs, trace_footprint, SymbolGraph, TraceReach};
 use aoa_scip_graph::index_with_scip;
 
@@ -60,25 +60,16 @@ impl AnswerContext {
         })
     }
 
-    /// Compute the pair's convention inputs from both arms' trial traces, or
-    /// fail with the exclusion reason.
-    pub(super) fn pair_inputs(
+    /// Compute one arm's typed observation metrics from the same oracle/index
+    /// join used by the paired falsification convention.
+    pub(super) fn observation_inputs(
         &mut self,
         task_id: &str,
-        repo_arm_dir: &Path,
-        harness_arm_dir: &Path,
-    ) -> Result<ConventionInputs> {
+        run_dir: &Path,
+        arm: &str,
+    ) -> Result<(f64, u32)> {
         let oracle = self.oracle_chain(task_id)?;
-        let (repo_trace_locality, repo_trace_reach_depth) =
-            self.arm_inputs(repo_arm_dir, task_id, &oracle, "repo")?;
-        let (harness_trace_locality, harness_trace_reach_depth) =
-            self.arm_inputs(harness_arm_dir, task_id, &oracle, "harness")?;
-        Ok(ConventionInputs::Answer {
-            repo_trace_locality,
-            harness_trace_locality,
-            repo_trace_reach_depth,
-            harness_trace_reach_depth,
-        })
+        self.arm_inputs(run_dir, task_id, &oracle, arm)
     }
 
     /// One arm's (trace-locality, trace-reach depth). The unreachable outcome is

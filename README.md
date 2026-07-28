@@ -109,7 +109,7 @@ The workspace is split so each crate owns one responsibility.
 | `aoa` | The CLI: wires each subcommand to its library crate, with human and JSON output. |
 | `aoa-trace` | The span-based trace format and its schema. |
 | `aoa-codeprobe-shim` | Parses a codeprobe transcript into a trace, preserving tool-call order and targets. |
-| `aoa-bench` | The codeprobe boundary: loads mined task directories into toolkit task inputs, and owns the run-dir `scoring.json` contract, trial discovery, and the held-out provenance lattice. |
+| `aoa-bench` | The codeprobe boundary: mined task/run contracts, held-out provenance, and canonical content-addressed measurement observations. |
 | `aoa-metrics` | The four metrics and the symbol graph they read. |
 | `aoa-scip-graph` | Indexes a repo into a symbol graph (SCIP, with an AST fallback) and labels its confidence. |
 | `aoa-budget` | The context-budget check: transitive closure of context files, real tokenizer, ceiling. |

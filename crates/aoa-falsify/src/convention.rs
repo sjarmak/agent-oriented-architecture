@@ -229,7 +229,9 @@ mod tests {
         harness_depth: u32,
     ) -> PairTask {
         PairTask {
-            task_id: 0,
+            task_id: "task-0".to_string(),
+            repo_observation_id: "repo-observation".to_string(),
+            harness_observation_id: "harness-observation".to_string(),
             is_identical_pair: true,
             repo_held_out_success: true,
             harness_held_out_success: false,
@@ -244,7 +246,9 @@ mod tests {
 
     fn edit_task(locality: f64, depth: u32) -> PairTask {
         PairTask {
-            task_id: 0,
+            task_id: "task-0".to_string(),
+            repo_observation_id: "repo-observation".to_string(),
+            harness_observation_id: "harness-observation".to_string(),
             is_identical_pair: true,
             repo_held_out_success: true,
             harness_held_out_success: false,

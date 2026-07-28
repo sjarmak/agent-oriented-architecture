@@ -14,6 +14,9 @@
 //!   — the `<run_dir>/<task_id>/scoring.json` wire contract codeprobe writes
 //!   after an agent runs, trial discovery over that layout, and the held-out
 //!   provenance reduction across a set of trials.
+//! - **measurement evidence** ([`MeasurementObservationV1`]) — the canonical
+//!   per-arm, per-task, per-seed content-addressed record emitted by
+//!   `aoa eval experiment`.
 //!
 //! Both are external-tool contracts: the field names, the directory layout, and
 //! the provenance lattice are load-bearing for whether a result may be
@@ -33,6 +36,7 @@ mod bridge;
 mod codeprobe_run;
 mod error;
 mod loader;
+mod measurement_observation;
 mod oracle;
 mod provenance;
 mod task;
@@ -44,5 +48,14 @@ pub use codeprobe_run::{
 };
 pub use error::BenchError;
 pub use loader::{is_task_dir, load_task};
+pub use measurement_observation::{
+    AnswerMetricsV1, ArmIdentity, ArtifactDigestSetV1, CalibrationConclusion,
+    CalibrationEvidenceV1, CalibrationMethod, EditMetricsV1, ExclusionReasonV1, GitHashAlgorithm,
+    GitObjectId, MeasurementMetricsV1, MeasurementObservationV1, MeasurementStateV1, MetricValueV1,
+    ObservationError, Sha256Digest, EDIT_LOCALITY_DEFINITION_VERSION,
+    INVARIANT_DISCOVERABILITY_DEFINITION_VERSION, MUTATION_SURFACE_DEFINITION_VERSION,
+    RETRIEVAL_LOCALITY_DEFINITION_VERSION, TRACE_LOCALITY_DEFINITION_VERSION,
+    TRACE_REACH_DEPTH_DEFINITION_VERSION,
+};
 pub use oracle::OracleChainFacts;
 pub use task::{AcceptedSolution, CodeprobeTask};

@@ -125,9 +125,9 @@ manifest below.
 
 ## Step 2 — author the build manifest
 
-Per repo, you declare the two eligibility facts AOA will **not** fabricate, and
-point each fixed-seed run at its two arm dirs. Arm paths are resolved relative to
-the manifest file.
+Per repo, pin the source revision and exact configuration/calibration artifacts,
+then point each fixed-seed run at its two arm dirs. Artifact and arm paths are
+resolved relative to the manifest file.
 
 ```json
 {
@@ -137,8 +137,11 @@ the manifest file.
   "repos": [
     {
       "repo_id": "org/widget",
+      "repo_commit": { "algorithm": "sha1", "hex": "0123456789abcdef0123456789abcdef01234567" },
       "confidence": "high",     // operator assertion: SCIP-grade index. REQUIRED — no default.
-      "calibrated": true,       // operator assertion: scoring calibrated. REQUIRED — no default.
+      "calibration_artifact": "../org-widget/calibration.json",
+      "repo_arm_config": "../org-widget/aoa-migrated-config.json",
+      "harness_arm_config": "../org-widget/harness-swap-config.json",
       "task_shape": "answer",   // comprehension tasks; REQUIRES scip_index. Default: "edit".
       "scip_index": "../org-widget/index.aoa.json",  // vendored SCIP JSON of the BASELINE repo state (pinned; see the convention-set section)
       "runs": [
@@ -152,25 +155,27 @@ the manifest file.
 }
 ```
 
-`confidence` and `calibrated` are **required** and must reflect reality: verify
+`confidence`, `repo_commit`, and all three artifact paths are **required**.
+Verify
 `confidence: high` against `aoa eval run`'s `graph_quality` (it is `scip` only
-for a real SCIP index). `native_span` is **derived** from each task's mined
-oracle (held-out provenance) — never declared. A repo that is not
-high-confidence **and** native-composed **and** calibrated is reported as
-*excluded* and casts no vote (R-silent).
+for a real SCIP index). The calibration artifact is a strict JSON record with
+`method`, `protocol_version`, `corpus_sha256`, positive `sample_size`,
+non-empty `criteria`, and `conclusion`. `native_span` is **derived** from each
+task's mined oracle — never declared. Only a high-confidence, native-composed
+repo backed by a complete artifact whose conclusion is `calibrated` may vote.
 
 **R11 scope note for answer-shaped tasks (pre-registered 2026-07-05, before
-any campaign arm ran).** The `calibrated` assertion attests *scoring
-validity*. R11's curator-calibration gate (two independent curators, Pearson
+any campaign arm ran).** The calibration artifact attests *scoring validity*.
+R11's curator-calibration gate (two independent curators, Pearson
 ≥ 0.6 over a ≥100-row holdout) validates *subjective curator ratings*, the
 scoring basis for PR-mined SDLC tasks. Answer-shaped comprehension tasks are
 scored `dual_composite` against oracles that are mechanically derived and
 consensus-verified by two independent backends (regex + AST graph; witness
 chains certified hop-by-hop by both) — the verdict path consumes no curator
-score anywhere. For `task_shape: "answer"` repos, `calibrated: true` is
-therefore backed by that mechanical consensus verification, declared as
-`calibrated_basis: "consensus-verified-answer-oracles-r11-scope-note-2026-07-05"`
-in the manifest. Two curator-calibration attempts on this corpus were run
+score anywhere. For `task_shape: "answer"` repos, use
+`method: "consensus_verified_answer_oracle"` and record that protocol and corpus
+in the calibration artifact; free-text `calibrated_basis` is rejected. Two
+curator-calibration attempts on this corpus were run
 anyway and both honestly rejected (Pearson 0.132 with a variance-collapsed
 haiku rater, then 0.258 with sonnet×opus genuinely disagreeing); they are
 documented verbatim in the campaign's `CALIBRATION_TRACK.md` and do not back
@@ -302,8 +307,16 @@ scripts/r0_experiment.sh \
   --manifest manifest.json \
   --aggregate /home/ds/projects/codeprobe/runs/r0/reports/aggregate.json \
   --out      out/
-# → out/falsify_input.json, out/falsify_input.build.json, out/falsification.json
+# → out/falsify_input.json, out/falsify_input.observations.jsonl,
+#   out/falsify_input.build.json, out/falsification.json
 ```
+
+The observation sidecar contains one content-addressed record per
+repo/task/seed/arm, sorted in that order. Each ID is SHA-256 over RFC 8785
+canonical JSON with the `aoa.measurement-observation.v1` domain. Missing or
+malformed evidence is an `excluded` record, not a failed outcome. Only pairs
+whose two observations are `measured` enter `falsify_input.json`; each pair
+retains the original task ID and references both observation IDs.
 
 ## Reading the verdict
 

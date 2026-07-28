@@ -107,6 +107,24 @@ impl TrialScoring {
         self.error.as_deref()
     }
 
+    /// The canonical held-out outcome shared by every scoring consumer.
+    ///
+    /// A dual-composite file's held-out truth is its independent artifact leg,
+    /// not the top-level composite (which may be lowered by a direct-leg
+    /// failure). Other scorer families retain their top-level outcome.
+    pub fn held_out_outcome(&self) -> Result<Option<bool>, BenchError> {
+        if let Some(message) = &self.error {
+            return Err(BenchError::ScoringErrored {
+                task_id: self.task_id.clone(),
+                message: message.clone(),
+            });
+        }
+        if self.scorer_family.as_deref() == Some("dual_composite") {
+            return self.dual()?.held_out_success().map(Some);
+        }
+        Ok(self.composite())
+    }
+
     /// Reject anything that is not a clean dual-verifier result: both the
     /// held-out (artifact) and visible (direct) legs must have genuinely run.
     pub fn dual(&self) -> Result<DualLegs, BenchError> {
@@ -395,6 +413,31 @@ mod tests {
             let scoring: TrialScoring = serde_json::from_str(json).unwrap();
             assert_eq!(scoring.composite(), expected, "{json}");
         }
+    }
+
+    #[test]
+    fn canonical_held_out_outcome_uses_the_artifact_leg_for_dual_composite() {
+        let mut scoring = dual(Some("dual_composite"));
+        scoring.passed = Some(false);
+        scoring.passed_direct = Some(false);
+        scoring.passed_artifact = Some(true);
+
+        assert_eq!(scoring.held_out_outcome().unwrap(), Some(true));
+    }
+
+    #[test]
+    fn canonical_held_out_outcome_keeps_top_level_semantics_for_other_scorers() {
+        let scoring: TrialScoring =
+            serde_json::from_str(r#"{"scorer_family":"single","passed":true}"#).unwrap();
+        assert_eq!(scoring.held_out_outcome().unwrap(), Some(true));
+    }
+
+    #[test]
+    fn canonical_held_out_outcome_surfaces_a_persisted_scorer_error() {
+        let scoring: TrialScoring =
+            serde_json::from_str(r#"{"error":"runner exploded","passed":false}"#).unwrap();
+        let error = scoring.held_out_outcome().unwrap_err();
+        assert!(matches!(error, BenchError::ScoringErrored { .. }));
     }
 
     #[test]

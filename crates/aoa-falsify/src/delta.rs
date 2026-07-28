@@ -71,7 +71,9 @@ mod tests {
 
     fn answer_pair(harness_depth: u32) -> PairTask {
         PairTask {
-            task_id: 1,
+            task_id: "task-1".to_string(),
+            repo_observation_id: "repo-observation".to_string(),
+            harness_observation_id: "harness-observation".to_string(),
             is_identical_pair: true,
             repo_held_out_success: true,
             harness_held_out_success: false,

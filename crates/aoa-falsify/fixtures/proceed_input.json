@@ -5,9 +5,9 @@
       "eligibility": { "confidence": "High", "native_span": "native_composed", "calibrated": true },
       "holdout_size": 40,
       "runs": [
-        { "seed": 1, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] },
-        { "seed": 2, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] },
-        { "seed": 3, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] }
+        { "seed": 1, "tasks": [ { "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1", "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] },
+        { "seed": 2, "tasks": [ { "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1", "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] },
+        { "seed": 3, "tasks": [ { "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1", "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] }
       ]
     },
     {
@@ -15,9 +15,9 @@
       "eligibility": { "confidence": "High", "native_span": "native_composed", "calibrated": true },
       "holdout_size": 40,
       "runs": [
-        { "seed": 1, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] },
-        { "seed": 2, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] },
-        { "seed": 3, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] }
+        { "seed": 1, "tasks": [ { "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1", "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] },
+        { "seed": 2, "tasks": [ { "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1", "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] },
+        { "seed": 3, "tasks": [ { "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1", "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] }
       ]
     },
     {
@@ -25,9 +25,9 @@
       "eligibility": { "confidence": "High", "native_span": "native_composed", "calibrated": true },
       "holdout_size": 40,
       "runs": [
-        { "seed": 1, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] },
-        { "seed": 2, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] },
-        { "seed": 3, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] }
+        { "seed": 1, "tasks": [ { "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1", "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] },
+        { "seed": 2, "tasks": [ { "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1", "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] },
+        { "seed": 3, "tasks": [ { "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1", "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] }
       ]
     },
     {
@@ -35,9 +35,9 @@
       "eligibility": { "confidence": "High", "native_span": "native_composed", "calibrated": true },
       "holdout_size": 40,
       "runs": [
-        { "seed": 1, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] },
-        { "seed": 2, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] },
-        { "seed": 3, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] }
+        { "seed": 1, "tasks": [ { "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1", "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] },
+        { "seed": 2, "tasks": [ { "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1", "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] },
+        { "seed": 3, "tasks": [ { "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1", "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] }
       ]
     },
     {
@@ -45,9 +45,9 @@
       "eligibility": { "confidence": "High", "native_span": "native_composed", "calibrated": true },
       "holdout_size": 40,
       "runs": [
-        { "seed": 1, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] },
-        { "seed": 2, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] },
-        { "seed": 3, "tasks": [ { "task_id": 1, "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] }
+        { "seed": 1, "tasks": [ { "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1", "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] },
+        { "seed": 2, "tasks": [ { "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1", "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] },
+        { "seed": 3, "tasks": [ { "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1", "is_identical_pair": true, "repo_held_out_success": true, "harness_held_out_success": false, "convention_inputs": { "family": "edit", "edit_locality": 0.5, "mutation_depth": 1 } } ] }
       ]
     }
   ],

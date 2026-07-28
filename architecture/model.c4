@@ -96,7 +96,7 @@ model {
 
       bench = component 'aoa-bench' {
         #built
-        description 'The codeprobe boundary: loads mined task dirs as a contamination-free held-out substrate, and owns the run-dir scoring contract plus the held-out provenance lattice'
+        description 'The codeprobe boundary: mined task/run contracts, held-out provenance, and canonical content-addressed measurement observations'
         link ../crates/aoa-bench 'crates/aoa-bench/'
       }
       audit = component 'aoa-audit' {

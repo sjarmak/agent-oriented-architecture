@@ -13,7 +13,7 @@
           "seed": 1,
           "tasks": [
             {
-              "task_id": 1,
+              "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1",
               "is_identical_pair": true,
               "repo_held_out_success": true,
               "harness_held_out_success": false,
@@ -29,7 +29,7 @@
           "seed": 2,
           "tasks": [
             {
-              "task_id": 1,
+              "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1",
               "is_identical_pair": true,
               "repo_held_out_success": true,
               "harness_held_out_success": false,
@@ -45,7 +45,7 @@
           "seed": 3,
           "tasks": [
             {
-              "task_id": 1,
+              "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1",
               "is_identical_pair": true,
               "repo_held_out_success": true,
               "harness_held_out_success": false,
@@ -72,7 +72,7 @@
           "seed": 1,
           "tasks": [
             {
-              "task_id": 1,
+              "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1",
               "is_identical_pair": true,
               "repo_held_out_success": true,
               "harness_held_out_success": false,
@@ -88,7 +88,7 @@
           "seed": 2,
           "tasks": [
             {
-              "task_id": 1,
+              "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1",
               "is_identical_pair": true,
               "repo_held_out_success": true,
               "harness_held_out_success": false,
@@ -104,7 +104,7 @@
           "seed": 3,
           "tasks": [
             {
-              "task_id": 1,
+              "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1",
               "is_identical_pair": true,
               "repo_held_out_success": true,
               "harness_held_out_success": false,
@@ -131,7 +131,7 @@
           "seed": 1,
           "tasks": [
             {
-              "task_id": 1,
+              "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1",
               "is_identical_pair": true,
               "repo_held_out_success": true,
               "harness_held_out_success": false,
@@ -147,7 +147,7 @@
           "seed": 2,
           "tasks": [
             {
-              "task_id": 1,
+              "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1",
               "is_identical_pair": true,
               "repo_held_out_success": true,
               "harness_held_out_success": false,
@@ -163,7 +163,7 @@
           "seed": 3,
           "tasks": [
             {
-              "task_id": 1,
+              "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1",
               "is_identical_pair": true,
               "repo_held_out_success": true,
               "harness_held_out_success": false,
@@ -190,7 +190,7 @@
           "seed": 1,
           "tasks": [
             {
-              "task_id": 1,
+              "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1",
               "is_identical_pair": true,
               "repo_held_out_success": true,
               "harness_held_out_success": false,
@@ -206,7 +206,7 @@
           "seed": 2,
           "tasks": [
             {
-              "task_id": 1,
+              "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1",
               "is_identical_pair": true,
               "repo_held_out_success": true,
               "harness_held_out_success": false,
@@ -222,7 +222,7 @@
           "seed": 3,
           "tasks": [
             {
-              "task_id": 1,
+              "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1",
               "is_identical_pair": true,
               "repo_held_out_success": true,
               "harness_held_out_success": false,
@@ -249,7 +249,7 @@
           "seed": 1,
           "tasks": [
             {
-              "task_id": 1,
+              "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1",
               "is_identical_pair": true,
               "repo_held_out_success": true,
               "harness_held_out_success": false,
@@ -265,7 +265,7 @@
           "seed": 2,
           "tasks": [
             {
-              "task_id": 1,
+              "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1",
               "is_identical_pair": true,
               "repo_held_out_success": true,
               "harness_held_out_success": false,
@@ -281,7 +281,7 @@
           "seed": 3,
           "tasks": [
             {
-              "task_id": 1,
+              "task_id": "task-1", "repo_observation_id": "repo-observation-1", "harness_observation_id": "harness-observation-1",
               "is_identical_pair": true,
               "repo_held_out_success": true,
               "harness_held_out_success": false,

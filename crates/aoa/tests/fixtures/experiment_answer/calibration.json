@@ -1,0 +1,8 @@
+{
+  "method": "consensus_verified_answer_oracle",
+  "protocol_version": "r11",
+  "corpus_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "sample_size": 20,
+  "criteria": ["consensus-verified-answer-oracles"],
+  "conclusion": "calibrated"
+}

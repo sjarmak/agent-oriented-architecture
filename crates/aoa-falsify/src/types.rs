@@ -73,10 +73,15 @@ impl ConventionInputs {
 /// to either delta. The two success bits are the held-out (not visible) outcomes
 /// under the two arms — repo arm (AOA migration, fixed harness) and harness arm
 /// (swapped harness, fixed repo).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PairTask {
-    pub task_id: u64,
+    /// Original codeprobe task identity; never replaced by a positional ordinal.
+    pub task_id: String,
+    /// Content-addressed repo-arm measurement backing this outcome.
+    pub repo_observation_id: String,
+    /// Content-addressed harness-arm measurement backing this outcome.
+    pub harness_observation_id: String,
     /// Whether the task is an identical pair across both arms. Non-paired tasks
     /// are excluded from both deltas.
     pub is_identical_pair: bool,
