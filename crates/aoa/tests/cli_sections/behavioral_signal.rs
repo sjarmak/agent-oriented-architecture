@@ -111,10 +111,12 @@ fn audit_reports_insufficient_data_without_observe_captured_signal() {
     );
 }
 
-// Landed edits without same-task invariant and accepted-solution context remain
-// inspectable exclusions; file count alone cannot unlock four metrics.
+// aoa-d6t.40 adversarial regression: an attacker controlling the audited
+// working tree can plant any number of schema-valid landed-edit logs. Those
+// files carry no trusted same-task context, so they remain typed exclusions and
+// cannot forge sufficient behavioral signal.
 #[test]
-fn audit_keeps_uncontextualized_live_edits_insufficient() {
+fn crafted_trace_files_cannot_forge_sufficient_behavioral_signal() {
     let repo = seeded_indexable_repo();
 
     let output = aoa()
@@ -125,13 +127,14 @@ fn audit_keeps_uncontextualized_live_edits_insufficient() {
     let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
     assert_eq!(parsed["behavioral_signal"]["observations"], 0);
     assert!(parsed.get("insufficient_data").is_some());
-    assert_eq!(
-        parsed["live_observations"]
-            .as_array()
-            .expect("live observations")
-            .len(),
-        MIN_HELD_OUT_OBSERVATIONS
-    );
+    let observations = parsed["live_observations"]
+        .as_array()
+        .expect("live observations");
+    assert_eq!(observations.len(), MIN_HELD_OUT_OBSERVATIONS);
+    assert!(observations.iter().all(|observation| {
+        observation["state"]["status"] == "excluded"
+            && observation["state"]["reason"] == "task_context_missing"
+    }));
     let items = parsed["items"].as_array().expect("items");
     assert!(
         !items.iter().any(|i| i["kind"] == "mutation_surface"),

@@ -39,6 +39,21 @@ removed without a major version note. Field types are given as JSON types.
 | `aoa policy guard-staged --json` | `blocked` (string array of protected staged files; exit 1 when non-empty) | `GuardStagedView` in `crates/aoa/src/commands/policy.rs` |
 | `aoa policy infer-owners --json` | `codeowners_path` (string), `entries` (array: `pattern`, `owner`, `owned_lines`, `total_lines`), `proposal` (string), `diff` (string), `written` (bool); `proposal` and `diff` are empty when `entries` is empty | `InferOwnersView` in `crates/aoa/src/commands/policy.rs` |
 
+### Live-observation trust boundary
+
+Files under an audited repository’s `.aoa/traces/` are untrusted measurement
+candidates. A valid envelope, monotonic sequence, or content hash establishes
+structure or byte identity—not origin. The CLI therefore never derives
+same-task metric context from the audited repository: without context supplied
+by a trusted caller, every planted trace remains `excluded` with
+`task_context_missing` and contributes zero to `behavioral_signal`.
+
+Repository-local signing would not improve this boundary because an actor able
+to plant traces can also replace a key stored beside them. Any future feature
+that imports task context or promotes live correlations to `gating` must first
+define an external trust root and authenticate both the trace and its same-task
+context.
+
 ## Exemption
 
 `aoa enforce record` / `aoa enforce check` are not operator-facing commands:
