@@ -426,6 +426,26 @@ mod tests {
     }
 
     #[test]
+    fn incorrect_artifact_without_scorer_error_is_a_clean_failure() {
+        let scoring: TrialScoring = serde_json::from_str(
+            r#"{
+                "scorer_family": "dual_composite",
+                "passed_direct": true,
+                "passed_artifact": false,
+                "score_direct": 1.0,
+                "score_artifact": 0.0,
+                "verdict_artifact": "incorrect",
+                "diagnostics_artifact": {
+                    "agent_output_error": "answer.json not found"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(scoring.held_out_outcome().unwrap(), Some(false));
+    }
+
+    #[test]
     fn canonical_held_out_outcome_keeps_top_level_semantics_for_other_scorers() {
         let scoring: TrialScoring =
             serde_json::from_str(r#"{"scorer_family":"single","passed":true}"#).unwrap();

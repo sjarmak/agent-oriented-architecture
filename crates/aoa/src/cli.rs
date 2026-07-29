@@ -343,6 +343,12 @@ pub struct ExperimentArgs {
     #[arg(long, value_name = "FILE", default_value = "falsify_input.json")]
     pub out: PathBuf,
 
+    /// Fail after writing the inspectable build artifacts when any repo admits
+    /// less than this fraction of candidate pairs. Use with a one-seed manifest
+    /// as a cheap preflight before launching the full replicated campaign.
+    #[arg(long, value_name = "FRACTION")]
+    pub min_pair_yield: Option<f64>,
+
     /// Emit the structured JSON build report instead of human text.
     #[arg(long)]
     pub json: bool,

@@ -32,7 +32,7 @@ removed without a major version note. Field types are given as JSON types.
 | `aoa eval compare --json` | `gap_delta`, `held_out_delta` (numbers), `label` (string) | `aoa_gap` compare outcome via `crates/aoa/src/commands/eval.rs` |
 | `aoa eval run --json` | per-task AOA metric records | `crates/aoa/src/commands/eval_run.rs` |
 | `aoa eval r0b --json` | leakage-canary composition report | `crates/aoa/src/commands/r0b.rs` |
-| `aoa eval experiment --json` | `FalsifyInput` build report, including observation sidecar path/SHA-256/count/IDs | `crates/aoa/src/commands/falsify_build.rs`; `aoa_bench::MeasurementObservationV1` |
+| `aoa eval experiment --json` | `FalsifyInput` build report, including observation sidecar path/SHA-256/count/IDs and per-repo `candidate_pairs`, `identical_pairs`, and `pair_yield` | `crates/aoa/src/commands/falsify_build.rs`; `aoa_bench::MeasurementObservationV1` |
 | `aoa init --json` | `mode` (string), `template_version` (number), `written`, `skipped`, `review` (string arrays) | `InitView` in `crates/aoa/src/commands/init.rs` |
 | `aoa observe --json` | `traces_dir` (string), `gitignore` (string), `enforce_settings` (string or null) | `ObserveView` in `crates/aoa/src/commands/observe.rs` |
 | `aoa policy compile --json` | `planes_written` (string array of artifact paths) | `CompileView` in `crates/aoa/src/commands/policy.rs` |

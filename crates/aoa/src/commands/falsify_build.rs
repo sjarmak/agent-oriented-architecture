@@ -174,6 +174,8 @@ struct ExcludedTask {
 struct RepoBuild {
     repo_id: String,
     identical_pairs: usize,
+    candidate_pairs: usize,
+    pair_yield: f64,
     holdout_size: u32,
     native_span: HeldOutProvenance,
     confidence: Confidence,
@@ -213,6 +215,8 @@ pub(crate) struct BuildReport {
 #[derive(Debug, Serialize)]
 struct DroppedRepo {
     repo_id: String,
+    candidate_pairs: usize,
+    pair_yield: f64,
     excluded_tasks: Vec<ExcludedTask>,
 }
 
@@ -887,9 +891,12 @@ fn build_repo(
     // below: a zero-pair run is an ABSENCE of evidence, handled by dropping the
     // repo, not a misaligned-identity integrity failure.
     if min_pairs == 0 {
+        let candidate_pairs = excluded.len();
         return Ok(RepoOutcome::Dropped(
             DroppedRepo {
                 repo_id: repo.repo_id.clone(),
+                candidate_pairs,
+                pair_yield: 0.0,
                 excluded_tasks: excluded
                     .into_iter()
                     .map(|(task_id, reason)| ExcludedTask { task_id, reason })
@@ -957,6 +964,8 @@ fn build_repo(
     // drift from the eligibility rule `aoa falsify` actually applies.
     let eligible = is_eligible(&eligibility);
 
+    let candidate_pairs = min_pairs + excluded.len();
+    let pair_yield = min_pairs as f64 / candidate_pairs as f64;
     let excluded_tasks = excluded
         .into_iter()
         .map(|(task_id, reason)| ExcludedTask { task_id, reason })
@@ -964,6 +973,8 @@ fn build_repo(
     let build = RepoBuild {
         repo_id: repo.repo_id.clone(),
         identical_pairs: min_pairs,
+        candidate_pairs,
+        pair_yield,
         holdout_size,
         native_span,
         confidence,
@@ -1173,6 +1184,11 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 
 /// Run `aoa eval experiment`.
 pub(crate) fn run(args: &ExperimentArgs) -> Result<i32> {
+    if let Some(threshold) = args.min_pair_yield {
+        if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
+            bail!("--min-pair-yield must be a finite fraction in [0, 1]");
+        }
+    }
     let manifest: Manifest = load_json_capped(&args.manifest, "manifest")?;
 
     let base_dir = args.manifest.parent().unwrap_or_else(|| Path::new("."));
@@ -1200,6 +1216,36 @@ pub(crate) fn run(args: &ExperimentArgs) -> Result<i32> {
     } else {
         print_human(&render_human(&report, &report_path));
     }
+    if let Some(threshold) = args.min_pair_yield {
+        let low_yield = report
+            .repos
+            .iter()
+            .map(|repo| {
+                (
+                    &repo.repo_id,
+                    repo.identical_pairs,
+                    repo.candidate_pairs,
+                    repo.pair_yield,
+                )
+            })
+            .chain(
+                report
+                    .dropped_repos
+                    .iter()
+                    .map(|repo| (&repo.repo_id, 0, repo.candidate_pairs, repo.pair_yield)),
+            )
+            .find(|(_, _, _, pair_yield)| *pair_yield < threshold);
+        if let Some((repo_id, admitted, candidates, pair_yield)) = low_yield {
+            bail!(
+                "pair-yield preflight failed: {} admitted {}/{} pairs ({:.3}), below {:.3}",
+                repo_id,
+                admitted,
+                candidates,
+                pair_yield,
+                threshold
+            );
+        }
+    }
     Ok(0)
 }
 
@@ -1216,9 +1262,11 @@ fn render_human(report: &BuildReport, report_path: &Path) -> String {
         // match the hardening applied to task ids below.
         let _ = writeln!(
             out,
-            "  {:<24} pairs={} holdout={} provenance={:?} confidence={:?} calibrated={} eligible={}",
+            "  {:<24} pairs={}/{} yield={:.3} holdout={} provenance={:?} confidence={:?} calibrated={} eligible={}",
             escape_terminal(&r.repo_id),
             r.identical_pairs,
+            r.candidate_pairs,
+            r.pair_yield,
             r.holdout_size,
             r.native_span,
             r.confidence,
@@ -1237,8 +1285,10 @@ fn render_human(report: &BuildReport, report_path: &Path) -> String {
     for d in &report.dropped_repos {
         let _ = writeln!(
             out,
-            "  {:<24} DROPPED: no identical pairs",
-            escape_terminal(&d.repo_id)
+            "  {:<24} DROPPED: no identical pairs (pairs=0/{} yield={:.3})",
+            escape_terminal(&d.repo_id),
+            d.candidate_pairs,
+            d.pair_yield,
         );
         for ex in &d.excluded_tasks {
             let _ = writeln!(
@@ -1320,6 +1370,8 @@ mod tests {
             repos: Vec::new(),
             dropped_repos: vec![DroppedRepo {
                 repo_id: "repo".to_string(),
+                candidate_pairs: 1,
+                pair_yield: 0.0,
                 excluded_tasks: vec![ExcludedTask {
                     task_id: "task".to_string(),
                     reason: "boom\u{1b}[31mRED".to_string(),
@@ -1365,6 +1417,7 @@ mod tests {
             manifest,
             tasks: dir.clone(),
             out: dir.join("falsify_input.json"),
+            min_pair_yield: None,
             json: false,
         };
         let err = run(&args).unwrap_err();

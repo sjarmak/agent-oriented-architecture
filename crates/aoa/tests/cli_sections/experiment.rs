@@ -78,6 +78,8 @@ fn experiment_answer_shape_computes_real_convention_inputs() {
         "every admitted pair carries real inputs, so the flag is computed false"
     );
     assert_eq!(build["repos"][0]["identical_pairs"], 1);
+    assert_eq!(build["repos"][0]["candidate_pairs"], 2);
+    assert_eq!(build["repos"][0]["pair_yield"], 0.5);
     assert_eq!(build["observation_count"], 12);
     assert_eq!(build["observation_ids"].as_array().unwrap().len(), 12);
     assert_eq!(
@@ -166,6 +168,46 @@ fn experiment_answer_shape_computes_real_convention_inputs() {
             .any(|n| n.as_str().unwrap_or_default().contains("degraded")),
         "no degraded-convention note may appear for an answer-shape build, got {notes:?}"
     );
+}
+
+#[test]
+fn experiment_pair_yield_preflight_stops_low_yield_before_full_campaign() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("falsify_input.json");
+
+    aoa()
+        .args(["eval", "experiment", "--manifest"])
+        .arg(fixture("experiment_answer/manifest.json"))
+        .arg("--tasks")
+        .arg(fixture("answer_tasks"))
+        .arg("--out")
+        .arg(&input)
+        .args(["--min-pair-yield", "0.8"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "pair-yield preflight failed: sample/answers admitted 1/2 pairs (0.500), below 0.800",
+        ));
+
+    assert!(
+        input.exists(),
+        "the diagnostic build artifact remains inspectable after preflight failure"
+    );
+    assert!(
+        dir.path().join("falsify_input.build.json").exists(),
+        "the pair-yield evidence remains inspectable after preflight failure"
+    );
+
+    aoa()
+        .args(["eval", "experiment", "--manifest"])
+        .arg(fixture("experiment_answer/manifest.json"))
+        .arg("--tasks")
+        .arg(fixture("answer_tasks"))
+        .arg("--out")
+        .arg(dir.path().join("passing.json"))
+        .args(["--min-pair-yield", "0.5"])
+        .assert()
+        .success();
 }
 
 #[test]

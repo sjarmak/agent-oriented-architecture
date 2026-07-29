@@ -301,6 +301,27 @@ convention set that is not structurally identical to the pre-registered one.
 
 ## Step 3 — build + gate
 
+Before paying for all `K=3` replications, build a manifest containing only the
+first seed for each repo and require a healthy fraction of candidate tasks to
+survive as measured identical pairs:
+
+```bash
+aoa eval experiment \
+  --tasks /home/ds/projects/codeprobe/runs/r0/tasks \
+  --manifest manifest.seed-1.json \
+  --out preflight/falsify_input.json \
+  --min-pair-yield 0.8
+```
+
+The command writes the input, observation sidecar, and build report before it
+checks the floor, so a failed preflight remains diagnosable. `candidate_pairs`,
+`identical_pairs`, and `pair_yield` are reported per repo; honest exclusions
+such as an empty trace footprint or an errored scoring leg count against yield.
+Fix the evidence pipeline and rerun seed 1 rather than weakening admission.
+Once every repo clears the floor, launch the remaining seeds and use the full
+manifest below. The floor is an operator-selected campaign budget guard, not a
+falsification threshold, and does not alter the R0 verdict.
+
 ```bash
 scripts/r0_experiment.sh \
   --tasks    /home/ds/projects/codeprobe/runs/r0/tasks \
