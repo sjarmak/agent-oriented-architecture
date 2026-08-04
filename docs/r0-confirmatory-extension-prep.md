@@ -8,8 +8,10 @@ escalation `gc-720157` (relayed as `gc-722425`).
 ## Authorized amendment (2026-08-04)
 
 HTTPie is excluded from the confirmatory reserve because the held-out
-disqualification landed in commit `e5948d1`. This amendment does not reinterpret
-or qualify that verdict; the complete evidence remains in the
+disqualification verdict landed in commit `21d3373`. Commit `e5948d1`
+subsequently qualified this preparation document's migration-blindness summary;
+it did not land or alter the verdict. This amendment does not reinterpret or
+qualify that verdict; the complete evidence remains in the
 [R0 HTTPie held-out reserve verdict](r0-httpie-held-out-verdict.md).
 
 The confirmatory extension is amended to the two untouched reserve repositories:
@@ -23,9 +25,13 @@ The confirmatory extension is amended to the two untouched reserve repositories:
 The five preserved campaign repositories vote `2 proceed / 3 pivot` under the
 pre-registered alternative weights. Adding sqlparse and websockets produces a
 seven-repository manifest. A strict majority of seven is four, so **both reserve
-repositories must vote proceed** to move the campaign from two to four proceed
-votes. A tie or either reserve failing to vote proceed therefore maps to
-`pivot`; the unanimous-reserve bar is unchanged.
+repositories must cast proceed votes** to move the campaign from two to four
+proceed votes. A per-repository delta tie counts as a proceed vote because the
+vote predicate is `repo_delta >= harness_delta`. More generally, failure to meet
+the robust-proceed requirements maps away from `proceed`: a completed base tally
+with a minority or exact tie of proceed votes maps to `pivot`, while unmet
+evidence or hardening preconditions map to `inconclusive`. The unanimous-reserve
+bar is unchanged.
 
 Both sqlparse and websockets are recorded as `native_composed` held-out
 provenance in `runs/r0-campaign/out/falsify_input.k1.build.json`. They are
