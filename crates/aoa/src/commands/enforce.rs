@@ -53,10 +53,11 @@
 //! transcript format. It lands under the same ignored `.aoa/traces/` tree that
 //! `observe` already provisions.
 
+use std::fmt;
 use std::fs::{File, TryLockError};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
@@ -542,6 +543,7 @@ fn resolve_base(event: &HookEvent) -> Result<PathBuf> {
         ));
     }
 
+    let mut nearest_rejection = None;
     for candidate in canonical.ancestors() {
         let marker = candidate.join(".git");
         match std::fs::symlink_metadata(&marker) {
@@ -551,16 +553,24 @@ fn resolve_base(event: &HookEvent) -> Result<PathBuf> {
                     marker.display()
                 ));
             }
-            Ok(metadata) if git_candidate_is_root(candidate, metadata.is_dir())? => {
-                return Ok(candidate.to_path_buf());
-            }
-            Ok(_) => {}
+            Ok(metadata) => match git_candidate_is_root(candidate, metadata.is_dir())? {
+                None => return Ok(candidate.to_path_buf()),
+                Some(rejection) => {
+                    nearest_rejection.get_or_insert((marker, rejection));
+                }
+            },
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => {
                 return Err(anyhow!(err))
                     .with_context(|| format!("failed to inspect {}", marker.display()));
             }
         }
+    }
+    if let Some((marker, rejection)) = nearest_rejection {
+        return Err(anyhow!(
+            "Git repository validation failed for {}: {rejection}",
+            marker.display()
+        ));
     }
     Err(anyhow!(
         "hook cwd {} is not inside a Git repository",
@@ -570,30 +580,133 @@ fn resolve_base(event: &HookEvent) -> Result<PathBuf> {
 
 /// Ask Git to validate the marker and require it to identify this exact
 /// canonical directory as the worktree root.
-fn git_candidate_is_root(candidate: &Path, marker_is_dir: bool) -> Result<bool> {
-    let Some(reported) = git_resolved_path(candidate, "--show-toplevel")? else {
-        return Ok(false);
-    };
-    if reported != candidate {
-        return Ok(false);
-    }
-    if marker_is_dir {
-        return Ok(true);
-    }
-
-    let Some(git_dir) = git_resolved_path(candidate, "--git-dir")? else {
-        return Ok(false);
-    };
-    let Some(common_dir) = git_resolved_path(candidate, "--git-common-dir")? else {
-        return Ok(false);
-    };
-    if git_dir.parent() != Some(common_dir.join("worktrees").as_path()) {
-        return Ok(false);
-    }
-    linked_worktree_points_back(candidate, &git_dir)
+fn git_candidate_is_root(
+    candidate: &Path,
+    marker_is_dir: bool,
+) -> Result<Option<GitCandidateRejection>> {
+    git_candidate_is_root_with(candidate, marker_is_dir, &mut git_resolved_path)
 }
 
-fn git_resolved_path(candidate: &Path, field: &str) -> Result<Option<PathBuf>> {
+fn git_candidate_is_root_with(
+    candidate: &Path,
+    marker_is_dir: bool,
+    resolve: &mut impl FnMut(&Path, &'static str) -> Result<GitPathResolution>,
+) -> Result<Option<GitCandidateRejection>> {
+    let reported = match resolve(candidate, "--show-toplevel")? {
+        Ok(path) => path,
+        Err(rejection) => {
+            return Ok(Some(GitCandidateRejection::Command(rejection)));
+        }
+    };
+    if reported != candidate {
+        return Ok(Some(GitCandidateRejection::RootMismatch {
+            expected: candidate.to_path_buf(),
+            reported,
+        }));
+    }
+    if marker_is_dir {
+        return Ok(None);
+    }
+
+    let git_dir = match resolve(candidate, "--git-dir")? {
+        Ok(path) => path,
+        Err(rejection) => {
+            return Ok(Some(GitCandidateRejection::Command(rejection)));
+        }
+    };
+    let common_dir = match resolve(candidate, "--git-common-dir")? {
+        Ok(path) => path,
+        Err(rejection) => {
+            return Ok(Some(GitCandidateRejection::Command(rejection)));
+        }
+    };
+    if git_dir.parent() != Some(common_dir.join("worktrees").as_path()) {
+        return Ok(Some(GitCandidateRejection::LinkedWorktreeLayout {
+            git_dir,
+            common_dir,
+        }));
+    }
+    if linked_worktree_points_back(candidate, &git_dir)? {
+        Ok(None)
+    } else {
+        Ok(Some(GitCandidateRejection::BacklinkMismatch {
+            candidate: candidate.to_path_buf(),
+            git_dir,
+        }))
+    }
+}
+
+type GitPathResolution = std::result::Result<PathBuf, GitCommandRejection>;
+
+#[derive(Debug)]
+struct GitCommandRejection {
+    field: &'static str,
+    status: ExitStatus,
+    stderr: String,
+}
+
+#[derive(Debug)]
+enum GitCandidateRejection {
+    Command(GitCommandRejection),
+    RootMismatch {
+        expected: PathBuf,
+        reported: PathBuf,
+    },
+    LinkedWorktreeLayout {
+        git_dir: PathBuf,
+        common_dir: PathBuf,
+    },
+    BacklinkMismatch {
+        candidate: PathBuf,
+        git_dir: PathBuf,
+    },
+}
+
+impl fmt::Display for GitCandidateRejection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Command(rejection) => rejection.fmt(formatter),
+            Self::RootMismatch { expected, reported } => write!(
+                formatter,
+                "Git check --show-toplevel reported {} instead of candidate {}",
+                reported.display(),
+                expected.display()
+            ),
+            Self::LinkedWorktreeLayout {
+                git_dir,
+                common_dir,
+            } => write!(
+                formatter,
+                "Git linked-worktree layout is invalid: --git-dir reported {}, which is not directly under {}/worktrees from --git-common-dir",
+                git_dir.display(),
+                common_dir.display()
+            ),
+            Self::BacklinkMismatch { candidate, git_dir } => write!(
+                formatter,
+                "linked-worktree backlink at {}/gitdir does not point to {}/.git",
+                git_dir.display(),
+                candidate.display()
+            ),
+        }
+    }
+}
+
+impl fmt::Display for GitCommandRejection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "Git check {} failed with status {}",
+            self.field, self.status
+        )?;
+        if !self.stderr.is_empty() {
+            write!(formatter, ": {}", self.stderr)
+        } else {
+            write!(formatter, " (no stderr)")
+        }
+    }
+}
+
+fn git_resolved_path(candidate: &Path, field: &'static str) -> Result<GitPathResolution> {
     // Git's complete `rev-parse --local-env-vars` set, plus the two discovery
     // controls it omits. Any one of these must describe the candidate itself,
     // never ambient state inherited from the hook host.
@@ -627,7 +740,13 @@ fn git_resolved_path(candidate: &Path, field: &str) -> Result<Option<PathBuf>> {
         .output()
         .context("failed to run git while validating the hook cwd")?;
     if !output.status.success() {
-        return Ok(None);
+        return Ok(Err(GitCommandRejection {
+            field,
+            status: output.status,
+            stderr: String::from_utf8_lossy(&output.stderr)
+                .trim_end()
+                .to_owned(),
+        }));
     }
 
     let reported = std::str::from_utf8(&output.stdout)
@@ -636,7 +755,7 @@ fn git_resolved_path(candidate: &Path, field: &str) -> Result<Option<PathBuf>> {
     let reported = Path::new(reported)
         .canonicalize()
         .with_context(|| format!("failed to resolve Git repository root {reported}"))?;
-    Ok(Some(reported))
+    Ok(Ok(reported))
 }
 
 fn linked_worktree_points_back(candidate: &Path, git_dir: &Path) -> Result<bool> {
@@ -1518,8 +1637,173 @@ mod tests {
         e.cwd = dir.path().to_string_lossy().into_owned();
 
         let err = resolve_base(&e).expect_err("an arbitrary directory is not a trust root");
-        assert!(err.to_string().contains("not inside a Git repository"));
+        let message = err.to_string();
+        assert!(message.contains("--show-toplevel"), "{message}");
+        assert!(message.contains("status"), "{message}");
+        assert!(message.contains("not a git repository"), "{message}");
         assert!(!dir.path().join(".aoa").exists());
+    }
+
+    #[test]
+    fn git_candidate_reports_show_toplevel_failure() {
+        let (_fixture, candidate) = candidate_fixture();
+        let message = rejection_message(
+            &candidate,
+            true,
+            vec![(
+                "--show-toplevel",
+                rejected_git_path(
+                    "--show-toplevel",
+                    "fatal: detected dubious ownership in repository",
+                ),
+            )],
+        );
+        assert!(message.contains("--show-toplevel"), "{message}");
+        assert!(message.contains("dubious ownership"), "{message}");
+    }
+
+    #[test]
+    fn git_candidate_reports_mismatched_toplevel() {
+        let (_fixture, candidate) = candidate_fixture();
+        let other = candidate.join("other");
+        std::fs::create_dir(&other).unwrap();
+        let message = rejection_message(
+            &candidate,
+            true,
+            vec![("--show-toplevel", Ok(other.clone()))],
+        );
+        assert!(message.contains("--show-toplevel"), "{message}");
+        assert!(message.contains(&other.display().to_string()), "{message}");
+    }
+
+    #[test]
+    fn git_candidate_reports_git_dir_failure() {
+        let (_fixture, candidate) = candidate_fixture();
+        let message = rejection_message(
+            &candidate,
+            false,
+            vec![
+                ("--show-toplevel", Ok(candidate.clone())),
+                (
+                    "--git-dir",
+                    rejected_git_path("--git-dir", "fatal: corrupt config"),
+                ),
+            ],
+        );
+        assert!(message.contains("--git-dir"), "{message}");
+        assert!(message.contains("corrupt config"), "{message}");
+    }
+
+    #[test]
+    fn git_candidate_reports_common_dir_failure() {
+        let (_fixture, candidate) = candidate_fixture();
+        let git_dir = candidate.join("admin/worktrees/fixture");
+        let message = rejection_message(
+            &candidate,
+            false,
+            vec![
+                ("--show-toplevel", Ok(candidate.clone())),
+                ("--git-dir", Ok(git_dir.clone())),
+                (
+                    "--git-common-dir",
+                    rejected_git_path("--git-common-dir", "fatal: invalid common directory"),
+                ),
+            ],
+        );
+        assert!(message.contains("--git-common-dir"), "{message}");
+        assert!(message.contains("invalid common directory"), "{message}");
+    }
+
+    #[test]
+    fn git_candidate_reports_invalid_linked_worktree_layout() {
+        let (_fixture, candidate) = candidate_fixture();
+        let git_dir = candidate.join("admin/worktrees/fixture");
+        let common_dir = candidate.join("different-admin");
+        let message = rejection_message(
+            &candidate,
+            false,
+            vec![
+                ("--show-toplevel", Ok(candidate.clone())),
+                ("--git-dir", Ok(git_dir.clone())),
+                ("--git-common-dir", Ok(common_dir.clone())),
+            ],
+        );
+        assert!(message.contains("linked-worktree layout"), "{message}");
+        assert!(
+            message.contains(&git_dir.display().to_string()),
+            "{message}"
+        );
+        assert!(
+            message.contains(&common_dir.display().to_string()),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn git_candidate_reports_mismatched_linked_worktree_backlink() {
+        let (_fixture, candidate) = candidate_fixture();
+        let common_dir = candidate.join("admin");
+        let git_dir = common_dir.join("worktrees/fixture");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        std::fs::write(candidate.join(".git"), "gitdir: ignored\n").unwrap();
+        std::fs::write(
+            git_dir.join("gitdir"),
+            candidate
+                .join("missing-marker")
+                .to_string_lossy()
+                .as_bytes(),
+        )
+        .unwrap();
+        let message = rejection_message(
+            &candidate,
+            false,
+            vec![
+                ("--show-toplevel", Ok(candidate.clone())),
+                ("--git-dir", Ok(git_dir.clone())),
+                ("--git-common-dir", Ok(common_dir)),
+            ],
+        );
+        assert!(message.contains("backlink"), "{message}");
+        assert!(
+            message.contains(&git_dir.display().to_string()),
+            "{message}"
+        );
+    }
+
+    fn candidate_fixture() -> (tempfile::TempDir, PathBuf) {
+        let fixture = tempfile::tempdir().unwrap();
+        let candidate = fixture.path().canonicalize().unwrap();
+        (fixture, candidate)
+    }
+
+    fn rejection_message(
+        candidate: &Path,
+        marker_is_dir: bool,
+        resolutions: Vec<(&'static str, GitPathResolution)>,
+    ) -> String {
+        let mut resolutions = resolutions.into_iter();
+        let mut resolve = |_: &Path, field| {
+            let (expected, resolution) = resolutions.next().expect("unexpected Git check");
+            assert_eq!(field, expected);
+            Ok(resolution)
+        };
+        git_candidate_is_root_with(candidate, marker_is_dir, &mut resolve)
+            .unwrap()
+            .expect("candidate must be rejected")
+            .to_string()
+    }
+
+    fn rejected_git_path(field: &'static str, stderr: &str) -> GitPathResolution {
+        let status = Command::new("git")
+            .arg("--definitely-not-a-real-option")
+            .output()
+            .unwrap()
+            .status;
+        Err(GitCommandRejection {
+            field,
+            status,
+            stderr: stderr.to_string(),
+        })
     }
 
     #[test]

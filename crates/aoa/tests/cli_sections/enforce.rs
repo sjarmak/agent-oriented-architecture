@@ -515,11 +515,37 @@ fn enforce_check_rejects_an_arbitrary_non_repository_cwd_without_writing() {
         .write_stdin(payload)
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("not inside a Git repository"));
+        .stderr(predicate::str::contains("--show-toplevel"))
+        .stderr(predicate::str::contains("not a git repository"));
     assert!(
         !dir.path().join(".aoa").exists(),
         "a rejected payload must not create telemetry outside a repository"
     );
+}
+
+#[test]
+fn enforce_check_reports_safe_directory_exit_128_as_the_actual_git_failure() {
+    let repo = TempDir::new().unwrap();
+    mark_git_repo(repo.path());
+    let payload = serde_json::to_string(&serde_json::json!({
+        "session_id": "it-dubious-owner",
+        "tool_name": "Write",
+        "tool_input": {"file_path": "src/lib.rs"},
+        "cwd": repo.path().to_str().unwrap(),
+    }))
+    .unwrap();
+
+    aoa_stdin()
+        .env("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
+        .args(["enforce", "check"])
+        .write_stdin(payload)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("exit status: 128"))
+        .stderr(predicate::str::contains("dubious ownership"))
+        .stderr(predicate::str::contains("--show-toplevel"))
+        .stderr(predicate::str::contains("not inside a Git repository").not());
+    assert!(!repo.path().join(".aoa").exists());
 }
 
 #[test]
@@ -549,7 +575,8 @@ fn enforce_check_ignores_ambient_git_repository_overrides() {
         .write_stdin(payload)
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("not inside a Git repository"));
+        .stderr(predicate::str::contains("--show-toplevel"))
+        .stderr(predicate::str::contains("not a git repository"));
     assert!(
         !untrusted.path().join(".aoa").exists(),
         "hostile Git environment variables must not authorize telemetry writes"
@@ -586,7 +613,8 @@ fn enforce_check_ignores_ambient_git_object_directory() {
         .write_stdin(payload)
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("not inside a Git repository"));
+        .stderr(predicate::str::contains("--show-toplevel"))
+        .stderr(predicate::str::contains("not a git repository"));
     assert!(
         !untrusted.path().join(".aoa").exists(),
         "an ambient object directory must not authorize telemetry writes"
