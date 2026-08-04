@@ -67,6 +67,7 @@ pub struct MigrationManifest {
 pub fn apply(repo: &Path, plan: &MigrationPlan) -> Result<MigrationManifest, MigrateError> {
     let migrate_dir = repo.join(MIGRATE_DIR);
     let archive_root = migrate_dir.join(ARCHIVE_DIR);
+    let canonical_repo = repo.canonicalize().map_err(|source| io_err(repo, source))?;
 
     // Refuse to clobber a prior migration's rollback record: an existing
     // manifest means a migration is applied but not rolled back, and writing a
@@ -77,36 +78,8 @@ pub fn apply(repo: &Path, plan: &MigrationPlan) -> Result<MigrationManifest, Mig
         });
     }
 
-    // 1. Derive the manifest entries, validating create-exclusivity and that
-    // every target stays inside the repo up front.
-    let mut entries = Vec::with_capacity(plan.changes.len());
-    for change in &plan.changes {
-        let rel = change
-            .path
-            .strip_prefix(repo)
-            .map_err(|_| MigrateError::PathOutsideRepo {
-                path: change.path.clone(),
-                repo: repo.to_path_buf(),
-            })?;
-        match change.action {
-            ChangeAction::Create => {
-                if change.path.exists() {
-                    return Err(MigrateError::TargetExists {
-                        path: change.path.clone(),
-                    });
-                }
-                entries.push(ManifestEntry::Created {
-                    path: change.path.clone(),
-                });
-            }
-            ChangeAction::Overwrite => {
-                entries.push(ManifestEntry::Modified {
-                    path: change.path.clone(),
-                    archive: archive_root.join(rel),
-                });
-            }
-        }
-    }
+    // 1. Derive the manifest entries, validating every target up front.
+    let entries = manifest_entries(repo, &canonical_repo, &archive_root, plan)?;
 
     let manifest = MigrationManifest {
         fixes_applied: plan.fix_ids.clone(),
@@ -138,6 +111,68 @@ pub fn apply(repo: &Path, plan: &MigrationPlan) -> Result<MigrationManifest, Mig
     }
 
     Ok(manifest)
+}
+
+fn manifest_entries(
+    repo: &Path,
+    canonical_repo: &Path,
+    archive_root: &Path,
+    plan: &MigrationPlan,
+) -> Result<Vec<ManifestEntry>, MigrateError> {
+    let mut entries = Vec::with_capacity(plan.changes.len());
+    for change in &plan.changes {
+        let rel = canonical_relative_target(repo, canonical_repo, &change.path)?;
+        match change.action {
+            ChangeAction::Create => {
+                match std::fs::symlink_metadata(&change.path) {
+                    Ok(_) => {
+                        return Err(MigrateError::TargetExists {
+                            path: change.path.clone(),
+                        });
+                    }
+                    Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(source) => return Err(io_err(&change.path, source)),
+                }
+                entries.push(ManifestEntry::Created {
+                    path: change.path.clone(),
+                });
+            }
+            ChangeAction::Overwrite => {
+                let metadata = std::fs::symlink_metadata(&change.path)
+                    .map_err(|source| io_err(&change.path, source))?;
+                if metadata.file_type().is_symlink() {
+                    return Err(MigrateError::SymlinkTarget {
+                        path: change.path.clone(),
+                    });
+                }
+                entries.push(ManifestEntry::Modified {
+                    path: change.path.clone(),
+                    archive: archive_root.join(rel),
+                });
+            }
+        }
+    }
+    Ok(entries)
+}
+
+fn canonical_relative_target(
+    repo: &Path,
+    canonical_repo: &Path,
+    target: &Path,
+) -> Result<PathBuf, MigrateError> {
+    let outside_repo = || MigrateError::PathOutsideRepo {
+        path: target.to_path_buf(),
+        repo: repo.to_path_buf(),
+    };
+    let parent = target.parent().ok_or_else(outside_repo)?;
+    let file_name = target.file_name().ok_or_else(outside_repo)?;
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|source| io_err(parent, source))?;
+    let relative_parent = canonical_parent
+        .strip_prefix(canonical_repo)
+        .map_err(|_| outside_repo())?;
+    Ok(relative_parent.join(file_name))
 }
 
 /// Roll back the migration recorded in `repo`'s manifest, restoring the
@@ -386,6 +421,64 @@ mod tests {
             new_content: new.to_string(),
             old_content: Some(old.to_string()),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apply_rejects_a_symlink_overwrite_and_leaves_the_victim_untouched() {
+        use std::os::unix::fs::symlink;
+
+        let root = tmp("overwrite-symlink");
+        let repo = root.join("repo");
+        let victim = root.join("victim.txt");
+        let target = repo.join("target.txt");
+        fs::create_dir(&repo).unwrap();
+        fs::write(&victim, "DO NOT CLOBBER\n").unwrap();
+        symlink(&victim, &target).unwrap();
+
+        let plan = MigrationPlan {
+            changes: vec![overwrite_change(target, "DO NOT CLOBBER\n", "REPLACED\n")],
+            fix_ids: vec!["symlink-overwrite".to_string()],
+            eligibility_notes: Vec::new(),
+            provenance: Vec::new(),
+        };
+        let err = apply(&repo, &plan).expect_err("an overwrite target symlink must be rejected");
+
+        assert!(matches!(err, MigrateError::SymlinkTarget { .. }));
+        assert_eq!(
+            fs::read_to_string(&victim).unwrap(),
+            "DO NOT CLOBBER\n",
+            "the planted symlink victim must remain untouched"
+        );
+        assert!(!manifest_path(&repo).exists(), "no manifest on rejection");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn apply_rejects_parent_traversal_and_leaves_the_victim_untouched() {
+        let root = tmp("overwrite-parent-traversal");
+        let repo = root.join("repo");
+        let victim = root.join("victim.txt");
+        fs::create_dir(&repo).unwrap();
+        fs::write(&victim, "DO NOT CLOBBER\n").unwrap();
+        let target = repo.join("../victim.txt");
+
+        let plan = MigrationPlan {
+            changes: vec![overwrite_change(target, "DO NOT CLOBBER\n", "REPLACED\n")],
+            fix_ids: vec!["parent-traversal".to_string()],
+            eligibility_notes: Vec::new(),
+            provenance: Vec::new(),
+        };
+        let err = apply(&repo, &plan).expect_err("a parent traversal target must be rejected");
+
+        assert!(matches!(err, MigrateError::PathOutsideRepo { .. }));
+        assert_eq!(
+            fs::read_to_string(&victim).unwrap(),
+            "DO NOT CLOBBER\n",
+            "the planted traversal victim must remain untouched"
+        );
+        assert!(!manifest_path(&repo).exists(), "no manifest on rejection");
+        fs::remove_dir_all(&root).ok();
     }
 
     #[test]

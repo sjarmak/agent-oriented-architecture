@@ -39,6 +39,11 @@ pub enum MigrateError {
     #[error("refusing to act on {path}: not inside the migrated repo {repo}")]
     PathOutsideRepo { path: PathBuf, repo: PathBuf },
 
+    /// An overwrite target was a symbolic link. Following it while archiving or
+    /// replacing the file could modify content outside the checkout.
+    #[error("refusing to overwrite symbolic link at {path}")]
+    SymlinkTarget { path: PathBuf },
+
     /// `apply` was called while a prior migration's manifest is still present.
     /// Overwriting it would destroy the only rollback record for that
     /// migration, so the engine refuses until it is rolled back.
