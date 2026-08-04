@@ -25,6 +25,40 @@ fn build_error(manifest: &Manifest, base_dir: &Path) -> String {
         .to_string()
 }
 
+fn write_answer_task(tasks_dir: &Path, task_id: &str) {
+    let task_dir = tasks_dir.join(task_id);
+    std::fs::create_dir_all(task_dir.join("tests")).unwrap();
+    std::fs::write(
+        task_dir.join("task.toml"),
+        format!("[task]\nid = \"{task_id}\"\nrepo = \"sample/repo\"\n"),
+    )
+    .unwrap();
+    std::fs::write(task_dir.join("instruction.md"), "answer the question").unwrap();
+    std::fs::write(
+        task_dir.join("tests/ground_truth.json"),
+        r#"{"answer":["src/pkg/app.py"],"answer_type":"file_list","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
+    )
+    .unwrap();
+}
+
+fn write_answer_trial(base_dir: &Path, run_dir: &str, task_id: &str) {
+    let trial_dir = base_dir.join(run_dir).join(task_id);
+    std::fs::create_dir_all(&trial_dir).unwrap();
+    std::fs::write(
+        trial_dir.join("scoring.json"),
+        r#"{"scorer_family":"dual_composite","passed_direct":true,"passed_artifact":true}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        trial_dir.join("agent_output.txt"),
+        concat!(
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/work/checkout/src/pkg/app.py"}}]}}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+}
+
 #[test]
 fn an_empty_manifest_fails_loud_at_the_library_boundary() {
     let manifest: Manifest =
@@ -115,4 +149,44 @@ fn aliased_run_directories_are_rejected_by_physical_identity() {
     let error = build_error(&manifest, temp.path());
 
     assert!(error.contains("used by more than one run/arm"));
+}
+
+#[test]
+fn divergent_identical_pair_sets_fail_with_missing_and_extra_tasks() {
+    let temp = tempfile::tempdir().unwrap();
+    let tasks_dir = temp.path().join("tasks");
+    write_answer_task(&tasks_dir, "alpha");
+    write_answer_task(&tasks_dir, "beta");
+    for (seed, task_id) in [(1, "alpha"), (2, "beta"), (3, "alpha")] {
+        write_answer_trial(temp.path(), &format!("seed{seed}/repo"), task_id);
+        write_answer_trial(temp.path(), &format!("seed{seed}/harness"), task_id);
+    }
+    std::fs::write(temp.path().join("repo.json"), "{}").unwrap();
+    std::fs::write(temp.path().join("harness.json"), "{}").unwrap();
+    std::fs::write(
+        temp.path().join("calibration.json"),
+        r#"{"method":"external_outcome_correlation","protocol_version":"r11","corpus_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","sample_size":20,"criteria":["rho-significant"],"conclusion":"calibrated"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path().join("index.json"),
+        r#"{"documents":[{"relative_path":"src/pkg/app.py","occurrences":[{"symbol":"pkg/app#app().","roles":["definition"]}]}],"aoa":{"writable":[]}}"#,
+    )
+    .unwrap();
+    let runs = r#"
+        {"seed":1,"repo_arm":"seed1/repo","harness_arm":"seed1/harness"},
+        {"seed":2,"repo_arm":"seed2/repo","harness_arm":"seed2/harness"},
+        {"seed":3,"repo_arm":"seed3/repo","harness_arm":"seed3/harness"}"#;
+    let manifest = manifest(&repo(
+        runs,
+        r#""task_shape":"answer","scip_index":"index.json","#,
+    ));
+
+    let error = build(&manifest, &tasks_dir, temp.path())
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("run 1 (seed 2)"), "got: {error}");
+    assert!(error.contains(r#"missing ["alpha"]"#), "got: {error}");
+    assert!(error.contains(r#"extra ["beta"]"#), "got: {error}");
 }

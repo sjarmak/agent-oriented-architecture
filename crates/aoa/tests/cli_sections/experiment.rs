@@ -284,9 +284,6 @@ fn experiment_observation_sidecar_is_byte_reproducible() {
     assert_eq!(run("first"), run("second"));
 }
 
-/// Writes `manifest_json` to a temp dir and runs the experiment builder over
-/// it against the `answer_tasks` fixture, expecting failure; callers assert
-/// on stderr.
 #[test]
 fn experiment_drops_divergent_unmeasured_edit_runs() {
     let dir = TempDir::new().expect("tempdir");
