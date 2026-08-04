@@ -88,7 +88,7 @@ const SKIP_DIRS: &[&str] = &[
     "__pycache__",
 ];
 
-/// Recursion-depth ceiling for the reachability walks. Real repos nest a few
+/// Recursion-depth ceiling for recursive filesystem walks. Real repos nest a few
 /// dozen levels at most; the cap is defense-in-depth so a pathologically (or
 /// maliciously) deep tree degrades to "no signal found below here" rather than
 /// overflowing the stack.
@@ -393,7 +393,7 @@ pub fn structure_measurements(
 /// real `Measured(0)`.
 fn unused_import_measure(repo: &Path) -> Result<StructureMeasure, AuditError> {
     let mut sources: Vec<(PathBuf, u64)> = Vec::new();
-    collect_source_line_counts(repo, &mut sources)?;
+    collect_source_line_counts(repo, &mut sources, 0)?;
     let has_rust = sources
         .iter()
         .any(|(p, _)| p.extension().and_then(|e| e.to_str()) == Some("rs"));
@@ -401,7 +401,7 @@ fn unused_import_measure(repo: &Path) -> Result<StructureMeasure, AuditError> {
         return Ok(StructureMeasure::Unmeasurable);
     }
     let mut unused: Vec<(PathBuf, u64)> = Vec::new();
-    collect_unused_imports(repo, &mut unused)?;
+    collect_unused_imports(repo, &mut unused, 0)?;
     Ok(StructureMeasure::Measured(
         unused.iter().map(|(_, n)| n).sum(),
     ))
@@ -763,8 +763,8 @@ fn has_root_invariant_marker(repo: &Path) -> Result<bool, AuditError> {
 }
 
 /// Whether a declared-rule marker is reachable *within* `root` by a walk bounded
-/// by [`SKIP_DIRS`] and hidden-*directory* exclusions (depth-unlimited within
-/// those bounds). Short-circuits on the first hit. Never follows symlinks.
+/// by [`SKIP_DIRS`], hidden-*directory* exclusions, and [`MAX_WALK_DEPTH`].
+/// Short-circuits on the first hit. Never follows symlinks.
 ///
 /// Divergence from [`has_local_verification`] by design: a leading-dot *file* is
 /// NOT skipped here, because rule files are overwhelmingly dotfiles
@@ -886,11 +886,11 @@ fn file_mentions_test_command(path: &Path) -> Result<bool, AuditError> {
 }
 
 /// Whether a verification entrypoint is reachable *within* `root` by a walk
-/// bounded by [`SKIP_DIRS`] and hidden-dir exclusions (depth-unlimited within
-/// those bounds): a [`TEST_DIRS`] directory, a [`TEST_CONFIG_MARKERS`] file, a
-/// test-named source file, or a `.rs` file with an in-source `cfg(test)` module.
-/// Short-circuits on the first hit. Never follows symlinks — `.github` (hidden)
-/// is therefore handled only by [`has_ci_test_step`].
+/// bounded by [`SKIP_DIRS`], hidden-dir exclusions, and [`MAX_WALK_DEPTH`]: a
+/// [`TEST_DIRS`] directory, a [`TEST_CONFIG_MARKERS`] file, a test-named source
+/// file, or a `.rs` file with an in-source `cfg(test)` module. Short-circuits on
+/// the first hit. Never follows symlinks — `.github` (hidden) is therefore
+/// handled only by [`has_ci_test_step`].
 fn has_local_verification(root: &Path) -> Result<bool, AuditError> {
     has_local_verification_bounded(root, 0)
 }
@@ -992,7 +992,7 @@ fn module_size_outlier_item(
 /// drops both) cannot express.
 fn module_size_outliers(repo: &Path, k: f64) -> Result<Option<Vec<PathBuf>>, AuditError> {
     let mut files: Vec<(PathBuf, u64)> = Vec::new();
-    collect_source_line_counts(repo, &mut files)?;
+    collect_source_line_counts(repo, &mut files, 0)?;
 
     if files.len() < MIN_FILES_FOR_MEDIAN {
         return Ok(None);
@@ -1051,7 +1051,7 @@ fn unused_import_proxy_item(
     partition: &SubtreePartition,
 ) -> Result<Option<PunchItem>, AuditError> {
     let mut files: Vec<(PathBuf, u64)> = Vec::new();
-    collect_unused_imports(repo, &mut files)?;
+    collect_unused_imports(repo, &mut files, 0)?;
     if files.is_empty() {
         return Ok(None);
     }
@@ -1158,10 +1158,16 @@ fn write_boundary_absent_count(repo: &Path) -> u64 {
 ///
 /// Kept separate from [`collect_source_line_counts`] rather than sharing a walk:
 /// that one is multi-language and counts newline bytes, this one is Rust-only and
-/// scans tokens — the only genuinely shared invariant is the bounded read, which
-/// [`read_source_capped`] carries. Same skip-hidden / skip-build-output /
-/// never-follow-symlinks discipline as the rest of the family.
-fn collect_unused_imports(dir: &Path, out: &mut Vec<(PathBuf, u64)>) -> Result<(), AuditError> {
+/// scans tokens. They share only mechanical traversal constraints: bounded depth
+/// and reads, hidden/build-output exclusions, and never following symlinks.
+fn collect_unused_imports(
+    dir: &Path,
+    out: &mut Vec<(PathBuf, u64)>,
+    depth: usize,
+) -> Result<(), AuditError> {
+    if depth >= MAX_WALK_DEPTH {
+        return Ok(());
+    }
     for entry in read_dir(dir)? {
         let entry = entry.map_err(|source| io_err(dir, source))?;
         let name = entry.file_name();
@@ -1172,7 +1178,7 @@ fn collect_unused_imports(dir: &Path, out: &mut Vec<(PathBuf, u64)>) -> Result<(
         let path = entry.path();
         let file_type = entry.file_type().map_err(|source| io_err(&path, source))?;
         if file_type.is_dir() {
-            collect_unused_imports(&path, out)?;
+            collect_unused_imports(&path, out, depth + 1)?;
         } else if file_type.is_file() && is_rust_file(&path) {
             // `None` is an oversized file: skipped, not fatal (lossy proxy by
             // contract). A genuine read error propagates.
@@ -1419,7 +1425,14 @@ fn has_readme(dir: &Path) -> bool {
 /// (matching aoa-scip-graph's best-effort walk). The path rides along so an
 /// outlier can be attributed to its workspace subtree. An oversized single
 /// file is skipped, not fatal; a genuine read error propagates.
-fn collect_source_line_counts(dir: &Path, out: &mut Vec<(PathBuf, u64)>) -> Result<(), AuditError> {
+fn collect_source_line_counts(
+    dir: &Path,
+    out: &mut Vec<(PathBuf, u64)>,
+    depth: usize,
+) -> Result<(), AuditError> {
+    if depth >= MAX_WALK_DEPTH {
+        return Ok(());
+    }
     for entry in read_dir(dir)? {
         let entry = entry.map_err(|source| io_err(dir, source))?;
         let name = entry.file_name();
@@ -1430,7 +1443,7 @@ fn collect_source_line_counts(dir: &Path, out: &mut Vec<(PathBuf, u64)>) -> Resu
         let path = entry.path();
         let file_type = entry.file_type().map_err(|source| io_err(&path, source))?;
         if file_type.is_dir() {
-            collect_source_line_counts(&path, out)?;
+            collect_source_line_counts(&path, out, depth + 1)?;
         } else if file_type.is_file() && is_source_file(&path) {
             // `None` is an oversized file: skipped, not fatal (the scan is a
             // lossy structural proxy by contract). A genuine read error
@@ -1500,6 +1513,14 @@ mod tests {
         SubtreePartition::implicit_root(dir)
     }
 
+    fn create_deep_tree(root: &Path) -> PathBuf {
+        (0..=MAX_WALK_DEPTH).fold(root.to_path_buf(), |dir, depth| {
+            let nested = dir.join(format!("level-{depth}"));
+            fs::create_dir(&nested).unwrap();
+            nested
+        })
+    }
+
     #[test]
     fn structure_measurements_records_a_measured_zero_for_a_clean_repo() {
         let dir = tmp("measure-clean");
@@ -1548,6 +1569,36 @@ mod tests {
         assert_eq!(
             m[&FindingKind::UnusedImportProxy],
             StructureMeasure::Unmeasurable
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn structure_measurements_ignore_sources_below_the_walk_depth_limit() {
+        let dir = tmp("measure-depth-limit");
+        fs::write(dir.join("shallow.rs"), "fn shallow() {}\n").unwrap();
+
+        let deep = create_deep_tree(&dir);
+        for i in 0..5 {
+            fs::write(deep.join(format!("small-{i}.rs")), "fn small() {}\n").unwrap();
+        }
+        fs::write(
+            deep.join("huge.rs"),
+            format!("use std::path::Path;\n{}", "fn huge() {}\n".repeat(200)),
+        )
+        .unwrap();
+
+        let measurements = structure_measurements(&dir, 4.0).unwrap();
+        assert_eq!(
+            (
+                measurements[&FindingKind::ModuleSizeOutlier],
+                measurements[&FindingKind::UnusedImportProxy],
+            ),
+            (
+                StructureMeasure::Unmeasurable,
+                StructureMeasure::Measured(0),
+            ),
+            "source files below the recursion cap must not affect either measure",
         );
         fs::remove_dir_all(&dir).ok();
     }
@@ -1829,7 +1880,7 @@ mod tests {
         fs::write(dir.join("latin1.c"), [0xff, b'\n', 0xfe, b'\n']).unwrap();
 
         let mut counts = Vec::new();
-        collect_source_line_counts(&dir, &mut counts).unwrap();
+        collect_source_line_counts(&dir, &mut counts, 0).unwrap();
         assert_eq!(counts.len(), 7, "non-utf8 file must be counted, not fatal");
         fs::remove_dir_all(&dir).ok();
     }
@@ -1846,7 +1897,7 @@ mod tests {
         fs::write(hidden.join("hook.rs"), "x\n".repeat(9999)).unwrap();
 
         let mut counts = Vec::new();
-        collect_source_line_counts(&dir, &mut counts).unwrap();
+        collect_source_line_counts(&dir, &mut counts, 0).unwrap();
         assert_eq!(counts.len(), 6, "hidden dir must not be traversed");
         fs::remove_dir_all(&dir).ok();
     }
@@ -1887,7 +1938,7 @@ mod tests {
         // If the symlink were followed, escaped.rs would appear and skew the
         // median / produce an outlier. It must not.
         let mut counts = Vec::new();
-        collect_source_line_counts(&repo, &mut counts).unwrap();
+        collect_source_line_counts(&repo, &mut counts, 0).unwrap();
         assert_eq!(counts.len(), 6, "symlinked dir must not be traversed");
         fs::remove_dir_all(&base).ok();
     }
