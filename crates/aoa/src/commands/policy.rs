@@ -58,7 +58,7 @@ fn compile(repo: &Path, forge: &str, json: bool) -> Result<i32> {
     // Pre-commit plane.
     written.push(write_artifact(
         &repo.join(".pre-commit-config.yaml"),
-        &precommit_config(&policy),
+        &precommit_config(&policy)?,
     )?);
 
     // CI plane: workflow + CODEOWNERS.
@@ -67,11 +67,11 @@ fn compile(repo: &Path, forge: &str, json: bool) -> Result<i32> {
             .join(".github")
             .join("workflows")
             .join("aoa-policy.yml"),
-        &ci_workflow(&policy),
+        &ci_workflow(&policy)?,
     )?);
     written.push(write_artifact(
         &repo.join(CODEOWNERS_REL),
-        &codeowners(&policy),
+        &codeowners(&policy)?,
     )?);
 
     // R6 generated-artifact marking: a non-destructive `.gitattributes` block

