@@ -7,16 +7,16 @@ use crate::convention::{ConventionFamily, ScoringConvention};
 
 /// The three independent facts that decide whether a repo may vote in R0.
 ///
-/// A repo votes ONLY when it is high-confidence (SCIP-grade index), native-span
-/// (its held-out suite is natively composed, not synthesized or reconstructed),
-/// AND calibrated. A repo failing any one is excluded and does not contribute a
+/// A repo votes ONLY when it is high-confidence (SCIP-grade index), has
+/// certified held-out provenance (external or natively composed), AND is
+/// calibrated. A repo failing any one is excluded and does not contribute a
 /// vote, per R-silent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Eligibility {
     /// Index confidence from `aoa-metrics`; only `Confidence::High` may vote.
     pub confidence: Confidence,
-    /// Held-out provenance; only `NativeComposed` counts as native-span.
+    /// Held-out provenance; `External` and `NativeComposed` may vote.
     pub native_span: HeldOutProvenance,
     /// Whether the repo's scoring is calibrated against external outcomes.
     pub calibrated: bool,

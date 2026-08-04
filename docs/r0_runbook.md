@@ -161,8 +161,9 @@ Verify
 for a real SCIP index). The calibration artifact is a strict JSON record with
 `method`, `protocol_version`, `corpus_sha256`, positive `sample_size`,
 non-empty `criteria`, and `conclusion`. `native_span` is **derived** from each
-task's mined oracle — never declared. Only a high-confidence, native-composed
-repo backed by a complete artifact whose conclusion is `calibrated` may vote.
+task's mined oracle — never declared. Only a high-confidence repo with certified
+held-out provenance (`external` or `native_composed`), backed by a complete
+artifact whose conclusion is `calibrated`, may vote.
 
 **R11 scope note for answer-shaped tasks (pre-registered 2026-07-05, before
 any campaign arm ran).** The calibration artifact attests *scoring validity*.

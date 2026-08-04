@@ -17,8 +17,9 @@
 //!   trace-locality floor/ceiling, trace-reach depth-k, alternative metric
 //!   weights (pre-registered 2026-07-04, bead aoa-dhk.1) — else `inconclusive`.
 //!   The conventions are data, not hidden.
-//! - ELIGIBILITY: only high-confidence (SCIP-grade) AND native-span AND
-//!   calibrated repos vote; ineligible repos are excluded (R-silent).
+//! - ELIGIBILITY: only high-confidence (SCIP-grade) repos with certified
+//!   external or natively composed held-out provenance AND calibration vote;
+//!   ineligible repos are excluded (R-silent).
 //! - POWER: a held-out size and effect-size precondition gates whether a
 //!   significant verdict may be returned at all; below threshold `inconclusive`.
 //!

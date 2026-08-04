@@ -2,8 +2,8 @@ use aoa_gap::HeldOutProvenance;
 use aoa_trace::Confidence;
 
 use aoa_falsify::{
-    falsify, ConventionInputs, Eligibility, FalsifyConfig, FalsifyError, FalsifyInput, PairTask,
-    RepoResult, RepoRun, ScoringConvention, Verdict,
+    falsify, is_eligible, ConventionInputs, Eligibility, FalsifyConfig, FalsifyError, FalsifyInput,
+    PairTask, RepoResult, RepoRun, ScoringConvention, Verdict,
 };
 
 /// An eligible repo: high-confidence, native-composed, calibrated.
@@ -77,6 +77,37 @@ fn input(repos: Vec<RepoResult>) -> FalsifyInput {
         repos,
         config: FalsifyConfig::default(),
     }
+}
+
+#[test]
+fn external_held_out_provenance_is_eligible() {
+    assert!(is_eligible(&Eligibility {
+        confidence: Confidence::High,
+        native_span: HeldOutProvenance::External,
+        calibrated: true,
+    }));
+}
+
+#[test]
+fn all_external_manifest_votes_in_r0() {
+    let repos = (0..5)
+        .map(|i| RepoResult {
+            repo_id: format!("external-{i}"),
+            eligibility: Eligibility {
+                confidence: Confidence::High,
+                native_span: HeldOutProvenance::External,
+                calibrated: true,
+            },
+            runs: stable_runs(3, vec![pair(1, true, false)]),
+            holdout_size: 40,
+        })
+        .collect();
+
+    let report = falsify(&input(repos)).expect("external manifest is valid");
+
+    assert_eq!(report.verdict, Verdict::Proceed);
+    assert_eq!(report.eligible_repos.len(), 5);
+    assert!(report.excluded_repos.is_empty());
 }
 
 #[test]
