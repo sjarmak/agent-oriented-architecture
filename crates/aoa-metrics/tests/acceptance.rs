@@ -73,9 +73,9 @@ fn retrieval_locality_anchors_gold_through_rename() {
     // First relevant access is the third access span (search, read, lookup).
     assert_eq!(r.tool_calls_to_first_relevant_artifact, Some(3));
     // "orders::Service" is rank 2 of 3 in the first ranked batch -> MRR = 1/2.
-    assert!((r.mrr - 0.5).abs() < 1e-9);
+    assert!((r.mrr.expect("anchored gold makes MRR available") - 0.5).abs() < 1e-9);
     // One gold hit within top-3 over a gold set of size 1 -> Recall@k = 1.0.
-    assert!((r.recall_at_k - 1.0).abs() < 1e-9);
+    assert!((r.recall_at_k.expect("anchored gold makes recall available") - 1.0).abs() < 1e-9);
     assert_eq!(r.k, 3);
 }
 
@@ -93,7 +93,42 @@ fn retrieval_locality_misses_when_only_raw_name_present() {
     };
     let r = compute_retrieval_locality(input.as_view());
     assert_eq!(r.tool_calls_to_first_relevant_artifact, None);
-    assert!((r.mrr - 0.0).abs() < 1e-9);
+    assert_eq!(r.recall_at_k, Some(0.0));
+    assert_eq!(r.mrr, Some(0.0));
+    assert_eq!(r.unavailable, None);
+}
+
+#[test]
+fn retrieval_locality_is_unavailable_when_no_gold_symbol_anchors() {
+    let input = MetricInput {
+        trace: Trace {
+            spans: vec![span(
+                SpanType::RetrievalSearch,
+                1,
+                serde_json::json!({ "results": ["orders::Service"] }),
+            )],
+        },
+        gold_set: BTreeSet::new(),
+        ..base_input()
+    };
+
+    let retrieval = compute_retrieval_locality(input.as_view());
+
+    assert!(retrieval.anchored_gold.is_empty());
+    assert_eq!(retrieval.recall_at_k, None);
+    assert_eq!(retrieval.mrr, None);
+    assert_eq!(
+        retrieval.unavailable.as_deref(),
+        Some("no gold symbols anchored through the transform map")
+    );
+
+    let json = serde_json::to_value(&retrieval).expect("retrieval metric serializes");
+    assert_eq!(json["recall_at_k"], serde_json::Value::Null);
+    assert_eq!(json["mrr"], serde_json::Value::Null);
+    assert_eq!(
+        json["unavailable"],
+        "no gold symbols anchored through the transform map"
+    );
 }
 
 // Criterion 2: edit-locality emits inflation against BOTH an intersection floor

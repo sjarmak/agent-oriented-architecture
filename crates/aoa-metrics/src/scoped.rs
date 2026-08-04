@@ -27,8 +27,7 @@ use crate::subtree::SubtreePartition;
 /// Per-subtree retrieval and edit locality reuse the repo-wide extractors on
 /// the filtered view. When the task's gold set has no member attributable to
 /// this subtree, `retrieval_locality.anchored_gold` is empty and its recall/MRR
-/// read 0.0 — the empty anchor set on the row makes that visible, it is not a
-/// judgment that retrieval failed.
+/// are unavailable rather than fabricated as zero.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SubtreeMetrics {
     /// The member dir this row aggregates (relative to the repo root).

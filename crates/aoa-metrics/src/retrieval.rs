@@ -13,11 +13,17 @@ pub struct RetrievalLocality {
     /// an anchored gold artifact. `None` when no gold artifact was ever accessed.
     pub tool_calls_to_first_relevant_artifact: Option<u32>,
     /// Recall@k over the first ranked retrieval batch: anchored gold hits in the
-    /// first `k` results divided by gold-set size.
-    pub recall_at_k: f64,
+    /// first `k` results divided by gold-set size. `None` when that denominator
+    /// is empty.
+    pub recall_at_k: Option<f64>,
     /// Mean reciprocal rank of the first anchored gold artifact in the first
-    /// ranked retrieval batch (0.0 when none is present).
-    pub mrr: f64,
+    /// ranked retrieval batch. `Some(0.0)` means a defined gold set had no hit;
+    /// `None` means there was no anchored gold set to measure.
+    pub mrr: Option<f64>,
+    /// Why Recall@k and MRR are unavailable. Present exactly when the anchored
+    /// gold set is empty: a 0/0 recall row is not a retrieval observation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable: Option<String>,
     /// The `k` used for Recall@k, emitted as data.
     pub k: u32,
     /// The anchored gold names actually used for matching.
@@ -59,22 +65,27 @@ pub fn compute_retrieval_locality(input: MetricInputRef<'_>) -> RetrievalLocalit
     let k = input.k;
     let top_k = first_batch.iter().take(k as usize).copied();
     let hits_in_k = top_k.filter(|r| anchored.contains(*r)).count();
-    let recall_at_k = if anchored.is_empty() {
-        0.0
+    let (recall_at_k, mrr, unavailable) = if anchored.is_empty() {
+        (
+            None,
+            None,
+            Some("no gold symbols anchored through the transform map".to_string()),
+        )
     } else {
-        hits_in_k as f64 / anchored.len() as f64
+        let recall_at_k = hits_in_k as f64 / anchored.len() as f64;
+        let mrr = first_batch
+            .iter()
+            .position(|r| anchored.contains(*r))
+            .map(|pos| 1.0 / (pos as f64 + 1.0))
+            .unwrap_or(0.0);
+        (Some(recall_at_k), Some(mrr), None)
     };
-
-    let mrr = first_batch
-        .iter()
-        .position(|r| anchored.contains(*r))
-        .map(|pos| 1.0 / (pos as f64 + 1.0))
-        .unwrap_or(0.0);
 
     RetrievalLocality {
         tool_calls_to_first_relevant_artifact: tool_calls_to_first,
         recall_at_k,
         mrr,
+        unavailable,
         k,
         anchored_gold: anchored,
         conditioned_on: ConditionedOn::HeldOut,
