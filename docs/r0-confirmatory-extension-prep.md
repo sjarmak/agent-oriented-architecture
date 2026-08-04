@@ -1,8 +1,8 @@
 # R0 confirmatory extension: offline preparation and dry-run cost
 
-Prepared on 2026-08-04 for `aoa-h4q5`. This is offline planning evidence only.
-No agent trial was run, no outcome was observed, and live execution still
-requires explicit user authorization.
+Prepared on 2026-08-04 for `aoa-h4q5`. This preparation chain performed only
+offline planning: it ran no agent trial and inspected no trial outcome. Live
+execution still requires explicit user authorization.
 
 ## Fixed design
 
@@ -32,6 +32,11 @@ For each repository, the following offline artifacts are present under
 - `prep.json` and `mine.json`
 - `index.scip` and `index.aoa.json`
 - `index-migrated.scip` and `index-migrated.aoa.json`
+
+The six `.codeprobe/experiment.json` manifests under `seed1..3/expA,expB` for
+each repository are also intentional offline outputs of the existing
+`build_experiments.sh` pipeline. No experiment represented by those manifests
+was started by this preparation chain.
 
 ## Exact dry-run size and cost
 
@@ -75,5 +80,26 @@ SHA-256 8c5471a321c5e0cb9fbc570969eaaa1df60f5e1c0d44fe1cb17f66bc37992c1b
 ```
 
 The shorter hash recorded in `aoa-6anq` omits the final hexadecimal digit;
-the full digest above is the value verified on disk. No seed, live agent run,
-eight-repository manifest build, or convention change was performed.
+the full digest above is the value verified on disk. This preparation did not
+execute a seed, run a live agent, build the eight-repository arm assignments,
+or change a convention.
+
+## Pre-existing HTTPie run evidence
+
+Review of the hidden `.codeprobe` directories found a partial live baseline run
+under `httpie/seed1/expA` that the pre-filing survey had missed. Its files have
+timestamps from 2026-07-04 22:02-22:29 EDT, one month before this preparation,
+and include seven `agent_output.txt` files and seven `scoring.json` files. They
+therefore do not contradict the narrower claim that this 2026-08-04 chain ran
+no agents, but they do mean the original seed scaffolding was not wholly empty.
+
+The pre-existing directory was preserved, not deleted, at:
+
+```text
+/home/ds/projects/codeprobe/runs/r0-campaign/quarantine-20260804-pre-confirmatory/httpie-seed1-expA-baseline
+```
+
+The quarantine's `PROVENANCE.md` records its source, timestamps, and inventory.
+The experiment manifests remain in place. Whether the earlier baseline run
+invalidates HTTPie as a held-out reserve repository is intentionally unresolved
+here and tracked separately by `aoa-j7lf`.
