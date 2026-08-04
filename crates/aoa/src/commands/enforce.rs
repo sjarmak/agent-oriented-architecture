@@ -56,6 +56,7 @@
 use std::fs::{File, TryLockError};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
@@ -406,7 +407,10 @@ fn resolve_base(event: &HookEvent) -> Result<PathBuf> {
                     marker.display()
                 ));
             }
-            Ok(_) => return Ok(candidate.to_path_buf()),
+            Ok(metadata) if git_candidate_is_root(candidate, metadata.is_dir())? => {
+                return Ok(candidate.to_path_buf());
+            }
+            Ok(_) => {}
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => {
                 return Err(anyhow!(err))
@@ -418,6 +422,68 @@ fn resolve_base(event: &HookEvent) -> Result<PathBuf> {
         "hook cwd {} is not inside a Git repository",
         canonical.display()
     ))
+}
+
+/// Ask Git to validate the marker and require it to identify this exact
+/// canonical directory as the worktree root.
+fn git_candidate_is_root(candidate: &Path, marker_is_dir: bool) -> Result<bool> {
+    let Some(reported) = git_resolved_path(candidate, "--show-toplevel")? else {
+        return Ok(false);
+    };
+    if reported != candidate {
+        return Ok(false);
+    }
+    if marker_is_dir {
+        return Ok(true);
+    }
+
+    let Some(git_dir) = git_resolved_path(candidate, "--git-dir")? else {
+        return Ok(false);
+    };
+    let Some(common_dir) = git_resolved_path(candidate, "--git-common-dir")? else {
+        return Ok(false);
+    };
+    if git_dir.parent() != Some(common_dir.join("worktrees").as_path()) {
+        return Ok(false);
+    }
+    linked_worktree_points_back(candidate, &git_dir)
+}
+
+fn git_resolved_path(candidate: &Path, field: &str) -> Result<Option<PathBuf>> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(candidate)
+        .args(["rev-parse", "--path-format=absolute", field])
+        .output()
+        .context("failed to run git while validating the hook cwd")?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let reported = std::str::from_utf8(&output.stdout)
+        .context("git returned a non-UTF-8 repository root")?
+        .trim_end();
+    let reported = Path::new(reported)
+        .canonicalize()
+        .with_context(|| format!("failed to resolve Git repository root {reported}"))?;
+    Ok(Some(reported))
+}
+
+fn linked_worktree_points_back(candidate: &Path, git_dir: &Path) -> Result<bool> {
+    const MAX_BACKLINK_BYTES: u64 = 4096;
+    let mut raw = Vec::new();
+    File::open(git_dir.join("gitdir"))
+        .context("failed to open linked-worktree backlink")?
+        .take(MAX_BACKLINK_BYTES + 1)
+        .read_to_end(&mut raw)
+        .context("failed to read linked-worktree backlink")?;
+    if raw.len() as u64 > MAX_BACKLINK_BYTES {
+        return Ok(false);
+    }
+    let backlink = std::str::from_utf8(&raw)
+        .context("linked-worktree backlink is not UTF-8")?
+        .trim_end();
+    Ok(Path::new(backlink).canonicalize().ok() == candidate.join(".git").canonicalize().ok())
 }
 
 /// Resolve the append-only live-log path for this session, under the ignored
@@ -1197,6 +1263,15 @@ mod tests {
         }
     }
 
+    fn init_git_repo(path: &Path) {
+        let status = Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(path)
+            .status()
+            .expect("git is available for repository-boundary tests");
+        assert!(status.success(), "git init failed for test fixture");
+    }
+
     #[test]
     fn records_test_run_only_for_test_commands() {
         assert_eq!(
@@ -1219,7 +1294,7 @@ mod tests {
     #[test]
     fn live_log_path_stays_inside_traces_dir() {
         let repo = tempfile::tempdir().unwrap();
-        std::fs::create_dir(repo.path().join(".git")).unwrap();
+        init_git_repo(repo.path());
         let mut e = event("Write", None);
         e.cwd = repo.path().to_string_lossy().into_owned();
         e.session_id = "../escape".to_string();
@@ -1230,12 +1305,68 @@ mod tests {
     #[test]
     fn resolve_base_rejects_an_existing_non_repository_directory() {
         let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        std::fs::write(dir.path().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
         let mut e = event("Write", None);
         e.cwd = dir.path().to_string_lossy().into_owned();
 
         let err = resolve_base(&e).expect_err("an arbitrary directory is not a trust root");
         assert!(err.to_string().contains("not inside a Git repository"));
         assert!(!dir.path().join(".aoa").exists());
+    }
+
+    #[test]
+    fn resolve_base_accepts_a_linked_worktree_git_file() {
+        let fixture = tempfile::tempdir().unwrap();
+        let main = fixture.path().join("main");
+        let worktree = fixture.path().join("worktree");
+        init_git_repo(&main);
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(&main)
+            .args([
+                "-c",
+                "user.name=AOA Test",
+                "-c",
+                "user.email=aoa@example.invalid",
+                "commit",
+                "--quiet",
+                "--allow-empty",
+                "-m",
+                "fixture",
+            ])
+            .status()
+            .unwrap();
+        assert!(status.success(), "worktree fixture commit must succeed");
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(&main)
+            .args(["worktree", "add", "--quiet", "--detach"])
+            .arg(&worktree)
+            .status()
+            .unwrap();
+        assert!(status.success(), "linked worktree must initialize");
+        let mut e = event("Write", None);
+        e.cwd = worktree.to_string_lossy().into_owned();
+
+        assert_eq!(resolve_base(&e).unwrap(), worktree);
+    }
+
+    #[test]
+    fn resolve_base_ignores_a_nested_marker_redirecting_to_its_parent() {
+        let repo = tempfile::tempdir().unwrap();
+        init_git_repo(repo.path());
+        let nested = repo.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::write(
+            nested.join(".git"),
+            format!("gitdir: {}\n", repo.path().join(".git").display()),
+        )
+        .unwrap();
+        let mut e = event("Write", None);
+        e.cwd = nested.to_string_lossy().into_owned();
+
+        assert_eq!(resolve_base(&e).unwrap(), repo.path());
     }
 
     /// Re-merging an already-installed config must be byte-stable: every entry is

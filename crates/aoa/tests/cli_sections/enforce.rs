@@ -18,7 +18,7 @@ pub(super) fn observe_enforce(repo: &Path) {
 }
 
 pub(super) fn hook_payload(tool: &str, command: Option<&str>, cwd: &Path) -> String {
-    std::fs::create_dir_all(cwd.join(".git")).expect("mark hook fixture as a repository");
+    mark_git_repo(cwd);
     let mut input = serde_json::Map::new();
     match command {
         Some(c) => {
@@ -35,6 +35,15 @@ pub(super) fn hook_payload(tool: &str, command: Option<&str>, cwd: &Path) -> Str
         "cwd": cwd.to_str().unwrap(),
     }))
     .unwrap()
+}
+
+fn mark_git_repo(path: &Path) {
+    let status = Command::new("git")
+        .args(["init", "--quiet"])
+        .arg(path)
+        .status()
+        .expect("git is available for repository-boundary tests");
+    assert!(status.success(), "git init failed for hook fixture");
 }
 
 /// The live log the enforce hooks append to for `hook_payload`'s session.
@@ -377,7 +386,7 @@ fn enforce_check_records_allowed_write_when_reproduction_is_disabled() {
 #[test]
 fn enforce_check_blocks_protected_path_even_without_reproduction() {
     let repo = TempDir::new().unwrap();
-    std::fs::create_dir(repo.path().join(".git")).unwrap();
+    mark_git_repo(repo.path());
     std::fs::write(
         repo.path().join("aoa-policy.yaml"),
         "protected_paths: [\".github/**\"]\nreproduction_required: false\n",
@@ -447,7 +456,7 @@ fn enforce_check_rejects_an_arbitrary_non_repository_cwd_without_writing() {
 /// A hook payload writing to an explicit `file_path` (the generated/protected
 /// path tests need a target other than the default `src/lib.rs`).
 fn write_payload(file_path: &str, session: &str, cwd: &Path) -> String {
-    std::fs::create_dir_all(cwd.join(".git")).expect("mark hook fixture as a repository");
+    mark_git_repo(cwd);
     let mut input = serde_json::Map::new();
     input.insert("file_path".into(), Value::String(file_path.into()));
     serde_json::to_string(&serde_json::json!({
