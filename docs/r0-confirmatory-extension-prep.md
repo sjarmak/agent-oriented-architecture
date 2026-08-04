@@ -1,15 +1,46 @@
-# R0 confirmatory extension: offline preparation and dry-run cost
+# R0 confirmatory extension: authorized two-repository amendment
 
-Prepared on 2026-08-04 for `aoa-h4q5`. This preparation chain performed only
-offline planning: it ran no agent trial and inspected no trial outcome. Live
-execution still requires explicit user authorization.
+Originally prepared on 2026-08-04 for `aoa-h4q5`. The preparation chain
+performed only offline planning: it ran no agent trial and inspected no trial
+outcome. Stephanie authorized the amendment below on 2026-08-04 in response to
+escalation `gc-720157` (relayed as `gc-722425`).
 
-> **Held-out correction (2026-08-04):** `aoa-j7lf` determined that HTTPie is
-> partially compromised and must be demoted from this confirmatory design. The
-> operational extension is now 2 repositories, 28 dual tasks, 168 trials, and
-> approximately `$43.29`; it is unrunnable under `aoa-6anq` until that
-> preregistration is amended. See
-> [R0 HTTPie held-out reserve verdict](r0-httpie-held-out-verdict.md).
+## Authorized amendment (2026-08-04)
+
+HTTPie is excluded from the confirmatory reserve because the held-out
+disqualification landed in commit `e5948d1`. This amendment does not reinterpret
+or qualify that verdict; the complete evidence remains in the
+[R0 HTTPie held-out reserve verdict](r0-httpie-held-out-verdict.md).
+
+The confirmatory extension is amended to the two untouched reserve repositories:
+
+| Repository | Dual tasks | Seeds | Arms | Trials |
+| --- | ---: | ---: | ---: | ---: |
+| sqlparse | 16 | 3 | 2 | 96 |
+| websockets | 12 | 3 | 2 | 72 |
+| **Total** | **28** | **3** | **2** | **168** |
+
+The five preserved campaign repositories vote `2 proceed / 3 pivot` under the
+pre-registered alternative weights. Adding sqlparse and websockets produces a
+seven-repository manifest. A strict majority of seven is four, so **both reserve
+repositories must vote proceed** to move the campaign from two to four proceed
+votes. A tie or either reserve failing to vote proceed therefore maps to
+`pivot`; the unanimous-reserve bar is unchanged.
+
+Execution retains the fixed protocol: repo arm `claude-sonnet-4-6` on migrated
+state, harness arm `claude-haiku-4-5` on baseline, Bash disallowed uniformly,
+`K=3`, `min_holdout=7`, `min_effect_size=0.0`, weights `0.75/1.25`, and the
+fixed `proceed | pivot | inconclusive` decision mapping. Seed 1 is the admission
+gate for both repositories and must achieve pair yield `>= 0.80` in each before
+seeds 2 and 3 run. The authorized planning ceiling is:
+
+```text
+168 trials x $0.2577/trial = $43.2936, rounded to $43.29
+```
+
+The changed power calculation relative to the original preregistration is part
+of the authorization. The sections below preserve the superseded preparation
+record for provenance; they are not executable campaign instructions.
 
 ## Original fixed design (superseded)
 
