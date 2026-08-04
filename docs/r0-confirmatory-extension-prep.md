@@ -20,7 +20,14 @@ with two arms and `K=3`. Models, conventions, `min_holdout=7`,
 
 Preparation used the existing scripts under
 `/home/ds/projects/codeprobe/runs/r0-campaign/bin/`. Migration was completed
-before mining so the migrated states remained blind to the held-out tasks.
+before the current corpus was mined and used mechanical source-only
+transforms. For sqlparse and websockets, which have no pre-existing trial
+outcomes, that ordering preserved operator blindness to the held-out tasks.
+For HTTPie, the migrated diff contains no answer-derived change, but operator
+blindness is unverified because seven equivalent July task outcomes predated
+the migration and no timestamped access or operator-session audit log exists.
+See the
+[HTTPie migration-blindness finding](r0-httpie-held-out-verdict.md#outcome-use-and-migration-blindness).
 
 | Repository | Pinned baseline SHA | Fix | Shipped dual tasks | Quarantined |
 | --- | --- | --- | ---: | ---: |
