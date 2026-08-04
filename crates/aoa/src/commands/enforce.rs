@@ -450,7 +450,33 @@ fn git_candidate_is_root(candidate: &Path, marker_is_dir: bool) -> Result<bool> 
 }
 
 fn git_resolved_path(candidate: &Path, field: &str) -> Result<Option<PathBuf>> {
-    let output = Command::new("git")
+    // Git's complete `rev-parse --local-env-vars` set, plus the two discovery
+    // controls it omits. Any one of these must describe the candidate itself,
+    // never ambient state inherited from the hook host.
+    const REPOSITORY_ENV: [&str; 17] = [
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CONFIG",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_COUNT",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_IMPLICIT_WORK_TREE",
+        "GIT_GRAFT_FILE",
+        "GIT_INDEX_FILE",
+        "GIT_NO_REPLACE_OBJECTS",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_PREFIX",
+        "GIT_SHALLOW_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_CEILING_DIRECTORIES",
+        "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+    ];
+    let mut command = Command::new("git");
+    for variable in REPOSITORY_ENV {
+        command.env_remove(variable);
+    }
+    let output = command
         .arg("-C")
         .arg(candidate)
         .args(["rev-parse", "--path-format=absolute", field])
@@ -483,7 +509,13 @@ fn linked_worktree_points_back(candidate: &Path, git_dir: &Path) -> Result<bool>
     let backlink = std::str::from_utf8(&raw)
         .context("linked-worktree backlink is not UTF-8")?
         .trim_end();
-    Ok(Path::new(backlink).canonicalize().ok() == candidate.join(".git").canonicalize().ok())
+    let backlink = Path::new(backlink);
+    let backlink = if backlink.is_absolute() {
+        backlink.to_path_buf()
+    } else {
+        git_dir.join(backlink)
+    };
+    Ok(backlink.canonicalize().ok() == candidate.join(".git").canonicalize().ok())
 }
 
 /// Resolve the append-only live-log path for this session, under the ignored
@@ -1349,6 +1381,62 @@ mod tests {
         let mut e = event("Write", None);
         e.cwd = worktree.to_string_lossy().into_owned();
 
+        assert_eq!(resolve_base(&e).unwrap(), worktree);
+    }
+
+    #[test]
+    fn resolve_base_accepts_relative_linked_worktree_metadata() {
+        let fixture = tempfile::tempdir().unwrap();
+        let main = fixture.path().join("main");
+        let worktree = fixture.path().join("worktree");
+        init_git_repo(&main);
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(&main)
+            .args([
+                "-c",
+                "user.name=AOA Test",
+                "-c",
+                "user.email=aoa@example.invalid",
+                "commit",
+                "--quiet",
+                "--allow-empty",
+                "-m",
+                "fixture",
+            ])
+            .status()
+            .unwrap();
+        assert!(status.success(), "worktree fixture commit must succeed");
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(&main)
+            .args(["worktree", "add", "--quiet", "--detach"])
+            .arg(&worktree)
+            .status()
+            .unwrap();
+        assert!(status.success(), "linked worktree must initialize");
+
+        let admin_dir = main.join(".git/worktrees/worktree");
+        std::fs::write(
+            worktree.join(".git"),
+            "gitdir: ../main/.git/worktrees/worktree\n",
+        )
+        .unwrap();
+        std::fs::write(admin_dir.join("gitdir"), "../../../../worktree/.git\n").unwrap();
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(&worktree)
+                .args(["rev-parse", "--is-inside-work-tree"])
+                .output()
+                .unwrap()
+                .status
+                .success(),
+            "Git must accept the relative linked-worktree metadata fixture"
+        );
+
+        let mut e = event("Write", None);
+        e.cwd = worktree.to_string_lossy().into_owned();
         assert_eq!(resolve_base(&e).unwrap(), worktree);
     }
 

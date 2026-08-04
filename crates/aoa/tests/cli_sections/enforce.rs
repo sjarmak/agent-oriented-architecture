@@ -453,6 +453,77 @@ fn enforce_check_rejects_an_arbitrary_non_repository_cwd_without_writing() {
     );
 }
 
+#[test]
+fn enforce_check_ignores_ambient_git_repository_overrides() {
+    let unrelated_repo = TempDir::new().unwrap();
+    mark_git_repo(unrelated_repo.path());
+
+    let untrusted = TempDir::new().unwrap();
+    std::fs::create_dir(untrusted.path().join(".git")).unwrap();
+    std::fs::write(
+        untrusted.path().join("aoa-policy.yaml"),
+        "reproduction_required: false\n",
+    )
+    .unwrap();
+    let payload = serde_json::to_string(&serde_json::json!({
+        "session_id": "it-hostile-git-env",
+        "tool_name": "Write",
+        "tool_input": {"file_path": "src/lib.rs"},
+        "cwd": untrusted.path().to_str().unwrap(),
+    }))
+    .unwrap();
+
+    aoa_stdin()
+        .env("GIT_DIR", unrelated_repo.path().join(".git"))
+        .env("GIT_WORK_TREE", untrusted.path())
+        .args(["enforce", "check"])
+        .write_stdin(payload)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("not inside a Git repository"));
+    assert!(
+        !untrusted.path().join(".aoa").exists(),
+        "hostile Git environment variables must not authorize telemetry writes"
+    );
+}
+
+#[test]
+fn enforce_check_ignores_ambient_git_object_directory() {
+    let object_source = TempDir::new().unwrap();
+    mark_git_repo(object_source.path());
+
+    let untrusted = TempDir::new().unwrap();
+    std::fs::create_dir_all(untrusted.path().join(".git/refs")).unwrap();
+    std::fs::write(untrusted.path().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::write(
+        untrusted.path().join("aoa-policy.yaml"),
+        "reproduction_required: false\n",
+    )
+    .unwrap();
+    let payload = serde_json::to_string(&serde_json::json!({
+        "session_id": "it-hostile-git-object-dir",
+        "tool_name": "Write",
+        "tool_input": {"file_path": "src/lib.rs"},
+        "cwd": untrusted.path().to_str().unwrap(),
+    }))
+    .unwrap();
+
+    aoa_stdin()
+        .env(
+            "GIT_OBJECT_DIRECTORY",
+            object_source.path().join(".git/objects"),
+        )
+        .args(["enforce", "check"])
+        .write_stdin(payload)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("not inside a Git repository"));
+    assert!(
+        !untrusted.path().join(".aoa").exists(),
+        "an ambient object directory must not authorize telemetry writes"
+    );
+}
+
 /// A hook payload writing to an explicit `file_path` (the generated/protected
 /// path tests need a target other than the default `src/lib.rs`).
 fn write_payload(file_path: &str, session: &str, cwd: &Path) -> String {
