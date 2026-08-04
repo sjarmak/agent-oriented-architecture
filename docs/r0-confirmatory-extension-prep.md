@@ -4,11 +4,19 @@ Prepared on 2026-08-04 for `aoa-h4q5`. This preparation chain performed only
 offline planning: it ran no agent trial and inspected no trial outcome. Live
 execution still requires explicit user authorization.
 
-## Fixed design
+> **Held-out correction (2026-08-04):** `aoa-j7lf` determined that HTTPie is
+> partially compromised and must be demoted from this confirmatory design. The
+> operational extension is now 2 repositories, 28 dual tasks, 168 trials, and
+> approximately `$43.29`; it is unrunnable under `aoa-6anq` until that
+> preregistration is amended. See
+> [R0 HTTPie held-out reserve verdict](r0-httpie-held-out-verdict.md).
 
-The extension uses all three preregistered reserve repositories with two arms
-and `K=3`. Models, conventions, `min_holdout=7`, `min_effect_size=0.0`, and the
-alternative repository/harness weights of `0.75/1.25` remain unchanged.
+## Original fixed design (superseded)
+
+The original extension plan used all three preregistered reserve repositories
+with two arms and `K=3`. Models, conventions, `min_holdout=7`,
+`min_effect_size=0.0`, and the alternative repository/harness weights of
+`0.75/1.25` remain unchanged.
 
 Preparation used the existing scripts under
 `/home/ds/projects/codeprobe/runs/r0-campaign/bin/`. Migration was completed
@@ -38,7 +46,7 @@ each repository are also intentional offline outputs of the existing
 `build_experiments.sh` pipeline. No experiment represented by those manifests
 was started by this preparation chain.
 
-## Exact dry-run size and cost
+## Original three-repository dry-run size and cost (superseded)
 
 The real mined corpus contains 42 tasks. The fixed design therefore requires:
 
@@ -100,6 +108,8 @@ The pre-existing directory was preserved, not deleted, at:
 ```
 
 The quarantine's `PROVENANCE.md` records its source, timestamps, and inventory.
-The experiment manifests remain in place. Whether the earlier baseline run
-invalidates HTTPie as a held-out reserve repository is intentionally unresolved
-here and tracked separately by `aoa-j7lf`.
+The experiment manifests remain in place. The earlier baseline run partially
+compromises HTTPie and demotes it from the confirmatory reserve set. The
+evidence, exact affected task subset, migration blindness analysis, and
+corrected two-repository cost are recorded in the
+[R0 HTTPie held-out reserve verdict](r0-httpie-held-out-verdict.md).
