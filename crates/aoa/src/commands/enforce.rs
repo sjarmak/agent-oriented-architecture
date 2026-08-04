@@ -239,7 +239,10 @@ fn run_outcome(event: &HookEvent, span_type: SpanType) -> Result<i32> {
     if !MUTATION_TOOLS.contains(&event.tool_name.as_str()) {
         return Ok(0);
     }
-    record_write_span(event, span_type)?;
+    if write_target(event).is_some() {
+        let base = resolve_base(event)?;
+        record_write_span(&base, event, span_type)?;
+    }
     Ok(0)
 }
 
@@ -248,9 +251,9 @@ fn run_outcome(event: &HookEvent, span_type: SpanType) -> Result<i32> {
 /// A mutation call with no resolvable target records nothing: there is no path
 /// to hold out, and a pathless write span would be indistinguishable from one
 /// whose target was dropped.
-fn record_write_span(event: &HookEvent, span_type: SpanType) -> Result<()> {
+fn record_write_span(base: &Path, event: &HookEvent, span_type: SpanType) -> Result<()> {
     if let Some(target) = write_target(event) {
-        let log = live_log_path(event)?;
+        let log = live_log_path(base, event);
         let mut attributes = Map::new();
         attributes.insert("path".to_string(), Value::String(target.to_string()));
         append_span(&log, span_type, attributes)?;
@@ -262,7 +265,8 @@ fn record_write_span(event: &HookEvent, span_type: SpanType) -> Result<()> {
 /// blocks.
 fn run_record(event: &HookEvent) -> Result<i32> {
     if let Some(span_type) = recorded_span_type(event) {
-        let log = live_log_path(event)?;
+        let base = resolve_base(event)?;
+        let log = live_log_path(&base, event);
         append_span(&log, span_type, Map::new())?;
     }
     Ok(0)
@@ -289,14 +293,14 @@ fn run_check(event: &HookEvent) -> Result<i32> {
         let compiled = policy.compile()?;
         // R5: protected paths are forbidden outright, regardless of reproduction.
         if let Some(target) = targets.iter().find(|target| compiled.is_protected(target)) {
-            return block(event, BlockReason::ProtectedPath(target.clone()));
+            return block(&base, event, BlockReason::ProtectedPath(target.clone()));
         }
         // R6: generated artifacts are derived — redirect the agent to the source
         // rather than letting it hand-edit the artifact.
         let rules = generated_rules(policy)?;
         for target in targets {
             if let Decision::Block(reason) = generated_artifact_gate(&rules, target) {
-                return block(event, reason);
+                return block(&base, event, reason);
             }
         }
     }
@@ -304,14 +308,14 @@ fn run_check(event: &HookEvent) -> Result<i32> {
     // R7: reproduction gate, on unless the policy explicitly disables it.
     let reproduction_required = policy.as_ref().is_none_or(|p| p.reproduction_required);
     if !reproduction_required {
-        return allow(event);
+        return allow(&base, event);
     }
 
-    let log = live_log_path(event)?;
+    let log = live_log_path(&base, event);
     let prior = read_spans(&log)?;
     match reproduction_gate(&prior) {
-        Decision::Allow => allow(event),
-        Decision::Block(reason) => block(event, reason),
+        Decision::Allow => allow(&base, event),
+        Decision::Block(reason) => block(&base, event, reason),
     }
 }
 
@@ -327,15 +331,15 @@ fn run_check(event: &HookEvent) -> Result<i32> {
 /// [`SpanType::is_confirmed_mutation`]. Intent is kept anyway because the gap
 /// between what an agent tried to write and what it managed to write is itself
 /// signal.
-fn allow(event: &HookEvent) -> Result<i32> {
-    record_write_span(event, SpanType::WriteAttempt)?;
+fn allow(base: &Path, event: &HookEvent) -> Result<i32> {
+    record_write_span(base, event, SpanType::WriteAttempt)?;
     Ok(0)
 }
 
 /// Emit the `write.blocked` span, surface the reason on stderr, and return the
 /// exit code (2) that signals Claude Code to deny the pending tool call.
-fn block(event: &HookEvent, reason: BlockReason) -> Result<i32> {
-    let log = live_log_path(event)?;
+fn block(base: &Path, event: &HookEvent, reason: BlockReason) -> Result<i32> {
+    let log = live_log_path(base, event);
     let message = reason.to_string();
     append_span_with(&log, |seq| blocked_span(seq, reason))?;
     eprint_human(&format!("aoa: blocked {} — {message}", event.tool_name));
@@ -785,12 +789,11 @@ fn linked_worktree_points_back(candidate: &Path, git_dir: &Path) -> Result<bool>
 /// `.aoa/traces/` tree. The session id is sanitized to a bare filename token so
 /// a hostile payload cannot traverse out of the traces directory. The final
 /// component is opened safely by [`open_log`].
-fn live_log_path(event: &HookEvent) -> Result<PathBuf> {
+fn live_log_path(base: &Path, event: &HookEvent) -> PathBuf {
     let session = sanitize_session(&event.session_id);
-    Ok(resolve_base(event)?
-        .join(".aoa")
+    base.join(".aoa")
         .join("traces")
-        .join(format!("live-{session}.jsonl")))
+        .join(format!("live-{session}.jsonl"))
 }
 
 /// Reduce a session id to `[A-Za-z0-9_-]`, collapsing everything else. Guarantees
@@ -1624,8 +1627,22 @@ mod tests {
         let mut e = event("Write", None);
         e.cwd = repo.path().to_string_lossy().into_owned();
         e.session_id = "../escape".to_string();
-        let path = live_log_path(&e).unwrap();
+        let path = live_log_path(repo.path(), &e);
         assert_eq!(path, repo.path().join(".aoa/traces/live-escape.jsonl"));
+    }
+
+    #[test]
+    fn live_log_path_uses_the_pre_resolved_trust_root() {
+        let trusted_repo = tempfile::tempdir().unwrap();
+        let mut e = event("Write", None);
+        e.cwd = "/payload/cwd/must/not/be-resolved-again".to_string();
+
+        let path = live_log_path(trusted_repo.path(), &e);
+
+        assert_eq!(
+            path,
+            trusted_repo.path().join(".aoa/traces/live-sess-1.jsonl")
+        );
     }
 
     #[test]
