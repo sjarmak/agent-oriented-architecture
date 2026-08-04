@@ -329,6 +329,29 @@ mod tests {
     }
 
     #[test]
+    fn builder_report_round_trips_the_degraded_flag_into_build_meta() {
+        let report = aoa_falsify_build::BuildReport {
+            out_path: String::new(),
+            observations_path: String::new(),
+            observations_sha256: String::new(),
+            observation_count: 0,
+            observation_ids: Vec::new(),
+            repo_count: 0,
+            total_identical_pairs: 0,
+            task_shape: aoa_falsify_build::TaskShape::Answer,
+            convention_inputs_degraded: false,
+            repos: Vec::new(),
+            dropped_repos: Vec::new(),
+            notes: Vec::new(),
+        };
+
+        let json = serde_json::to_string(&report).unwrap();
+        let meta: BuildMeta = serde_json::from_str(&json).unwrap();
+
+        assert!(!meta.convention_inputs_degraded);
+    }
+
+    #[test]
     fn aggregate_file_tolerates_unknown_codeprobe_fields() {
         let aggregate: AggregateFile = serde_json::from_str(
             r#"{

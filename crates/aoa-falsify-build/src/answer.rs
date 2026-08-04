@@ -26,7 +26,7 @@ use aoa_scip_graph::index_with_scip;
 /// Per-repo state for computing answer-task convention inputs: the SCIP graph,
 /// its file universe, and a task-id-memoized oracle-chain cache (the chain is a
 /// task property, identical across seeds and arms).
-pub(super) struct AnswerContext {
+pub(crate) struct AnswerContext {
     graph: SymbolGraph,
     universe: BTreeSet<String>,
     tasks_dir: PathBuf,
@@ -37,7 +37,7 @@ impl AnswerContext {
     /// Load the repo's declared SCIP index. The index is an operator assertion
     /// (like `confidence`), so a missing/unreadable/empty index is a hard error
     /// — never a silent degrade to sentinel inputs.
-    pub(super) fn load(repo_id: &str, index_path: &Path, tasks_dir: &Path) -> Result<Self> {
+    pub(crate) fn load(repo_id: &str, index_path: &Path, tasks_dir: &Path) -> Result<Self> {
         let indexed = index_with_scip(index_path).with_context(|| {
             format!(
                 "repo {repo_id}: failed to read declared scip_index {}",
@@ -62,7 +62,7 @@ impl AnswerContext {
 
     /// Compute one arm's typed observation metrics from the same oracle/index
     /// join used by the paired falsification convention.
-    pub(super) fn observation_inputs(
+    pub(crate) fn observation_inputs(
         &mut self,
         task_id: &str,
         run_dir: &Path,

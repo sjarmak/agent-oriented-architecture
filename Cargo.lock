@@ -80,6 +80,7 @@ dependencies = [
  "aoa-corpus",
  "aoa-enforce",
  "aoa-falsify",
+ "aoa-falsify-build",
  "aoa-gap",
  "aoa-lint",
  "aoa-metrics",
@@ -185,6 +186,23 @@ dependencies = [
  "aoa-trace",
  "serde",
  "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "aoa-falsify-build"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aoa-bench",
+ "aoa-codeprobe-shim",
+ "aoa-falsify",
+ "aoa-gap",
+ "aoa-metrics",
+ "aoa-scip-graph",
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror",
 ]
 

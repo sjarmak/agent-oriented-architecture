@@ -3,10 +3,11 @@
 //!
 //! Two threat classes route through here. `aoa eval-run` walks an untrusted
 //! `--codeprobe-run` directory and reads per-trial JSON from it
-//! (attacker-controlled); `aoa r0b` and `aoa eval experiment` read their
-//! per-trial JSON through `aoa_bench` instead, and reach this module only for
-//! their operator-supplied manifests. Other commands (`falsify`, `eval compare`, `eval
-//! experiment`, the canary manifest) read operator-supplied JSON paths and
+//! (attacker-controlled); `aoa r0b` reads its per-trial JSON through
+//! `aoa_bench`, while `aoa eval experiment` delegates all run evidence to
+//! `aoa_falsify_build`. Both reach this module only for operator-supplied
+//! manifests. Other commands (`falsify`, `eval compare`, the canary
+//! manifest) read operator-supplied JSON paths and
 //! external-tool output (codeprobe `aggregate.json`). Both bound the bytes held
 //! in memory from any one file so a crafted or pathological input cannot exhaust
 //! memory.

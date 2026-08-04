@@ -1,0 +1,22 @@
+[package]
+name = "aoa-falsify-build"
+description = "Assembles R0 falsification evidence: joins a codeprobe experiment's paired config arms into the FalsifyInput aoa-falsify scores, with the build report that records what was admitted and why"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0.98"
+aoa-bench = { path = "../aoa-bench" }
+aoa-codeprobe-shim = { path = "../aoa-codeprobe-shim" }
+aoa-falsify = { path = "../aoa-falsify" }
+aoa-gap = { path = "../aoa-gap" }
+aoa-metrics = { path = "../aoa-metrics" }
+aoa-scip-graph = { path = "../aoa-scip-graph" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.10.1"

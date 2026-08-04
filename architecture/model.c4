@@ -146,6 +146,12 @@ model {
         description 'R0 falsification gate: across at least five held-out repositories, proceeds to migrate only if repo-delta beats harness-delta on held-out success for a majority; a tie defaults to pivot. RISK: premortem’s six independent, mutually blind reviews each broke this gate a different way and five of six scored the failure 12/12 — hardened into R0′ with a robust / abstaining / monitored verdict rather than a one-shot boolean'
         link ../crates/aoa-falsify 'crates/aoa-falsify/'
       }
+      falsifyBuild = component 'aoa-falsify-build' {
+        #built
+        #risk
+        description 'Assembles paired codeprobe runs into content-addressed R0 evidence, FalsifyInput, and an inspectable build report without spawning the CLI'
+        link ../crates/aoa-falsify-build 'crates/aoa-falsify-build/'
+      }
       policy = component 'aoa-policy' {
         #built
         description 'Compiles a single aoa-policy.yaml into three enforcement planes (CI check, pre-commit hook, lint) — R5'
@@ -202,6 +208,10 @@ model {
   aoa.measure.recommend -> aoa.migrate.migrator 'joins migration availability per finding'
 
   // Trust gates.
+  aoa.gates.falsifyBuild -> aoa.measure.bench 'loads task and run evidence'
+  aoa.gates.falsifyBuild -> aoa.substrate.scipGraph 'derives answer-task convention inputs'
+  aoa.gates.falsifyBuild -> aoa.substrate.codeprobeShim 'parses arm transcripts'
+  aoa.gates.falsifyBuild -> aoa.gates.falsify 'constructs the scored FalsifyInput'
   aoa.gates.falsify -> aoa.substrate.metrics 'reads held-out success deltas across at least five repositories'
   aoa.gates.falsify -> aoa.migrate 'gates trust: proceed / pivot / inconclusive'
   aoa.gates.policy -> forge 'compiles aoa-policy.yaml into CI / hook / lint enforcement planes'

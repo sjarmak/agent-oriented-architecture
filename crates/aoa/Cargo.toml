@@ -21,6 +21,7 @@ aoa-audit = { path = "../aoa-audit" }
 aoa-migrate = { path = "../aoa-migrate" }
 aoa-recommend = { path = "../aoa-recommend" }
 aoa-falsify = { path = "../aoa-falsify" }
+aoa-falsify-build = { path = "../aoa-falsify-build" }
 aoa-metrics = { path = "../aoa-metrics" }
 aoa-bench = { path = "../aoa-bench" }
 aoa-scip-graph = { path = "../aoa-scip-graph" }
