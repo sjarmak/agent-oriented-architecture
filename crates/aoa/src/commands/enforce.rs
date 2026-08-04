@@ -253,7 +253,7 @@ fn run_outcome(event: &HookEvent, span_type: SpanType) -> Result<i32> {
 /// whose target was dropped.
 fn record_write_span(base: &Path, event: &HookEvent, span_type: SpanType) -> Result<()> {
     if let Some(target) = write_target(event) {
-        let log = live_log_path(base, event);
+        let log = live_log_path(base, &event.session_id);
         let mut attributes = Map::new();
         attributes.insert("path".to_string(), Value::String(target.to_string()));
         append_span(&log, span_type, attributes)?;
@@ -266,7 +266,7 @@ fn record_write_span(base: &Path, event: &HookEvent, span_type: SpanType) -> Res
 fn run_record(event: &HookEvent) -> Result<i32> {
     if let Some(span_type) = recorded_span_type(event) {
         let base = resolve_base(event)?;
-        let log = live_log_path(&base, event);
+        let log = live_log_path(&base, &event.session_id);
         append_span(&log, span_type, Map::new())?;
     }
     Ok(0)
@@ -311,7 +311,7 @@ fn run_check(event: &HookEvent) -> Result<i32> {
         return allow(&base, event);
     }
 
-    let log = live_log_path(&base, event);
+    let log = live_log_path(&base, &event.session_id);
     let prior = read_spans(&log)?;
     match reproduction_gate(&prior) {
         Decision::Allow => allow(&base, event),
@@ -339,7 +339,7 @@ fn allow(base: &Path, event: &HookEvent) -> Result<i32> {
 /// Emit the `write.blocked` span, surface the reason on stderr, and return the
 /// exit code (2) that signals Claude Code to deny the pending tool call.
 fn block(base: &Path, event: &HookEvent, reason: BlockReason) -> Result<i32> {
-    let log = live_log_path(base, event);
+    let log = live_log_path(base, &event.session_id);
     let message = reason.to_string();
     append_span_with(&log, |seq| blocked_span(seq, reason))?;
     eprint_human(&format!("aoa: blocked {} — {message}", event.tool_name));
@@ -789,8 +789,8 @@ fn linked_worktree_points_back(candidate: &Path, git_dir: &Path) -> Result<bool>
 /// `.aoa/traces/` tree. The session id is sanitized to a bare filename token so
 /// a hostile payload cannot traverse out of the traces directory. The final
 /// component is opened safely by [`open_log`].
-fn live_log_path(base: &Path, event: &HookEvent) -> PathBuf {
-    let session = sanitize_session(&event.session_id);
+fn live_log_path(base: &Path, session_id: &str) -> PathBuf {
+    let session = sanitize_session(session_id);
     base.join(".aoa")
         .join("traces")
         .join(format!("live-{session}.jsonl"))
@@ -1623,21 +1623,14 @@ mod tests {
     #[test]
     fn live_log_path_stays_inside_traces_dir() {
         let repo = tempfile::tempdir().unwrap();
-        init_git_repo(repo.path());
-        let mut e = event("Write", None);
-        e.cwd = repo.path().to_string_lossy().into_owned();
-        e.session_id = "../escape".to_string();
-        let path = live_log_path(repo.path(), &e);
+        let path = live_log_path(repo.path(), "../escape");
         assert_eq!(path, repo.path().join(".aoa/traces/live-escape.jsonl"));
     }
 
     #[test]
     fn live_log_path_uses_the_pre_resolved_trust_root() {
         let trusted_repo = tempfile::tempdir().unwrap();
-        let mut e = event("Write", None);
-        e.cwd = "/payload/cwd/must/not/be-resolved-again".to_string();
-
-        let path = live_log_path(trusted_repo.path(), &e);
+        let path = live_log_path(trusted_repo.path(), "sess-1");
 
         assert_eq!(
             path,
