@@ -415,6 +415,75 @@ fn enforce_check_blocks_protected_path_even_without_reproduction() {
 }
 
 #[test]
+fn enforce_check_normalizes_protected_path_targets_before_matching() {
+    let repo = TempDir::new().unwrap();
+    mark_git_repo(repo.path());
+    std::fs::write(
+        repo.path().join("aoa-policy.yaml"),
+        "protected_paths: [\".github/**\"]\nreproduction_required: false\n",
+    )
+    .unwrap();
+
+    let absolute = repo.path().join(".github/workflows/ci.yml");
+    let targets = [
+        absolute.to_str().unwrap().to_string(),
+        "./.github/workflows/ci.yml".to_string(),
+        "src/../.github/workflows/ci.yml".to_string(),
+    ];
+
+    for (index, target) in targets.iter().enumerate() {
+        aoa_stdin()
+            .args(["enforce", "check"])
+            .write_stdin(write_payload(
+                target,
+                &format!("it-protected-normalized-{index}"),
+                repo.path(),
+            ))
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("protected path"));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn enforce_check_blocks_protected_symlink_alias_and_destination() {
+    use std::os::unix::fs::symlink;
+
+    for (session, target, alias, destination) in [
+        (
+            "it-protected-alias",
+            ".github/workflows/ci.yml",
+            ".github",
+            "safe",
+        ),
+        (
+            "it-protected-destination",
+            "safe-alias/workflows/ci.yml",
+            "safe-alias",
+            ".github",
+        ),
+    ] {
+        let repo = TempDir::new().unwrap();
+        mark_git_repo(repo.path());
+        std::fs::write(
+            repo.path().join("aoa-policy.yaml"),
+            "protected_paths: [\".github/**\"]\nreproduction_required: false\n",
+        )
+        .unwrap();
+        std::fs::create_dir(repo.path().join(destination)).unwrap();
+        symlink(destination, repo.path().join(alias)).unwrap();
+
+        aoa_stdin()
+            .args(["enforce", "check"])
+            .write_stdin(write_payload(target, session, repo.path()))
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("protected path"));
+    }
+}
+
+#[test]
 fn enforce_reproduction_toggle_off_allows_unprotected_write() {
     let repo = TempDir::new().unwrap();
     std::fs::write(
@@ -568,6 +637,120 @@ fn enforce_check_blocks_write_to_declared_generated_path() {
     assert!(contents.contains("write.blocked"));
     assert!(contents.contains("generated_artifact"));
     assert!(contents.contains("\"source\":\"schema.json\""));
+}
+
+#[test]
+fn enforce_check_normalizes_generated_path_targets_before_matching() {
+    let repo = TempDir::new().unwrap();
+    std::fs::write(
+        repo.path().join("aoa-policy.yaml"),
+        "reproduction_required: false\n\
+         generated_paths:\n  - glob: \"generated/**/*.gen.rs\"\n    source: \"schema.json\"\n",
+    )
+    .unwrap();
+
+    let absolute = repo.path().join("generated/api/types.gen.rs");
+    let targets = [
+        absolute.to_str().unwrap().to_string(),
+        "./generated/api/types.gen.rs".to_string(),
+        "src/../generated/api/types.gen.rs".to_string(),
+    ];
+
+    for (index, target) in targets.iter().enumerate() {
+        aoa_stdin()
+            .args(["enforce", "check"])
+            .write_stdin(write_payload(
+                target,
+                &format!("it-generated-normalized-{index}"),
+                repo.path(),
+            ))
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("generated artifact"));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn enforce_check_blocks_generated_symlink_alias_and_destination() {
+    use std::os::unix::fs::symlink;
+
+    for (session, target, alias, destination) in [
+        (
+            "it-generated-alias",
+            "generated/api/types.gen.rs",
+            "generated",
+            "safe",
+        ),
+        (
+            "it-generated-destination",
+            "safe-alias/api/types.gen.rs",
+            "safe-alias",
+            "generated",
+        ),
+    ] {
+        let repo = TempDir::new().unwrap();
+        std::fs::write(
+            repo.path().join("aoa-policy.yaml"),
+            "reproduction_required: false\n\
+             generated_paths:\n  - glob: \"generated/**/*.gen.rs\"\n    source: \"schema.json\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir(repo.path().join(destination)).unwrap();
+        symlink(destination, repo.path().join(alias)).unwrap();
+
+        aoa_stdin()
+            .args(["enforce", "check"])
+            .write_stdin(write_payload(target, session, repo.path()))
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("generated artifact"));
+    }
+}
+
+#[test]
+fn enforce_check_rejects_write_target_outside_repository() {
+    let repo = TempDir::new().unwrap();
+
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(write_payload(
+            "../outside.rs",
+            "it-outside-target",
+            repo.path(),
+        ))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("outside repository"));
+}
+
+#[cfg(unix)]
+#[test]
+fn enforce_check_rejects_write_target_through_symlink_outside_repository() {
+    use std::os::unix::fs::symlink;
+
+    let repo = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    let planted = outside.path().join("planted.rs");
+    std::fs::write(&planted, "original\n").unwrap();
+    symlink(outside.path(), repo.path().join("escape")).unwrap();
+
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(write_payload(
+            "escape/planted.rs",
+            "it-symlink-outside-target",
+            repo.path(),
+        ))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("outside repository"));
+
+    assert_eq!(
+        std::fs::read_to_string(planted).unwrap(),
+        "original\n",
+        "the planted target outside the repository must remain unchanged"
+    );
 }
 
 #[test]

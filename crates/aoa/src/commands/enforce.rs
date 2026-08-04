@@ -55,7 +55,7 @@
 
 use std::fs::{File, TryLockError};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -280,17 +280,23 @@ fn run_check(event: &HookEvent) -> Result<i32> {
 
     let base = resolve_base(event)?;
     let policy = load_policy(&base)?;
+    let targets = write_target(event)
+        .map(|raw| policy_write_targets(&base, raw))
+        .transpose()?;
 
-    if let (Some(policy), Some(target)) = (&policy, write_target(event)) {
+    if let (Some(policy), Some(targets)) = (&policy, targets.as_deref()) {
+        let compiled = policy.compile()?;
         // R5: protected paths are forbidden outright, regardless of reproduction.
-        if policy.compile()?.is_protected(target) {
-            return block(event, BlockReason::ProtectedPath(target.to_string()));
+        if let Some(target) = targets.iter().find(|target| compiled.is_protected(target)) {
+            return block(event, BlockReason::ProtectedPath(target.clone()));
         }
         // R6: generated artifacts are derived — redirect the agent to the source
         // rather than letting it hand-edit the artifact.
-        if let Decision::Block(reason) = generated_artifact_gate(&generated_rules(policy)?, target)
-        {
-            return block(event, reason);
+        let rules = generated_rules(policy)?;
+        for target in targets {
+            if let Decision::Block(reason) = generated_artifact_gate(&rules, target) {
+                return block(event, reason);
+            }
         }
     }
 
@@ -343,6 +349,144 @@ fn write_target(event: &HookEvent) -> Option<&str> {
         .get("file_path")
         .or_else(|| event.tool_input.get("notebook_path"))
         .and_then(Value::as_str)
+}
+
+/// Return every repository-relative spelling relevant to path policy: the
+/// lexical hook spelling and the symlink-resolved destination. Matching both
+/// prevents an in-repository symlink from hiding either a protected alias or a
+/// protected destination.
+fn policy_write_targets(base: &Path, raw: &str) -> Result<Vec<String>> {
+    let resolved = normalize_write_target(base, raw)?;
+    let raw_path = Path::new(raw);
+    let candidate = if raw_path.is_absolute() {
+        raw_path.to_path_buf()
+    } else {
+        base.join(raw_path)
+    };
+    let lexical = normalize_path_lexically(&candidate)?;
+    let Some(lexical) = lexical
+        .strip_prefix(base)
+        .ok()
+        .filter(|path| !path.as_os_str().is_empty())
+        .and_then(Path::to_str)
+    else {
+        return Ok(vec![resolved]);
+    };
+
+    if lexical == resolved {
+        Ok(vec![resolved])
+    } else {
+        Ok(vec![lexical.to_string(), resolved])
+    }
+}
+
+fn normalize_path_lexically(path: &Path) -> Result<PathBuf> {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(anyhow!("write target traverses above the filesystem root"));
+                }
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+    Ok(normalized)
+}
+
+/// Resolve a hook target against the canonical repository root and return the
+/// repository-relative spelling consumed by policy globs.
+///
+/// Write hooks may name files that do not exist yet, so `Path::canonicalize`
+/// cannot be applied only at the leaf. Existing components are canonicalized
+/// as they are encountered (which resolves symlinks); after the first missing
+/// component, `.` and `..` are reduced lexically until an existing ancestor is
+/// reached again. The final containment check rejects both traversal and
+/// symlink escapes.
+fn normalize_write_target(base: &Path, raw: &str) -> Result<String> {
+    if raw.is_empty() {
+        return Err(anyhow!("hook write target must not be empty"));
+    }
+
+    let raw = Path::new(raw);
+    let candidate = if raw.is_absolute() {
+        raw.to_path_buf()
+    } else {
+        base.join(raw)
+    };
+    let resolved = resolve_write_target_components(base, raw, &candidate)?;
+
+    let relative = resolved.strip_prefix(base).map_err(|_| {
+        anyhow!(
+            "hook write target resolves outside repository {}: {raw:?}",
+            base.display()
+        )
+    })?;
+    if relative.as_os_str().is_empty() {
+        return Err(anyhow!("hook write target resolves to repository root"));
+    }
+    relative
+        .to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow!("resolved hook write target is not UTF-8: {relative:?}"))
+}
+
+fn resolve_write_target_components(base: &Path, raw: &Path, candidate: &Path) -> Result<PathBuf> {
+    let mut resolved = PathBuf::new();
+    let mut missing_component = false;
+
+    for component in candidate.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => resolved.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !resolved.pop() {
+                    return Err(anyhow!(
+                        "hook write target resolves outside repository {}: {raw:?}",
+                        base.display()
+                    ));
+                }
+                if missing_component {
+                    if let Some(canonical) = canonicalize_existing_target_component(&resolved)? {
+                        resolved = canonical;
+                        missing_component = false;
+                    }
+                }
+            }
+            Component::Normal(part) => {
+                resolved.push(part);
+                if !missing_component {
+                    if let Some(canonical) = canonicalize_existing_target_component(&resolved)? {
+                        resolved = canonical;
+                    } else {
+                        missing_component = true;
+                    }
+                }
+            }
+        }
+    }
+    Ok(resolved)
+}
+
+fn canonicalize_existing_target_component(path: &Path) -> Result<Option<PathBuf>> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => path.canonicalize().map(Some).with_context(|| {
+            format!(
+                "failed to resolve write target component {}",
+                path.display()
+            )
+        }),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(anyhow!(err)).with_context(|| {
+            format!(
+                "failed to inspect write target component {}",
+                path.display()
+            )
+        }),
+    }
 }
 
 /// Load `<base>/aoa-policy.yaml` if it exists, failing loud on a malformed file
@@ -1321,6 +1465,37 @@ mod tests {
         assert_eq!(sanitize_session("ok_id-9"), "ok_id-9");
         assert_eq!(sanitize_session("///"), "unknown");
         assert_eq!(sanitize_session(""), "unknown");
+    }
+
+    #[test]
+    fn write_target_normalization_accepts_supported_in_repository_shapes() {
+        let repo = tempfile::tempdir().unwrap();
+        let base = repo.path().canonicalize().unwrap();
+        let absolute = base.join(".github/workflows/ci.yml");
+
+        for raw in [
+            absolute.to_str().unwrap(),
+            "./.github/workflows/ci.yml",
+            "src/../.github/workflows/ci.yml",
+        ] {
+            assert_eq!(
+                normalize_write_target(&base, raw).unwrap(),
+                ".github/workflows/ci.yml"
+            );
+        }
+    }
+
+    #[test]
+    fn write_target_normalization_rejects_invalid_boundaries() {
+        let repo = tempfile::tempdir().unwrap();
+        let base = repo.path().canonicalize().unwrap();
+
+        assert!(normalize_write_target(&base, "../outside.rs")
+            .unwrap_err()
+            .to_string()
+            .contains("outside repository"));
+        assert!(normalize_write_target(&base, "").is_err());
+        assert!(normalize_write_target(&base, ".").is_err());
     }
 
     #[test]
