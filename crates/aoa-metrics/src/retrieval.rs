@@ -63,8 +63,6 @@ pub fn compute_retrieval_locality(input: MetricInputRef<'_>) -> RetrievalLocalit
         .unwrap_or_default();
 
     let k = input.k;
-    let top_k = first_batch.iter().take(k as usize).copied();
-    let hits_in_k = top_k.filter(|r| anchored.contains(*r)).count();
     let (recall_at_k, mrr, unavailable) = if anchored.is_empty() {
         (
             None,
@@ -72,6 +70,12 @@ pub fn compute_retrieval_locality(input: MetricInputRef<'_>) -> RetrievalLocalit
             Some("no gold symbols anchored through the transform map".to_string()),
         )
     } else {
+        let hits_in_k = first_batch
+            .iter()
+            .take(k as usize)
+            .copied()
+            .filter(|result| anchored.contains(*result))
+            .count();
         let recall_at_k = hits_in_k as f64 / anchored.len() as f64;
         let mrr = first_batch
             .iter()
