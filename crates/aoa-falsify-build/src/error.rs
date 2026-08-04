@@ -15,23 +15,18 @@ pub struct FalsifyBuildError {
 impl FalsifyBuildError {
     pub(crate) fn from_anyhow(error: anyhow::Error) -> Self {
         let rendered = format!("{error:#}");
-        Self {
-            // The library cannot assume its caller has the CLI's terminal
-            // sanitizer. Escape control characters at this boundary while
-            // preserving operator-facing punctuation byte-for-byte.
-            message: rendered
-                .chars()
-                .flat_map(|character| {
-                    if character.is_control() {
-                        character.escape_debug().to_string()
-                    } else {
-                        character.to_string()
-                    }
-                    .chars()
-                    .collect::<Vec<_>>()
-                })
-                .collect(),
+        let mut message = String::with_capacity(rendered.len());
+        // The library cannot assume its caller has the CLI's terminal
+        // sanitizer. Escape control characters at this boundary while
+        // preserving operator-facing punctuation byte-for-byte.
+        for character in rendered.chars() {
+            if character.is_control() {
+                message.extend(character.escape_debug());
+            } else {
+                message.push(character);
+            }
         }
+        Self { message }
     }
 }
 
