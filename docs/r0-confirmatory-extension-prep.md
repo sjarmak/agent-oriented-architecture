@@ -27,6 +27,12 @@ repositories must vote proceed** to move the campaign from two to four proceed
 votes. A tie or either reserve failing to vote proceed therefore maps to
 `pivot`; the unanimous-reserve bar is unchanged.
 
+Both sqlparse and websockets are recorded as `native_composed` held-out
+provenance in `runs/r0-campaign/out/falsify_input.k1.build.json`. They are
+eligible to vote under the `(external | native_composed)` predicate landed in
+commit `4f9107c`; the seven-repository threshold above is computed under that
+rule.
+
 Execution retains the fixed protocol: repo arm `claude-sonnet-4-6` on migrated
 state, harness arm `claude-haiku-4-5` on baseline, Bash disallowed uniformly,
 `K=3`, `min_holdout=7`, `min_effect_size=0.0`, weights `0.75/1.25`, and the
