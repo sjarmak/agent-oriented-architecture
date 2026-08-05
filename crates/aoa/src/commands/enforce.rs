@@ -840,6 +840,7 @@ fn is_not_found(err: &anyhow::Error) -> bool {
 
 /// How the live log is opened. The two modes the hook needs; see [`open_log`]
 /// for why the choice is an enum rather than a caller-supplied builder.
+#[derive(Clone, Copy)]
 enum LogAccess {
     Read,
     AppendCreate,
@@ -863,27 +864,154 @@ enum LogAccess {
 ///   that needs no lock contention at all. `O_NONBLOCK` makes the open return
 ///   rather than wait; on a regular file it has no effect.
 ///
-/// `O_NOFOLLOW` only covers the final component and `O_NONBLOCK` still lets a
-/// FIFO open succeed when a peer is already attached, so the file type is
-/// verified after the fact too, via the descriptor we just opened rather than the
-/// path (nothing to race). On a non-Unix host the flags are unavailable and the
-/// type check is all there is.
+/// Each Unix directory component below the repository trust root is acquired
+/// separately with `openat(O_NOFOLLOW | O_DIRECTORY)`, then the log is opened
+/// relative to the acquired traces descriptor. `O_NONBLOCK` still lets a FIFO
+/// open succeed when a peer is already attached, so the file type is verified
+/// after the fact too, via the descriptor we just opened rather than the path
+/// (nothing to race). On a non-Unix host the flags are unavailable and the type
+/// check is all there is.
 ///
-/// Callers pick an [`LogAccess`] rather than passing an [`std::fs::OpenOptions`]:
-/// `custom_flags` overwrites the flag field rather than OR-ing into it, so a
-/// caller-owned builder would let a future call site silently drop the two flags
-/// this function exists to set.
+/// Callers pick a [`LogAccess`] rather than supplying open flags, so every call
+/// goes through the same directory-containment, no-follow, nonblocking, and
+/// file-type invariants.
+#[cfg(unix)]
+fn open_log(log: &Path, access: LogAccess) -> Result<File> {
+    unix_log::open(log, access)
+}
+
+#[cfg(unix)]
+mod unix_log {
+    use super::*;
+    use rustix::fs::{self, AtFlags, FileType, Mode, OFlags};
+    use rustix::io::Errno;
+    use std::ffi::OsStr;
+    use std::os::fd::{AsFd, OwnedFd};
+
+    const DIR_MODE: Mode = Mode::RWXU;
+    const FILE_MODE: Mode = Mode::RUSR
+        .union(Mode::WUSR)
+        .union(Mode::RGRP)
+        .union(Mode::WGRP)
+        .union(Mode::ROTH)
+        .union(Mode::WOTH);
+
+    fn io_error(path: &Path, action: &str, source: Errno) -> anyhow::Error {
+        let source: std::io::Error = source.into();
+        anyhow!(source).context(format!("failed to {action} {}", path.display()))
+    }
+
+    fn is_symlink_at(parent: impl AsFd, name: &OsStr) -> bool {
+        fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)
+            .map(|stat| FileType::from_raw_mode(stat.st_mode) == FileType::Symlink)
+            .unwrap_or(false)
+    }
+
+    fn map_nofollow_error(
+        parent: impl AsFd,
+        name: &OsStr,
+        path: &Path,
+        source: Errno,
+    ) -> anyhow::Error {
+        if source == Errno::LOOP || is_symlink_at(parent, name) {
+            anyhow!("refusing to follow symlink at {}", path.display())
+        } else {
+            io_error(path, "open", source)
+        }
+    }
+
+    fn open_dir_at(parent: impl AsFd, name: &OsStr, path: &Path) -> Result<OwnedFd> {
+        fs::openat(
+            parent.as_fd(),
+            name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW,
+            Mode::empty(),
+        )
+        .map_err(|source| map_nofollow_error(parent, name, path, source))
+    }
+
+    fn open_or_create_dir_at(parent: impl AsFd, name: &OsStr, path: &Path) -> Result<OwnedFd> {
+        match open_dir_at(&parent, name, path) {
+            Ok(fd) => Ok(fd),
+            Err(err) if is_not_found(&err) => {
+                match fs::mkdirat(parent.as_fd(), name, DIR_MODE) {
+                    Ok(()) | Err(Errno::EXIST) => {}
+                    Err(source) => return Err(io_error(path, "create", source)),
+                }
+                open_dir_at(parent, name, path)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    fn log_parts(log: &Path) -> Result<(&Path, &Path, &Path, &OsStr)> {
+        let traces_dir = log
+            .parent()
+            .ok_or_else(|| anyhow!("span log has no traces directory: {}", log.display()))?;
+        let aoa_dir = traces_dir
+            .parent()
+            .ok_or_else(|| anyhow!("span log has no .aoa directory: {}", log.display()))?;
+        let repo = aoa_dir
+            .parent()
+            .ok_or_else(|| anyhow!("span log has no repository root: {}", log.display()))?;
+        let name = log
+            .file_name()
+            .ok_or_else(|| anyhow!("span log has no file name: {}", log.display()))?;
+        Ok((repo, aoa_dir, traces_dir, name))
+    }
+
+    fn open_traces_dir(log: &Path, access: LogAccess) -> Result<OwnedFd> {
+        let (repo, aoa_dir, traces_dir, _) = log_parts(log)?;
+        // The caller-selected repository is the trust root. Every component
+        // below it is acquired relative to a stable descriptor.
+        let repo_fd = fs::open(repo, OFlags::RDONLY | OFlags::DIRECTORY, Mode::empty())
+            .map_err(|source| io_error(repo, "open", source))?;
+        let aoa_fd = match access {
+            LogAccess::Read => open_dir_at(&repo_fd, OsStr::new(".aoa"), aoa_dir)?,
+            LogAccess::AppendCreate => {
+                open_or_create_dir_at(&repo_fd, OsStr::new(".aoa"), aoa_dir)?
+            }
+        };
+        match access {
+            LogAccess::Read => open_dir_at(&aoa_fd, OsStr::new("traces"), traces_dir),
+            LogAccess::AppendCreate => {
+                open_or_create_dir_at(&aoa_fd, OsStr::new("traces"), traces_dir)
+            }
+        }
+    }
+
+    pub(super) fn open(log: &Path, access: LogAccess) -> Result<File> {
+        let (_, _, _, name) = log_parts(log)?;
+        let traces_fd = open_traces_dir(log, access)?;
+        let flags = match access {
+            LogAccess::Read => OFlags::RDONLY,
+            LogAccess::AppendCreate => OFlags::RDWR | OFlags::CREATE | OFlags::APPEND,
+        } | OFlags::NOFOLLOW
+            | OFlags::NONBLOCK;
+        let fd = fs::openat(&traces_fd, name, flags, FILE_MODE)
+            .map_err(|source| map_nofollow_error(&traces_fd, name, log, source))?;
+        let file = File::from(fd);
+        let file_type = file
+            .metadata()
+            .with_context(|| format!("failed to stat {}", log.display()))?
+            .file_type();
+        if !file_type.is_file() {
+            return Err(anyhow!(
+                "refusing to use {}: the span log must be a regular file, found {file_type:?}",
+                log.display()
+            ));
+        }
+        Ok(file)
+    }
+}
+
+#[cfg(not(unix))]
 fn open_log(log: &Path, access: LogAccess) -> Result<File> {
     let mut options = File::options();
     match access {
         LogAccess::Read => options.read(true),
         LogAccess::AppendCreate => options.read(true).create(true).append(true),
     };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
     let file = options
         .open(log)
         .with_context(|| format!("failed to open {}", log.display()))?;
@@ -1003,6 +1131,7 @@ fn append_span_within(
     lock_timeout: Duration,
     build: impl FnOnce(u64) -> Span,
 ) -> Result<()> {
+    #[cfg(not(unix))]
     if let Some(parent) = log.parent() {
         create_traces_dir(parent)?;
     }
@@ -1057,17 +1186,6 @@ fn append_span_within(
         return Err(anyhow!(err)).with_context(|| format!("failed to append to {}", log.display()));
     }
     Ok(())
-}
-
-#[cfg(unix)]
-fn create_traces_dir(path: &Path) -> Result<()> {
-    use std::os::unix::fs::DirBuilderExt;
-
-    let mut builder = std::fs::DirBuilder::new();
-    builder.recursive(true).mode(0o700);
-    builder
-        .create(path)
-        .with_context(|| format!("failed to create {}", path.display()))
 }
 
 #[cfg(not(unix))]

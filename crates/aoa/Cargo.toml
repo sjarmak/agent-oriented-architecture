@@ -35,12 +35,16 @@ clap = { version = "4.5.40", features = ["derive"] }
 anyhow = "1.0.98"
 sha2 = "0.10.9"
 
-# O_NOFOLLOW / O_NONBLOCK keep a planted symlink or FIFO from redirecting or
-# hanging the enforcement hook's predictable live-log path.
+# Descriptor-relative directory acquisition keeps the live log beneath the
+# repository trust root; O_NOFOLLOW / O_NONBLOCK also reject a planted symlink
+# or FIFO at the final component.
 [target.'cfg(unix)'.dependencies]
-libc = "0.2.186"
+rustix = { version = "1.1.4", features = ["fs"] }
 
 [dev-dependencies]
 assert_cmd = "2.0.16"
 predicates = "3.1.2"
 tempfile = "3.10.1"
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2.186"
