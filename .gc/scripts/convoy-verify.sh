@@ -70,10 +70,9 @@ verify_health() {
           .status == "closed"
           and .metadata["gc.coordinator_outcome.producer_disposition"] != null
         )
-      | . as $step
-      | (try ($step.metadata["gc.coordinator_outcome.producer_disposition"] | fromjson) catch null) as $disp
-      | select($disp == null or $disp.disposition != "deliverable")
-      | "\($step.id) producer disposition=\($disp.disposition // "invalid")"]
+      | (try (.metadata["gc.coordinator_outcome.producer_disposition"] | fromjson) catch null) as $disp
+      | select($disp.disposition != "deliverable")
+      | "\(.id) producer disposition=\($disp.disposition // "invalid")"]
     | first // empty
   ' <<<"$rows")
   [ -z "$failure" ] || verdict 1 "NOT HEALTHY $root: $failure"
@@ -130,9 +129,8 @@ verify_recovery() {
 
   work_dir=$(jq -r '.metadata["gc.work_dir"] // .metadata.work_dir // empty' <<<"$bead")
   base=$(jq -r '.metadata["gc.base_ref"] // .metadata.base_branch // "main"' <<<"$bead")
-  if [ -z "$work_dir" ] || [ ! -d "$work_dir" ]; then
+  [ -d "$work_dir" ] ||
     verdict 2 "ERROR recovery: no readable worktree for $bead_id"
-  fi
   branch=$(git -C "$work_dir" symbolic-ref --quiet --short HEAD 2>/dev/null) ||
     verdict 2 "ERROR recovery: worktree for $bead_id is detached"
   git rev-parse --verify --quiet "${base}^{commit}" >/dev/null ||
