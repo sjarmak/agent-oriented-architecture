@@ -1,17 +1,17 @@
 use serde::{Deserialize, Serialize};
 
-use aoa_gap::HeldOutProvenance;
+use aoa_gap::{ExposureStatus, HeldOutProvenance};
 use aoa_trace::Confidence;
 
 use crate::convention::{ConventionFamily, ScoringConvention};
 
-/// The three independent facts that decide whether a repo may vote in R0.
+/// The four independent facts that decide whether a repo may vote in R0.
 ///
 /// A repo votes ONLY when it is high-confidence (SCIP-grade index), has
 /// certified held-out provenance (external or natively composed), AND is
-/// calibrated. A repo failing any one is excluded and does not contribute a
-/// vote, per R-silent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// calibrated, AND its admitted subjects are unexposed. A repo failing any one
+/// is excluded and does not contribute a vote, per R-silent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Eligibility {
     /// Index confidence from `aoa-metrics`; only `Confidence::High` may vote.
@@ -20,6 +20,8 @@ pub struct Eligibility {
     pub native_span: HeldOutProvenance,
     /// Whether the repo's scoring is calibrated against external outcomes.
     pub calibrated: bool,
+    /// Exposure derived from the persisted run ledger; only `Unexposed` votes.
+    pub exposure: ExposureStatus,
 }
 
 /// Trace-reach depth recorded when the oracle chain is unreachable from the

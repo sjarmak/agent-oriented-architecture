@@ -150,4 +150,51 @@ pub enum BenchError {
     /// held-out signal to classify.
     #[error("cannot classify held-out provenance for an empty task set")]
     EmptyProvenanceSet,
+
+    /// A spent trial could not be mapped to a stable subject. Treating it as
+    /// absent would manufacture an all-clear from incomplete evidence.
+    #[error("failed to derive exposure subject from {}: {message}", raw_path(.path))]
+    ExposureIdentity { path: PathBuf, message: String },
+
+    /// The recursive exposure walk is bounded independently from per-run task
+    /// discovery because it includes every arm, seed, and quarantine tree.
+    #[error("exposure scan under {} exceeded {max} filesystem entries (DoS guard)", raw_path(.root))]
+    TooManyExposureEntries { root: PathBuf, max: usize },
+
+    /// Campaign metadata disagreed on repo identity, so its tasks cannot be
+    /// joined to a pinned baseline without guessing.
+    #[error("campaign manifests disagree under {}: prep repo {prep_repo:?}, mine repo {mine_repo:?}", raw_path(.dir))]
+    ExposureManifestMismatch {
+        dir: PathBuf,
+        prep_repo: String,
+        mine_repo: String,
+    },
+
+    /// No pinned admitted corpus was found, so an empty report would not be an
+    /// exposure verdict.
+    #[error("no campaign prep.json + mine.json pairs found under {}", raw_path(.0))]
+    NoExposureCorpora(PathBuf),
+
+    /// Two corpus manifests claimed the same repo. Picking either one would
+    /// silently discard a baseline pin and make subject identity ambiguous.
+    #[error("more than one campaign corpus claims repository {repo_id:?}")]
+    DuplicateExposureRepo { repo_id: String },
+
+    /// Task ids are directory keys, not paths. Reject separators and traversal
+    /// before joining an operator-supplied mine manifest to the task root.
+    #[error("invalid exposure task id {task_id:?} in {}: expected one path component", raw_path(.mine_path))]
+    InvalidExposureTaskId { mine_path: PathBuf, task_id: String },
+
+    /// A prep pin without its admission manifest is incomplete campaign state,
+    /// not a corpus that may be omitted from the report.
+    #[error("campaign prep manifest {} has no sibling mine.json", raw_path(.0))]
+    MissingExposureMine(PathBuf),
+
+    /// An admission manifest without its pinned baseline is equally incomplete.
+    #[error("campaign mine manifest {} has no sibling prep.json", raw_path(.0))]
+    MissingExposurePrep(PathBuf),
+
+    /// An empty admitted set has no held-out supply to classify.
+    #[error("campaign corpus for repository {repo_id:?} has no admitted tasks")]
+    EmptyExposureCorpus { repo_id: String },
 }

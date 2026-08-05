@@ -7,8 +7,8 @@ use crate::types::Eligibility;
 ///
 /// A repo votes ONLY when it is high-confidence (SCIP-grade), has certified
 /// held-out provenance (`External` or `NativeComposed`), AND is calibrated. Any
-/// single failure excludes it, per R-silent; an ineligible repo contributes no
-/// vote.
+/// admitted subjects are unexposed. Any single failure excludes it, per
+/// R-silent; an ineligible repo contributes no vote.
 pub fn is_eligible(e: &Eligibility) -> bool {
     matches!(e.confidence, Confidence::High)
         && matches!(
@@ -16,4 +16,5 @@ pub fn is_eligible(e: &Eligibility) -> bool {
             HeldOutProvenance::External | HeldOutProvenance::NativeComposed
         )
         && e.calibrated
+        && e.exposure.is_unexposed()
 }

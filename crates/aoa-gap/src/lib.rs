@@ -21,12 +21,14 @@
 
 mod compare;
 mod error;
+mod exposure;
 mod gap;
 mod provenance;
 mod run;
 
 pub use compare::{compare, CompareOutcome, CompareWarning, Label};
 pub use error::GapError;
+pub use exposure::{ExposureStatus, SubjectKey};
 pub use gap::{compute_gap, GapOutcome};
 pub use provenance::HeldOutProvenance;
 pub use run::{CanaryItem, RunResult, TaskOutcome};

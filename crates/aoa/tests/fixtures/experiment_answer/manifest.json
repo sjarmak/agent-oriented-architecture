@@ -7,6 +7,7 @@
       "repo_id": "sample/answers",
       "repo_commit": { "algorithm": "sha1", "hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
       "confidence": "high",
+      "exposure": "unexposed",
       "calibration_artifact": "calibration.json",
       "repo_arm_config": "repo-config.json",
       "harness_arm_config": "harness-config.json",

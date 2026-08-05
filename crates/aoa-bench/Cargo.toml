@@ -15,3 +15,6 @@ serde_jcs = { workspace = true }
 sha2 = "0.10.9"
 thiserror = { workspace = true }
 toml = { version = "1.1.2", default-features = false, features = ["parse", "serde"] }
+
+[dev-dependencies]
+tempfile = "3.10.1"

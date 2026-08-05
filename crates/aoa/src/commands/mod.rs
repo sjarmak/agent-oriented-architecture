@@ -3,6 +3,7 @@ mod corpus;
 mod enforce;
 mod eval;
 mod eval_run;
+mod exposure;
 mod falsify;
 mod falsify_build;
 mod fsutil;

@@ -34,6 +34,8 @@ mod enforce;
 mod eval_run;
 #[path = "cli_sections/experiment.rs"]
 mod experiment;
+#[path = "cli_sections/exposure.rs"]
+mod exposure;
 #[path = "cli_sections/falsify_policy.rs"]
 mod falsify_policy;
 #[path = "cli_sections/gap_recommend.rs"]

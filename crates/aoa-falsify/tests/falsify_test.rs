@@ -1,4 +1,4 @@
-use aoa_gap::HeldOutProvenance;
+use aoa_gap::{ExposureStatus, HeldOutProvenance};
 use aoa_trace::Confidence;
 
 use aoa_falsify::{
@@ -12,7 +12,18 @@ fn eligible() -> Eligibility {
         confidence: Confidence::High,
         native_span: HeldOutProvenance::NativeComposed,
         calibrated: true,
+        exposure: ExposureStatus::Unexposed,
     }
+}
+
+#[test]
+fn exposed_repo_is_not_eligible_to_vote() {
+    let eligibility = Eligibility {
+        exposure: ExposureStatus::Exposed,
+        ..eligible()
+    };
+
+    assert!(!is_eligible(&eligibility));
 }
 
 /// One identical-pair task with the given two held-out outcomes, default scoring
@@ -85,6 +96,7 @@ fn external_held_out_provenance_is_eligible() {
         confidence: Confidence::High,
         native_span: HeldOutProvenance::External,
         calibrated: true,
+        exposure: ExposureStatus::Unexposed,
     }));
 }
 
@@ -97,6 +109,7 @@ fn all_external_manifest_votes_in_r0() {
                 confidence: Confidence::High,
                 native_span: HeldOutProvenance::External,
                 calibrated: true,
+                exposure: ExposureStatus::Unexposed,
             },
             runs: stable_runs(3, vec![pair(1, true, false)]),
             holdout_size: 40,
@@ -349,6 +362,7 @@ fn ineligible_repos_excluded_from_voting() {
             confidence: Confidence::Low,
             native_span: HeldOutProvenance::NativeComposed,
             calibrated: true,
+            exposure: ExposureStatus::Unexposed,
         },
         runs: stable_runs(3, vec![pair(1, true, false)]),
         holdout_size: 40,
@@ -360,6 +374,7 @@ fn ineligible_repos_excluded_from_voting() {
             confidence: Confidence::High,
             native_span: HeldOutProvenance::SynthesizedFromVisible,
             calibrated: true,
+            exposure: ExposureStatus::Unexposed,
         },
         runs: stable_runs(3, vec![pair(1, true, false)]),
         holdout_size: 40,
@@ -371,6 +386,7 @@ fn ineligible_repos_excluded_from_voting() {
             confidence: Confidence::High,
             native_span: HeldOutProvenance::NativeComposed,
             calibrated: false,
+            exposure: ExposureStatus::Unexposed,
         },
         runs: stable_runs(3, vec![pair(1, true, false)]),
         holdout_size: 40,

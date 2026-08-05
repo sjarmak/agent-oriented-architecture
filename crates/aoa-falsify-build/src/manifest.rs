@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use aoa_bench::GitObjectId;
+use aoa_gap::ExposureStatus;
 use aoa_metrics::Confidence;
 
 /// The whole build manifest.
@@ -43,6 +44,9 @@ pub struct RepoManifest {
     pub(crate) confidence: ConfidenceDecl,
     /// Typed, content-addressed evidence backing calibration eligibility.
     pub(crate) calibration_artifact: PathBuf,
+    /// Pre-admission result from `aoa eval exposure scan`. REQUIRED: absence
+    /// must never default toward eligibility.
+    pub(crate) exposure: ExposureStatus,
     /// Exact configuration bytes used by every repo-arm replication.
     pub(crate) repo_arm_config: PathBuf,
     /// Exact configuration bytes used by every harness-arm replication.
@@ -107,7 +111,7 @@ impl From<ConfidenceDecl> for Confidence {
 mod tests {
     use super::*;
 
-    const REPO_PREFIX: &str = r#"{"repo_id":"r","confidence":"high",
+    const REPO_PREFIX: &str = r#"{"repo_id":"r","confidence":"high","exposure":"unexposed",
         "repo_commit":{"algorithm":"sha1","hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
         "calibration_artifact":"calibration.json","repo_arm_config":"repo.json",
         "harness_arm_config":"harness.json","#;

@@ -234,6 +234,32 @@ pub enum EvalCommand {
     /// config arms (repo-arm vs harness-arm over the same mined tasks). Emits the
     /// `FalsifyInput` JSON `aoa falsify` consumes, plus a build report.
     Experiment(ExperimentArgs),
+
+    /// Audit held-out subject exposure across all run and quarantine trees.
+    Exposure(ExposureArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ExposureArgs {
+    #[command(subcommand)]
+    pub command: ExposureCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ExposureCommand {
+    /// Scan admitted campaign corpora against every persisted trial artifact.
+    Scan(ExposureScanArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ExposureScanArgs {
+    /// codeprobe campaign root containing repo prep/mine manifests and runs.
+    #[arg(long, value_name = "DIR")]
+    pub runs: PathBuf,
+
+    /// Emit the structured JSON rendering instead of human text.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Args)]

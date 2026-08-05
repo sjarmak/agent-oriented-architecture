@@ -6,7 +6,7 @@ const COMMIT: &str = r#"{"algorithm":"sha1","hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
 fn repo(runs: &str, extra: &str) -> String {
     format!(
-        r#"{{"repo_id":"sample/repo","repo_commit":{COMMIT},"confidence":"high",
+        r#"{{"repo_id":"sample/repo","repo_commit":{COMMIT},"confidence":"high","exposure":"unexposed",
         "calibration_artifact":"calibration.json","repo_arm_config":"repo.json",
         "harness_arm_config":"harness.json",{extra}"runs":[{runs}]}}"#
     )

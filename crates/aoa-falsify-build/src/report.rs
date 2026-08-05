@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 
-use aoa_gap::HeldOutProvenance;
+use aoa_gap::{ExposureStatus, HeldOutProvenance};
 use aoa_metrics::Confidence;
 
 use crate::manifest::TaskShape;
@@ -26,8 +26,10 @@ pub struct RepoBuild {
     pub native_span: HeldOutProvenance,
     pub confidence: Confidence,
     pub calibrated: bool,
+    pub exposure: ExposureStatus,
     /// Whether this repo satisfies the gate's eligibility predicate (high +
-    /// native-composed + calibrated). Informational — the gate re-derives it.
+    /// native-composed + calibrated + unexposed). Informational — the gate
+    /// re-derives it.
     pub eligible: bool,
     pub excluded_tasks: Vec<ExcludedTask>,
 }

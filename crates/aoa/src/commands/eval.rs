@@ -7,9 +7,9 @@ use serde::Serialize;
 use aoa_gap::RunResult;
 use aoa_trace::TraceReport;
 
-use crate::cli::{EvalArgs, EvalCommand};
+use crate::cli::{EvalArgs, EvalCommand, ExposureCommand};
 use crate::commands::fsutil::load_json_capped;
-use crate::commands::{eval_run, falsify_build, r0b};
+use crate::commands::{eval_run, exposure, falsify_build, r0b};
 use crate::output::{print_human, print_json};
 
 /// Dispatch the eval sub-commands.
@@ -20,6 +20,9 @@ pub fn run(args: &EvalArgs) -> Result<i32> {
         EvalCommand::Run(a) => eval_run::run(a),
         EvalCommand::R0b(a) => r0b::run(a),
         EvalCommand::Experiment(a) => falsify_build::run(a),
+        EvalCommand::Exposure(a) => match &a.command {
+            ExposureCommand::Scan(scan) => exposure::scan(scan),
+        },
     }
 }
 

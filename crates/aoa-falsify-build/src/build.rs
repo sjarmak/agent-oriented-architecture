@@ -413,6 +413,7 @@ fn build_repo(
         confidence,
         native_span,
         calibrated,
+        exposure: repo.exposure.clone(),
     };
     // Reuse the gate's own predicate so the build report's `eligible` flag cannot
     // drift from the eligibility rule `aoa falsify` actually applies.
@@ -433,6 +434,7 @@ fn build_repo(
         native_span,
         confidence,
         calibrated,
+        exposure: repo.exposure.clone(),
         eligible,
         excluded_tasks,
     };

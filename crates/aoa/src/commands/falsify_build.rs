@@ -136,7 +136,7 @@ fn render_human(report: &BuildReport, report_path: &Path) -> String {
     for repo in &report.repos {
         let _ = writeln!(
             out,
-            "  {:<24} pairs={}/{} yield={:.3} holdout={} provenance={:?} confidence={:?} calibrated={} eligible={}",
+            "  {:<24} pairs={}/{} yield={:.3} holdout={} provenance={:?} confidence={:?} calibrated={} exposure={:?} eligible={}",
             escape_terminal(&repo.repo_id),
             repo.identical_pairs,
             repo.candidate_pairs,
@@ -145,6 +145,7 @@ fn render_human(report: &BuildReport, report_path: &Path) -> String {
             repo.native_span,
             repo.confidence,
             repo.calibrated,
+            repo.exposure,
             repo.eligible,
         );
         render_exclusions(&mut out, &repo.excluded_tasks);

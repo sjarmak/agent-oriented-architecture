@@ -5,7 +5,8 @@
       "eligibility": {
         "confidence": "High",
         "native_span": "native_composed",
-        "calibrated": true
+        "calibrated": true,
+        "exposure": "unexposed"
       },
       "holdout_size": 10,
       "runs": [
@@ -64,7 +65,8 @@
       "eligibility": {
         "confidence": "High",
         "native_span": "native_composed",
-        "calibrated": true
+        "calibrated": true,
+        "exposure": "unexposed"
       },
       "holdout_size": 10,
       "runs": [
@@ -123,7 +125,8 @@
       "eligibility": {
         "confidence": "High",
         "native_span": "native_composed",
-        "calibrated": true
+        "calibrated": true,
+        "exposure": "unexposed"
       },
       "holdout_size": 10,
       "runs": [
@@ -182,7 +185,8 @@
       "eligibility": {
         "confidence": "High",
         "native_span": "native_composed",
-        "calibrated": true
+        "calibrated": true,
+        "exposure": "unexposed"
       },
       "holdout_size": 10,
       "runs": [
@@ -241,7 +245,8 @@
       "eligibility": {
         "confidence": "High",
         "native_span": "native_composed",
-        "calibrated": true
+        "calibrated": true,
+        "exposure": "unexposed"
       },
       "holdout_size": 10,
       "runs": [

@@ -79,6 +79,9 @@ Three guardrails make the treatment construct-valid; violating any one
 ## Pipeline
 
 ```
+aoa eval exposure scan --runs runs/r0 --json       # BEFORE admission/live runs; record each repo status
+        │  only status=unexposed may enter the manifest
+        ▼
 codeprobe experiment init/add-config + run (≥2 arms, K seeds)   # you run this — needs a live agent
         │  runs/<arm>/<task_id>/scoring.json (dual_composite)
         │  reports/aggregate.json (bias_warnings)
@@ -96,6 +99,22 @@ falsification.json  { verdict, repo_delta, harness_delta, ... }   ← the Wave-1
 
 `scripts/r0_experiment.sh` chains the AOA post-processing steps once the
 codeprobe experiment has been run.
+
+## Step 0 — gate corpus admission before spending it
+
+Before migration, task selection, or any live arm, scan the complete campaign
+root. The walk includes active runs and every quarantine subtree and does not
+follow directory symlinks:
+
+```bash
+aoa eval exposure scan --runs /path/to/codeprobe/runs/r0 --json
+```
+
+Record each candidate repo's result in the build manifest. Only `unexposed`
+may vote; `partially_exposed` and `exposed` are both ineligible. The scan joins
+`prep.json`'s pinned baseline path/SHA with `mine.json`'s admitted task IDs and
+matches structured question-family/target subjects, not task IDs. This is why
+a re-mined task cannot regain held-out status merely by receiving a new ID.
 
 ## Step 1 — stand up the codeprobe experiment (≥2 arms, same tasks)
 
@@ -139,6 +158,7 @@ resolved relative to the manifest file.
       "repo_id": "org/widget",
       "repo_commit": { "algorithm": "sha1", "hex": "0123456789abcdef0123456789abcdef01234567" },
       "confidence": "high",     // operator assertion: SCIP-grade index. REQUIRED — no default.
+      "exposure": "unexposed",  // from the pre-admission exposure scan. REQUIRED — no default.
       "calibration_artifact": "../org-widget/calibration.json",
       "repo_arm_config": "../org-widget/aoa-migrated-config.json",
       "harness_arm_config": "../org-widget/harness-swap-config.json",
@@ -155,7 +175,8 @@ resolved relative to the manifest file.
 }
 ```
 
-`confidence`, `repo_commit`, and all three artifact paths are **required**.
+`confidence`, `repo_commit`, `exposure`, and all three artifact paths are
+**required**.
 Verify
 `confidence: high` against `aoa eval run`'s `graph_quality` (it is `scip` only
 for a real SCIP index). The calibration artifact is a strict JSON record with
@@ -164,6 +185,8 @@ non-empty `criteria`, and `conclusion`. `native_span` is **derived** from each
 task's mined oracle — never declared. Only a high-confidence repo with certified
 held-out provenance (`external` or `native_composed`), backed by a complete
 artifact whose conclusion is `calibrated`, may vote.
+The repo must also carry the pre-admission `unexposed` result; partial or full
+exposure excludes it regardless of the other three facts.
 
 **R11 scope note for answer-shaped tasks (pre-registered 2026-07-05, before
 any campaign arm ran).** The calibration artifact attests *scoring validity*.

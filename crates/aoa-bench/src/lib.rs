@@ -35,6 +35,7 @@
 mod bridge;
 mod codeprobe_run;
 mod error;
+mod exposure;
 mod loader;
 mod measurement_observation;
 mod oracle;
@@ -47,6 +48,7 @@ pub use codeprobe_run::{
     transcript_path, DualLegs, TrialScoring,
 };
 pub use error::BenchError;
+pub use exposure::{scan_exposure, ExposureScan, RepoExposure};
 pub use loader::{is_task_dir, load_task};
 pub use measurement_observation::{
     AnswerMetricsV1, ArmIdentity, ArtifactDigestSetV1, CalibrationConclusion,
