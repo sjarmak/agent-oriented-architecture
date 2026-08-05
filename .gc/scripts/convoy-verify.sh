@@ -43,8 +43,20 @@ verify_land() {
   # be compared on the tip's paths alone and blessed patch-equivalent. The
   # range form also handles merge commits and root commits, which yield no
   # paths under diff-tree.
-  mapfile -d '' -t paths < <(git diff --name-only -z "${base}...${branch}") ||
-    verdict 2 "ERROR land: cannot diff $base...$branch"
+  # The path list goes through a temp file rather than a process substitution
+  # or a command substitution, because both lose something load-bearing:
+  # mapfile reports its own success and not the failure of a process
+  # substitution (an orphan branch has no merge base), while command
+  # substitution silently drops the NUL delimiters and collapses every path
+  # into one. Either way the result is zero or one bogus path, a clean diff,
+  # and a PASS — the exact false-pass shape this subcommand exists to catch.
+  local list
+  list=$(mktemp) || verdict 2 "ERROR land: cannot allocate scratch space"
+  # shellcheck disable=SC2064  # expand $list now; verdict() exits from here
+  trap "rm -f '$list'" EXIT
+  git diff --name-only -z "${base}...${branch}" >"$list" ||
+    verdict 2 "ERROR land: cannot diff $base...$branch (no merge base?)"
+  mapfile -d '' -t paths <"$list"
   if [ "${#paths[@]}" -eq 0 ]; then
     verdict 0 "PASS land: $branch introduces no changes relative to $base"
   fi
