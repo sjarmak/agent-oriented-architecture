@@ -26,7 +26,7 @@ usage() {
 verify_land() {
   [ "$#" -eq 2 ] || usage
   local branch=$1 base=$2
-  local -a paths=()
+  local -a paths
 
   git rev-parse --verify --quiet "${branch}^{commit}" >/dev/null ||
     verdict 2 "ERROR land: ref does not resolve: $branch"
