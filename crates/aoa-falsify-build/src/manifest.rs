@@ -4,8 +4,10 @@
 //! (`min_effect_szie`) must fail loud, not silently leave the real field at its
 //! default (0.0 disables the effect-size floor).
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
 use aoa_bench::GitObjectId;
@@ -29,7 +31,86 @@ pub struct Manifest {
     /// the power precondition bite.
     #[serde(default)]
     pub(crate) min_effect_size: f64,
+    /// Pre-registered campaign inventory. The builder requires the repo IDs
+    /// below to match this set exactly before reading any campaign evidence.
+    pub(crate) expected_repo_ids: Vec<String>,
     pub(crate) repos: Vec<RepoManifest>,
+}
+
+impl Manifest {
+    pub(crate) fn validate_repo_inventory(&self) -> anyhow::Result<()> {
+        for repo_id in &self.expected_repo_ids {
+            validate_repo_id(repo_id, "expected_repo_ids")?;
+        }
+        for repo in &self.repos {
+            validate_repo_id(&repo.repo_id, "repos")?;
+        }
+        if let Some(repo_id) = first_duplicate(self.expected_repo_ids.iter().map(String::as_str)) {
+            bail!(
+                "manifest expected_repo_ids contains duplicate repo id: {}",
+                diagnostic_repo_id(repo_id)
+            );
+        }
+        if let Some(repo_id) = first_duplicate(self.repos.iter().map(|repo| repo.repo_id.as_str()))
+        {
+            bail!(
+                "manifest repos contains duplicate repo id: {}",
+                diagnostic_repo_id(repo_id)
+            );
+        }
+
+        let expected: BTreeSet<_> = self.expected_repo_ids.iter().map(String::as_str).collect();
+        let actual: BTreeSet<_> = self
+            .repos
+            .iter()
+            .map(|repo| repo.repo_id.as_str())
+            .collect();
+        let missing = diagnostic_repo_ids(expected.difference(&actual).copied());
+        let unexpected = diagnostic_repo_ids(actual.difference(&expected).copied());
+        if !missing.is_empty() || !unexpected.is_empty() {
+            bail!(
+                "manifest repo inventory mismatch: missing [{missing}]; unexpected [{unexpected}]"
+            );
+        }
+        Ok(())
+    }
+}
+
+fn validate_repo_id(repo_id: &str, field: &str) -> anyhow::Result<()> {
+    let characters_are_safe = repo_id.chars().all(|character| {
+        character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-' | '/')
+    });
+    let segments_are_safe = !repo_id.is_empty()
+        && repo_id
+            .split('/')
+            .all(|segment| !segment.is_empty() && segment != "." && segment != "..");
+    if !characters_are_safe || !segments_are_safe {
+        bail!(
+            "manifest {field} contains invalid repo id {}: expected slash-separated ASCII letters, digits, '.', '_', or '-' with no empty, '.' or '..' segments",
+            diagnostic_repo_id(repo_id)
+        );
+    }
+    Ok(())
+}
+
+fn first_duplicate<'a>(values: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+    let mut seen = BTreeSet::new();
+    values.into_iter().find(|value| !seen.insert(*value))
+}
+
+fn diagnostic_repo_ids<'a>(repo_ids: impl Iterator<Item = &'a str>) -> String {
+    repo_ids
+        .map(diagnostic_repo_id)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn diagnostic_repo_id(repo_id: &str) -> String {
+    let escaped = repo_id
+        .chars()
+        .flat_map(char::escape_default)
+        .collect::<String>();
+    format!(r#""{escaped}""#)
 }
 
 /// One repo's operator assertions and its per-seed arm run dirs.
@@ -116,6 +197,18 @@ mod tests {
         "calibration_artifact":"calibration.json","repo_arm_config":"repo.json",
         "harness_arm_config":"harness.json","#;
 
+    fn manifest_with_inventory(expected_repo_ids: &str, repos: &str) -> Manifest {
+        serde_json::from_str(&format!(
+            r#"{{"k_runs":3,"min_holdout_size":1,"expected_repo_ids":[{expected_repo_ids}],"repos":[{repos}]}}"#
+        ))
+        .unwrap()
+    }
+
+    fn repo(repo_id: &str) -> String {
+        format!(r#"{REPO_PREFIX}"runs":[]}}"#)
+            .replace(r#""repo_id":"r""#, &format!(r#""repo_id":"{repo_id}""#))
+    }
+
     #[test]
     fn confidence_decl_maps_to_metrics_confidence() {
         assert_eq!(Confidence::from(ConfidenceDecl::High), Confidence::High);
@@ -123,22 +216,82 @@ mod tests {
     }
 
     #[test]
+    fn repo_inventory_reports_missing_and_unexpected_ids() {
+        let repos = format!("{},{}", repo("r"), repo("unexpected"));
+        let manifest = manifest_with_inventory(r#""r","missing""#, &repos);
+
+        let error = manifest.validate_repo_inventory().unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "manifest repo inventory mismatch: missing [\"missing\"]; unexpected [\"unexpected\"]"
+        );
+    }
+
+    #[test]
+    fn repo_inventory_rejects_duplicate_expected_and_actual_ids() {
+        let duplicate_expected = manifest_with_inventory(r#""r","r""#, &repo("r"));
+        assert_eq!(
+            duplicate_expected
+                .validate_repo_inventory()
+                .unwrap_err()
+                .to_string(),
+            "manifest expected_repo_ids contains duplicate repo id: \"r\""
+        );
+
+        let duplicate_actual =
+            manifest_with_inventory(r#""r""#, &format!("{},{}", repo("r"), repo("r")));
+        assert_eq!(
+            duplicate_actual
+                .validate_repo_inventory()
+                .unwrap_err()
+                .to_string(),
+            "manifest repos contains duplicate repo id: \"r\""
+        );
+    }
+
+    #[test]
+    fn repo_inventory_rejects_empty_and_display_unsafe_ids_before_comparison() {
+        let empty = manifest_with_inventory("\"\"", &repo("actual"));
+        assert!(empty
+            .validate_repo_inventory()
+            .unwrap_err()
+            .to_string()
+            .contains(r#"invalid repo id """#));
+
+        let bidi = manifest_with_inventory(r#""safe\u202egpj.exe""#, &repo("actual"));
+        let error = bidi.validate_repo_inventory().unwrap_err().to_string();
+        assert!(
+            !error.contains('\u{202e}'),
+            "raw bidi override leaked: {error:?}"
+        );
+        assert!(error.contains(r#""safe\u{202e}gpj.exe""#), "got: {error}");
+
+        let delimiter = manifest_with_inventory(r#""legit], unexpected [forged""#, &repo("actual"));
+        let error = delimiter.validate_repo_inventory().unwrap_err().to_string();
+        assert!(
+            error.contains(r#""legit], unexpected [forged""#),
+            "delimiter-shaped ID must remain quoted: {error}"
+        );
+    }
+
+    #[test]
     fn unknown_fields_are_rejected_at_every_boundary() {
         let cases = [
             (
-                r#"{"k_runs":3,"min_holdout_size":1,"min_effect_szie":0.5,"repos":[]}"#.to_string(),
+                r#"{"k_runs":3,"min_holdout_size":1,"min_effect_szie":0.5,"expected_repo_ids":[],"repos":[]}"#.to_string(),
                 "min_effect_szie",
             ),
             (
                 format!(
-                    r#"{{"k_runs":3,"min_holdout_size":1,"repos":[{REPO_PREFIX}
+                    r#"{{"k_runs":3,"min_holdout_size":1,"expected_repo_ids":["r"],"repos":[{REPO_PREFIX}
                     "calibratd":"x","runs":[]}}]}}"#
                 ),
                 "calibratd",
             ),
             (
                 format!(
-                    r#"{{"k_runs":3,"min_holdout_size":1,"repos":[{REPO_PREFIX}
+                    r#"{{"k_runs":3,"min_holdout_size":1,"expected_repo_ids":["r"],"repos":[{REPO_PREFIX}
                     "runs":[{{"seed":1,"repo_arm":"a","harness_arm":"b","sed":2}}]}}]}}"#
                 ),
                 "sed",
@@ -153,7 +306,7 @@ mod tests {
     #[test]
     fn legacy_calibrated_basis_key_is_rejected() {
         let json = format!(
-            r#"{{"k_runs":3,"min_holdout_size":1,"repos":[{REPO_PREFIX}
+            r#"{{"k_runs":3,"min_holdout_size":1,"expected_repo_ids":["r"],"repos":[{REPO_PREFIX}
             "calibrated_basis":"R11 scope note","runs":[]}}]}}"#
         );
         let error = serde_json::from_str::<Manifest>(&json).unwrap_err();

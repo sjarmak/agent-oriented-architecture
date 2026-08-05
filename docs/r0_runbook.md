@@ -169,6 +169,7 @@ resolved relative to the manifest file.
   "k_runs": 3,
   "min_holdout_size": 7,
   "min_effect_size": 0.0,
+  "expected_repo_ids": ["org/widget"],
   "repos": [
     {
       "repo_id": "org/widget",
@@ -191,8 +192,12 @@ resolved relative to the manifest file.
 }
 ```
 
-`confidence`, `repo_commit`, `exposure`, and all three artifact paths are
-**required**.
+`expected_repo_ids`, `confidence`, `repo_commit`, `exposure`, and all three
+artifact paths are **required**. `expected_repo_ids` pins the pre-registered
+campaign inventory; the command hard-errors before reading evidence when the
+IDs under `repos` are missing, unexpected, or duplicated relative to it. Repo
+IDs use slash-separated ASCII letters, digits, `.`, `_`, and `-`; empty, `.`
+and `..` segments are rejected before evidence is read.
 Verify
 `confidence: high` against `aoa eval run`'s `graph_quality` (it is `scip` only
 for a real SCIP index). The calibration artifact is a strict JSON record with

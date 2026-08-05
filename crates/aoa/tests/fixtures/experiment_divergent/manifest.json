@@ -2,6 +2,7 @@
   "k_runs": 3,
   "min_holdout_size": 1,
   "min_effect_size": 0.0,
+  "expected_repo_ids": ["sample/divergent"],
   "repos": [
     {
       "repo_id": "sample/divergent",

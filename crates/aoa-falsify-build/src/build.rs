@@ -487,6 +487,7 @@ fn build_inner(
     tasks_dir: &Path,
     base_dir: &Path,
 ) -> AnyResult<(FalsifyInput, BuildReport, Vec<MeasurementObservationV1>)> {
+    manifest.validate_repo_inventory()?;
     if manifest.repos.is_empty() {
         bail!("manifest declares no repos");
     }

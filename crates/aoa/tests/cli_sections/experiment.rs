@@ -211,6 +211,38 @@ fn experiment_pair_yield_preflight_stops_low_yield_before_full_campaign() {
 }
 
 #[test]
+fn experiment_rejects_manifest_missing_a_preregistered_repo() {
+    let dir = TempDir::new().expect("tempdir");
+    let fixture_dir = fixture("experiment_answer");
+    let mut manifest: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture_dir.join("manifest.json")).expect("manifest"),
+    )
+    .expect("manifest JSON");
+    manifest["expected_repo_ids"] =
+        serde_json::json!(["sample/answers", "sample/preregistered-but-missing"]);
+    let manifest_path = dir.path().join("manifest.json");
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).expect("serialize"),
+    )
+    .expect("write manifest");
+
+    aoa()
+        .args(["eval", "experiment", "--manifest"])
+        .arg(&manifest_path)
+        .arg("--tasks")
+        .arg(fixture("answer_tasks"))
+        .arg("--out")
+        .arg(dir.path().join("falsify_input.json"))
+        .args(["--min-pair-yield", "0.0"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "manifest repo inventory mismatch: missing [\"sample/preregistered-but-missing\"]",
+        ));
+}
+
+#[test]
 fn experiment_missing_calibration_is_excluded_data_not_a_command_failure() {
     let dir = TempDir::new().expect("tempdir");
     let fixture_dir = fixture("experiment_answer");

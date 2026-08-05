@@ -13,9 +13,19 @@ fn repo(runs: &str, extra: &str) -> String {
 }
 
 fn manifest(repos: &str) -> Manifest {
-    serde_json::from_str(&format!(
-        r#"{{"k_runs":3,"min_holdout_size":1,"repos":[{repos}]}}"#
-    ))
+    let repos: serde_json::Value = serde_json::from_str(&format!("[{repos}]")).unwrap();
+    let expected_repo_ids = repos
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|repo| repo["repo_id"].clone())
+        .collect::<Vec<_>>();
+    serde_json::from_value(serde_json::json!({
+        "k_runs": 3,
+        "min_holdout_size": 1,
+        "expected_repo_ids": expected_repo_ids,
+        "repos": repos,
+    }))
     .unwrap()
 }
 
@@ -61,8 +71,10 @@ fn write_answer_trial(base_dir: &Path, run_dir: &str, task_id: &str) {
 
 #[test]
 fn an_empty_manifest_fails_loud_at_the_library_boundary() {
-    let manifest: Manifest =
-        serde_json::from_str(r#"{"k_runs":3,"min_holdout_size":1,"repos":[]}"#).unwrap();
+    let manifest: Manifest = serde_json::from_str(
+        r#"{"k_runs":3,"min_holdout_size":1,"expected_repo_ids":[],"repos":[]}"#,
+    )
+    .unwrap();
 
     let error = build(&manifest, Path::new("tasks"), Path::new(".")).unwrap_err();
 
@@ -96,7 +108,7 @@ fn public_errors_escape_operator_and_filesystem_control_characters() {
 #[test]
 fn mixed_task_shapes_fail_before_evidence_is_read() {
     let answer = repo("", r#""task_shape":"answer","scip_index":"index.json","#);
-    let edit = repo("", "");
+    let edit = repo("", "").replace("sample/repo", "sample/edit");
     let manifest = manifest(&format!("{answer},{edit}"));
 
     let error = build_error(&manifest, Path::new("."));
