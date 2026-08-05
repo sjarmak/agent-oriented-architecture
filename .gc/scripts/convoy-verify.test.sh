@@ -279,12 +279,15 @@ JSON
 cat >"$fixtures/pane-walled.json" <<'JSON'
 {"ok":true,"line_count":3,"output":"You've hit your usage limit. Try again at Aug 8th, 2026 12:03 AM.\n  agent-oriented-architecture:main  |  Opus 5  |  ctx: 9% / 1M\n"}
 JSON
-# The false-live window, made executable: a real terminator the wall grep does
-# not list (aoa-0ltiu) under the decoration a stalled seat's un-repainted
-# scrollback still shows. To leg B this pane is indistinguishable from
-# pane-live.json. Asserting the HEALTHY it returns acknowledges the floor
-# rather than endorsing it, and makes any change that narrows the window come
-# here and say so.
+# The false-live window, made executable. COMPOSED, not captured: a real
+# observed terminator the wall grep does not list (aoa-0ltiu) under the
+# decoration shape of pane-live.json. It is an input built to probe this
+# script's greps, and it must not be read as a pane anyone recorded — the
+# whole point of the bead behind this case is that manufacturing an
+# observation is worse than leaving a direction unobserved. What it proves is
+# about the greps: leg B cannot separate this pane from a live one. Asserting
+# the HEALTHY it returns acknowledges that floor rather than endorsing it, and
+# makes any change that narrows the window come here and say so.
 cat >"$fixtures/pane-stale-walled.json" <<'JSON'
 {"ok":true,"line_count":4,"output":"✦ Billowing… (2m 27s · ↓ 7.8k tokens)\nYou've reached your Fable 5 limit. Run /usage-credits to continue or switch models with /model.\n  agent-oriented-architecture:main  |  Opus 5  |  ctx: 9% / 1M\n"}
 JSON

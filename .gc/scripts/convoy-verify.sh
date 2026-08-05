@@ -198,9 +198,10 @@ verify_health() {
     # The wall grep above narrows the window but cannot close it, because it
     # is a substring whitelist and an unlisted terminator leaves a walled seat
     # looking live. "You've reached your Fable 5 limit. Run /usage-credits to
-    # continue" is a real observed terminator (aoa-0ltiu, mayor gc-527414)
-    # that matches none of those patterns, on a seat that wrote to its pane on
-    # every retry.
+    # continue or switch models with /model." is a real observed terminator
+    # (aoa-0ltiu, mayor gc-527414) that matches none of those patterns. That
+    # seat was not stale at all — it wrote to its pane on every retry, so it is
+    # a second way into this window rather than the same one.
     #
     # So, from a HEALTHY verdict, a caller MAY conclude: every closed step of
     # this convoy carries passing outcome evidence, and this seat's pane showed
