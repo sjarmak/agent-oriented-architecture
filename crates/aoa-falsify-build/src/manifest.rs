@@ -106,11 +106,7 @@ fn diagnostic_repo_ids<'a>(repo_ids: impl Iterator<Item = &'a str>) -> String {
 }
 
 fn diagnostic_repo_id(repo_id: &str) -> String {
-    let escaped = repo_id
-        .chars()
-        .flat_map(char::escape_default)
-        .collect::<String>();
-    format!(r#""{escaped}""#)
+    format!(r#""{}""#, repo_id.escape_default())
 }
 
 /// One repo's operator assertions and its per-seed arm run dirs.
