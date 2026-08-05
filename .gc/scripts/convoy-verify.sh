@@ -12,6 +12,9 @@
 # deliberately distinct from both 1 and 2: collapsing it into NOT HEALTHY
 # manufactures the false failure premise this script exists to prevent, and
 # collapsing it into HEALTHY accepts absence of evidence as evidence.
+# HEALTHY is a claim about evidence already on record, never a promise that the
+# convoy's seat can take a turn now — see the false-live window bounded at leg B
+# in verify_health before gating anything on it.
 # The script never mutates beads, sessions, or git state.
 
 set -uo pipefail
@@ -182,6 +185,34 @@ verify_health() {
     # samples across two observers found zero occurrences of any fixed word.
     # What is stable is the turn-in-flight decoration — an elapsed timer, the
     # interrupt hint, or a live token counter — alongside the status bar.
+    #
+    # FALSE-LIVE WINDOW — the floor of this test, bounded here rather than
+    # removed. The decoration is scraped from a pane, and a pane is not
+    # invalidated when its seat stops taking turns: the scrollback holds the
+    # last turn's decoration until something repaints over it. Nothing below
+    # separates that frozen text from a turn happening now. Polling three
+    # times does not close the gap — the first matching poll returns, and the
+    # elapsed timer is never compared across polls, so a decoration that is
+    # byte-identical every 5s passes exactly like one that is advancing.
+    #
+    # The wall grep above narrows the window but cannot close it, because it
+    # is a substring whitelist and an unlisted terminator leaves a walled seat
+    # looking live. "You've reached your Fable 5 limit. Run /usage-credits to
+    # continue" is a real observed terminator (aoa-0ltiu, mayor gc-527414)
+    # that matches none of those patterns, on a seat that wrote to its pane on
+    # every retry. The failure mode most worth catching is the one that best
+    # imitates work in flight.
+    #
+    # So, from a HEALTHY verdict, a caller MAY conclude: every closed step of
+    # this convoy carries passing outcome evidence, and this seat's pane showed
+    # a turn in flight at some point inside the scrollback window.
+    # A caller MAY NOT conclude that the seat can take a model turn now.
+    # HEALTHY is evidence about the past and must not gate anything that
+    # assumes forward progress; that needs evidence of a COMPLETED turn — a new
+    # closure stamp, a bead transition — which only leg A reads, also about the
+    # past. There is no present-tense liveness signal available at this
+    # interface: the registry is blind to the provider wall, and every other
+    # pane tell is the randomized spinner verb.
     if grep -Eq "esc to interrupt|[0-9]+s ·|[0-9.]+k tokens" <<<"$peek_output" &&
       grep -Eq "ctx: [0-9]+%|esc to interrupt" <<<"$peek_output"; then
       verdict 0 "HEALTHY $root: passing bead evidence and work in flight on seat $active_assignee"

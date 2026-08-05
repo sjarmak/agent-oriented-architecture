@@ -279,6 +279,17 @@ JSON
 cat >"$fixtures/pane-walled.json" <<'JSON'
 {"ok":true,"line_count":3,"output":"You've hit your usage limit. Try again at Aug 8th, 2026 12:03 AM.\n  agent-oriented-architecture:main  |  Opus 5  |  ctx: 9% / 1M\n"}
 JSON
+# The false-live window, made executable. The wall grep is a substring
+# whitelist, and this terminator is a real one it does not list (aoa-0ltiu,
+# mayor gc-527414). Carrying it alongside turn-in-flight decoration — which is
+# what a stalled seat's un-repainted scrollback still shows — the pane is
+# indistinguishable from pane-live.json to leg B. Asserting the HEALTHY it
+# currently returns pins the documented bound: a passing run of this case is
+# the floor being acknowledged, not endorsed, and a change that narrows the
+# window must come here and say so.
+cat >"$fixtures/pane-stale-walled.json" <<'JSON'
+{"ok":true,"line_count":4,"output":"✦ Billowing… (2m 27s · ↓ 7.8k tokens)\nYou've reached your Fable 5 limit. Run /usage-credits to continue or switch models with /model.\n  agent-oriented-architecture:main  |  Opus 5  |  ctx: 9% / 1M\n"}
+JSON
 
 # steps <root> <closed-step-json> ... : builds a bd list fixture with one
 # in_progress step assigned to the stubbed seat.
@@ -310,6 +321,8 @@ assert "health: disposition-only closure with a live pane is HEALTHY" 0 "HEALTHY
 
 assert "health: quota-walled seat is NOT HEALTHY" 1 "provider wall" -- \
   health_run "$fixtures/pane-walled.json"
+assert "health: unlisted wall terminator under live decoration reads HEALTHY (false-live window, aoa-0ltiu)" 0 "HEALTHY root-1" -- \
+  health_run "$fixtures/pane-stale-walled.json"
 assert "health: empty pane is UNKNOWN, not NOT HEALTHY" 3 "UNKNOWN root-1" -- \
   health_run "$fixtures/pane-empty.json"
 assert "health: rendered but idle pane is UNKNOWN" 3 "UNKNOWN root-1" -- \
