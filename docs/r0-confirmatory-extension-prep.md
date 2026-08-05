@@ -34,6 +34,14 @@ sqlparse and 15:55:40-16:00:51 EDT for websockets. Repository-local
 existing admission rule both repositories remain `exposed`; this correction
 does not rule that instrument-void trials may be treated as unexposed.
 
+The producing codeprobe commit is not recoverable for these arms: the
+artifacts record neither a package version nor a Git identity. The AOA-side
+[codeprobe execution-basis record](r0-codeprobe-execution-provenance.md)
+records each arm's outcome window, the contemporaneous `main` observation, the
+deliberate `d799a98`/`53da421` scoring amendment, and the mandatory full-SHA
+precondition for any rerun. No rerun may follow a moving branch or infer a pin
+from these timestamps.
+
 ## Authorized amendment (2026-08-04)
 
 HTTPie is excluded from the confirmatory reserve because the held-out

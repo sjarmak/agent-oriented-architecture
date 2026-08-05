@@ -118,6 +118,22 @@ a re-mined task cannot regain held-out status merely by receiving a new ID.
 
 ## Step 1 — stand up the codeprobe experiment (≥2 arms, same tasks)
 
+### Pin the execution basis before any run
+
+Record the full 40-hex codeprobe commit that will execute the campaign before
+running a dry run, seed, or agent. Verify that the executing checkout is clean
+and exactly at that commit, and use the same pin for every repository, seed,
+and arm. A branch name, tag, package version, checkout path, or "current main"
+is not an execution-basis pin. Any basis change is a dated campaign amendment
+made before the affected trial starts.
+
+The preserved campaign predates this requirement and its producing commits
+cannot be recovered from its artifacts. See the
+[R0 codeprobe execution-basis provenance](r0-codeprobe-execution-provenance.md)
+for the per-arm finding and the deliberate `d799a98`/`53da421` scoring
+amendment. A rerun that also includes the later `9e38d21` timeout change must
+name that choice explicitly; it must not silently follow codeprobe `main`.
+
 ```bash
 cd /home/ds/projects/codeprobe
 codeprobe experiment init runs --name r0   # creates runs/r0/experiment.json
