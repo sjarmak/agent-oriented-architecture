@@ -919,9 +919,6 @@ fn read_spans(log: &Path) -> Result<Vec<Span>> {
 /// including that it acquires the lock boundedly, without waiting a full
 /// [`LOCK_TIMEOUT`].
 fn read_spans_within(log: &Path, lock_timeout: Duration) -> Result<Vec<Span>> {
-    if let Some(traces_dir) = log.parent() {
-        aoa_audit::reject_symlinked_trace_dir(traces_dir)?;
-    }
     let mut file = match open_log(log, LogAccess::Read) {
         Ok(file) => file,
         Err(err) if is_not_found(&err) => return Ok(Vec::new()),
@@ -1007,7 +1004,6 @@ fn append_span_within(
     build: impl FnOnce(u64) -> Span,
 ) -> Result<()> {
     if let Some(parent) = log.parent() {
-        aoa_audit::reject_symlinked_trace_dir(parent)?;
         create_traces_dir(parent)?;
     }
     // Bound to a named local, never a temporary: dropping the `File` closes the
@@ -2333,7 +2329,9 @@ mod tests {
     fn a_planted_symlink_is_refused_and_the_victim_is_untouched() {
         let dir = tempfile::tempdir().unwrap();
         let victim = dir.path().join("victim.txt");
-        std::fs::write(&victim, "original\n").unwrap();
+        // Keep the victim valid as an empty log so a naive open reaches the
+        // append; malformed content would make the read path fail first.
+        std::fs::write(&victim, "").unwrap();
 
         let log = dir.path().join(".aoa/traces/live-unknown.jsonl");
         std::fs::create_dir_all(log.parent().unwrap()).unwrap();
@@ -2346,7 +2344,7 @@ mod tests {
         );
         assert_eq!(
             std::fs::read_to_string(&victim).unwrap(),
-            "original\n",
+            "",
             "the span must not have been appended through the symlink"
         );
         read_spans(&log).unwrap_err();
