@@ -276,8 +276,8 @@ fn load_exposure_evidence(
             )
         })?;
         let subject = parse_subject(&raw, repo_id, &corpus.baseline_commit, &instruction_path)?;
-        spent.insert(subject.clone());
         if corpus.subjects.contains(&subject) {
+            spent.insert(subject);
             record_trial_provenance(&trial_dir, repo_id, &mut provenance)?;
         }
     }
