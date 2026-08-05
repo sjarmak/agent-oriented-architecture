@@ -124,12 +124,11 @@ fn load_corpora(files: &[PathBuf]) -> Result<BTreeMap<String, Corpus>, BenchErro
             return Err(BenchError::MissingExposurePrep(mine_path.clone()));
         }
     }
-    let prep_paths: Vec<_> = files
+    let mut corpora = BTreeMap::new();
+    for prep_path in files
         .iter()
         .filter(|path| path.file_name().is_some_and(|name| name == PREP_FILE))
-        .collect();
-    let mut corpora = BTreeMap::new();
-    for prep_path in prep_paths {
+    {
         let dir = prep_path.parent().expect("a file always has a parent");
         let mine_path = dir.join(MINE_FILE);
         if !is_regular_file(&mine_path) {
