@@ -27,6 +27,29 @@ pub fn scan(args: &ExposureScanArgs) -> Result<i32> {
                 repo.exposed_subject_count(),
                 repo.total_subjects,
             );
+            if let Some(provenance) = &repo.provenance {
+                for path in &provenance.causing_run_paths {
+                    let _ = writeln!(out, "    run: {}", path.display());
+                }
+                let _ = writeln!(
+                    out,
+                    "    mtime (unix ms): {}..={}",
+                    provenance.mtime_range.earliest_unix_ms, provenance.mtime_range.latest_unix_ms,
+                );
+                let scores = provenance
+                    .score_distribution
+                    .iter()
+                    .map(|(score, count)| format!("{score}={count}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let _ = writeln!(
+                    out,
+                    "    trials: {}; scores: {}; unscored={}",
+                    provenance.trial_count,
+                    if scores.is_empty() { "none" } else { &scores },
+                    provenance.unscored_trials,
+                );
+            }
         }
         print_human(&out);
     }

@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use aoa_gap::{ExposureStatus, SubjectKey};
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,33 @@ pub struct RepoExposure {
     pub total_subjects: usize,
     /// Exposure derived from all persisted trial artifacts.
     pub status: ExposureStatus,
+    /// Artifact provenance for admitted subjects that contributed to `status`.
+    /// Absence is meaningful: an unexposed repository has no causing run.
+    pub provenance: Option<ExposureProvenance>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Persisted trial evidence that caused a repository's exposure verdict.
+pub struct ExposureProvenance {
+    /// Run roots containing the admitted subjects' persisted trial artifacts.
+    pub causing_run_paths: BTreeSet<PathBuf>,
+    /// Earliest and latest modification times across qualifying evidence files.
+    pub mtime_range: ExposureMtimeRange,
+    /// Number of distinct trial directories contributing to the verdict.
+    pub trial_count: usize,
+    /// Top-level `scoring.json` score values and their occurrence counts.
+    pub score_distribution: BTreeMap<String, usize>,
+    /// Trials with exposure evidence but no numeric top-level score.
+    pub unscored_trials: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Evidence-file modification interval expressed without timezone ambiguity.
+pub struct ExposureMtimeRange {
+    pub earliest_unix_ms: u64,
+    pub latest_unix_ms: u64,
 }
 
 impl RepoExposure {
@@ -64,6 +92,26 @@ struct Corpus {
     subjects: BTreeSet<SubjectKey>,
 }
 
+#[derive(Default)]
+struct ProvenanceAccumulator {
+    causing_run_paths: BTreeSet<PathBuf>,
+    earliest_unix_ms: Option<u64>,
+    latest_unix_ms: Option<u64>,
+    trial_count: usize,
+    score_distribution: BTreeMap<String, usize>,
+    unscored_trials: usize,
+}
+
+struct ExposureEvidence {
+    spent_subjects: BTreeSet<SubjectKey>,
+    provenance_by_repo: BTreeMap<String, ExposureProvenance>,
+}
+
+#[derive(Deserialize)]
+struct ExposureScoring {
+    score: Option<serde_json::Number>,
+}
+
 /// Scan every codeprobe trial under `runs_root`, including quarantine trees,
 /// and compare the spent subjects with each campaign repo's admitted corpus.
 pub fn scan_exposure(runs_root: &Path) -> Result<ExposureScan, BenchError> {
@@ -72,9 +120,9 @@ pub fn scan_exposure(runs_root: &Path) -> Result<ExposureScan, BenchError> {
     if corpora.is_empty() {
         return Err(BenchError::NoExposureCorpora(runs_root.to_path_buf()));
     }
-    let spent = load_spent_subjects(&files, &corpora)?;
+    let evidence = load_exposure_evidence(&files, &corpora)?;
     Ok(ExposureScan {
-        repos: classify(corpora, &spent),
+        repos: classify(corpora, &evidence),
     })
 }
 
@@ -199,16 +247,17 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, BenchError>
     })
 }
 
-fn load_spent_subjects(
+fn load_exposure_evidence(
     files: &[PathBuf],
     corpora: &BTreeMap<String, Corpus>,
-) -> Result<BTreeSet<SubjectKey>, BenchError> {
+) -> Result<ExposureEvidence, BenchError> {
     let trial_dirs: BTreeSet<_> = files
         .iter()
         .filter(|path| is_evidence_file(path))
         .filter_map(|path| path.parent().map(Path::to_path_buf))
         .collect();
     let mut spent = BTreeSet::new();
+    let mut provenance = BTreeMap::<String, ProvenanceAccumulator>::new();
     for trial_dir in trial_dirs {
         let instruction_path = trial_dir.join(RESOLVED_INSTRUCTION);
         if !is_regular_file(&instruction_path) {
@@ -226,27 +275,38 @@ fn load_spent_subjects(
                 format!("repository {repo_id:?} has no prep.json + mine.json corpus"),
             )
         })?;
-        spent.insert(parse_subject(
-            &raw,
-            repo_id,
-            &corpus.baseline_commit,
-            &instruction_path,
-        )?);
+        let subject = parse_subject(&raw, repo_id, &corpus.baseline_commit, &instruction_path)?;
+        if corpus.subjects.contains(&subject) {
+            spent.insert(subject);
+            record_trial_provenance(&trial_dir, repo_id, &mut provenance)?;
+        }
     }
-    Ok(spent)
+    let provenance_by_repo = provenance
+        .into_iter()
+        .map(|(repo_id, accumulator)| Ok((repo_id, accumulator.finish()?)))
+        .collect::<Result<_, BenchError>>()?;
+    Ok(ExposureEvidence {
+        spent_subjects: spent,
+        provenance_by_repo,
+    })
 }
 
-fn classify(corpora: BTreeMap<String, Corpus>, spent: &BTreeSet<SubjectKey>) -> Vec<RepoExposure> {
+fn classify(corpora: BTreeMap<String, Corpus>, evidence: &ExposureEvidence) -> Vec<RepoExposure> {
     corpora
         .into_values()
         .map(|corpus| {
-            let exposed: BTreeSet<_> = corpus.subjects.intersection(spent).cloned().collect();
+            let exposed: BTreeSet<_> = corpus
+                .subjects
+                .intersection(&evidence.spent_subjects)
+                .cloned()
+                .collect();
             let status = match exposed.len() {
                 0 => ExposureStatus::Unexposed,
                 n if n == corpus.subjects.len() => ExposureStatus::Exposed,
                 _ => ExposureStatus::PartiallyExposed { subjects: exposed },
             };
             RepoExposure {
+                provenance: evidence.provenance_by_repo.get(&corpus.repo_id).cloned(),
                 repo_id: corpus.repo_id,
                 baseline_commit: corpus.baseline_commit,
                 total_subjects: corpus.subjects.len(),
@@ -254,6 +314,87 @@ fn classify(corpora: BTreeMap<String, Corpus>, spent: &BTreeSet<SubjectKey>) -> 
             }
         })
         .collect()
+}
+
+fn record_trial_provenance(
+    trial_dir: &Path,
+    repo_id: &str,
+    provenance: &mut BTreeMap<String, ProvenanceAccumulator>,
+) -> Result<(), BenchError> {
+    let evidence_paths: Vec<_> = ["scoring.json", "agent_output.txt"]
+        .into_iter()
+        .map(|name| trial_dir.join(name))
+        .filter(|path| is_regular_file(path))
+        .collect();
+    let mtimes = evidence_paths
+        .iter()
+        .map(|path| modified_unix_ms(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    let score = read_exposure_score(&trial_dir.join("scoring.json"))?;
+    let run_path = trial_dir
+        .parent()
+        .expect("a discovered trial directory always has a parent")
+        .to_path_buf();
+    provenance
+        .entry(repo_id.to_string())
+        .or_default()
+        .record(run_path, &mtimes, score);
+    Ok(())
+}
+
+fn modified_unix_ms(path: &Path) -> Result<u64, BenchError> {
+    let modified = std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .map_err(|source| BenchError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let duration = modified
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| BenchError::ExposureMtimeBeforeEpoch(path.to_path_buf()))?;
+    u64::try_from(duration.as_millis())
+        .map_err(|_| BenchError::ExposureMtimeOverflow(path.to_path_buf()))
+}
+
+fn read_exposure_score(path: &Path) -> Result<Option<String>, BenchError> {
+    if !is_regular_file(path) {
+        return Ok(None);
+    }
+    let scoring: ExposureScoring = read_json(path)?;
+    Ok(scoring.score.map(|score| score.to_string()))
+}
+
+impl ProvenanceAccumulator {
+    fn record(&mut self, run_path: PathBuf, mtimes: &[u64], score: Option<String>) {
+        self.causing_run_paths.insert(run_path);
+        self.earliest_unix_ms = mtimes.iter().copied().chain(self.earliest_unix_ms).min();
+        self.latest_unix_ms = mtimes.iter().copied().chain(self.latest_unix_ms).max();
+        self.trial_count += 1;
+        if let Some(score) = score {
+            *self.score_distribution.entry(score).or_default() += 1;
+        } else {
+            self.unscored_trials += 1;
+        }
+    }
+
+    fn finish(self) -> Result<ExposureProvenance, BenchError> {
+        let earliest_unix_ms = self
+            .earliest_unix_ms
+            .ok_or(BenchError::EmptyExposureProvenance)?;
+        let latest_unix_ms = self
+            .latest_unix_ms
+            .ok_or(BenchError::EmptyExposureProvenance)?;
+        Ok(ExposureProvenance {
+            causing_run_paths: self.causing_run_paths,
+            mtime_range: ExposureMtimeRange {
+                earliest_unix_ms,
+                latest_unix_ms,
+            },
+            trial_count: self.trial_count,
+            score_distribution: self.score_distribution,
+            unscored_trials: self.unscored_trials,
+        })
+    }
 }
 
 fn parse_subject(
