@@ -39,12 +39,6 @@ pub struct Manifest {
 
 impl Manifest {
     pub(crate) fn validate_repo_inventory(&self) -> anyhow::Result<()> {
-        for repo_id in &self.expected_repo_ids {
-            validate_repo_id(repo_id, "expected_repo_ids")?;
-        }
-        for repo in &self.repos {
-            validate_repo_id(&repo.repo_id, "repos")?;
-        }
         if let Some(repo_id) = first_duplicate(self.expected_repo_ids.iter().map(String::as_str)) {
             bail!(
                 "manifest expected_repo_ids contains duplicate repo id: {}",
@@ -74,23 +68,6 @@ impl Manifest {
         }
         Ok(())
     }
-}
-
-fn validate_repo_id(repo_id: &str, field: &str) -> anyhow::Result<()> {
-    let characters_are_safe = repo_id.chars().all(|character| {
-        character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-' | '/')
-    });
-    let segments_are_safe = !repo_id.is_empty()
-        && repo_id
-            .split('/')
-            .all(|segment| !segment.is_empty() && segment != "." && segment != "..");
-    if !characters_are_safe || !segments_are_safe {
-        bail!(
-            "manifest {field} contains invalid repo id {}: expected slash-separated ASCII letters, digits, '.', '_', or '-' with no empty, '.' or '..' segments",
-            diagnostic_repo_id(repo_id)
-        );
-    }
-    Ok(())
 }
 
 fn first_duplicate<'a>(values: impl Iterator<Item = &'a str>) -> Option<&'a str> {
@@ -247,14 +224,15 @@ mod tests {
     }
 
     #[test]
-    fn repo_inventory_rejects_empty_and_display_unsafe_ids_before_comparison() {
-        let empty = manifest_with_inventory("\"\"", &repo("actual"));
-        assert!(empty
-            .validate_repo_inventory()
-            .unwrap_err()
-            .to_string()
-            .contains(r#"invalid repo id """#));
+    fn repo_inventory_accepts_existing_free_text_repo_ids() {
+        let repo_id = "team name/../répo";
+        let manifest = manifest_with_inventory(&format!(r#""{repo_id}""#), &repo(repo_id));
 
+        manifest.validate_repo_inventory().unwrap();
+    }
+
+    #[test]
+    fn repo_inventory_escapes_display_unsafe_ids_in_diagnostics() {
         let bidi = manifest_with_inventory(r#""safe\u202egpj.exe""#, &repo("actual"));
         let error = bidi.validate_repo_inventory().unwrap_err().to_string();
         assert!(
