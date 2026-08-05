@@ -71,6 +71,8 @@ impl Manifest {
 
     /// Require the seed-1-only manifest used by the pair-yield budget preflight.
     pub fn validate_pair_yield_preflight(&self) -> crate::Result<()> {
+        self.validate_repo_inventory()
+            .map_err(crate::FalsifyBuildError::from_anyhow)?;
         let invalid_repo = self.repos.iter().find(|repo| repo.runs.len() != 1);
         if self.k_runs == 1 && invalid_repo.is_none() {
             return Ok(());
