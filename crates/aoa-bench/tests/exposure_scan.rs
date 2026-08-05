@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -85,6 +86,49 @@ fn renamed_trials_rediscover_exactly_seven_of_fourteen_subjects() {
         repo.status,
         ExposureStatus::PartiallyExposed { .. }
     ));
+}
+
+#[test]
+fn real_r0_campaign_matches_documented_httpie_exposure() {
+    const RUNS_ROOT: &str = "/home/ds/projects/codeprobe/runs/r0-campaign";
+    const HTTPIE_BASELINE: &str = "5b604c37c6c67e18e7c3e9aee6c88a8c22b98345";
+
+    let scan = scan_exposure(Path::new(RUNS_ROOT)).unwrap();
+    let repo = scan
+        .repos
+        .iter()
+        .find(|repo| repo.repo_id == "httpie")
+        .unwrap();
+
+    assert_eq!(repo.baseline_commit, HTTPIE_BASELINE);
+    assert_eq!(repo.total_subjects, 14);
+    let ExposureStatus::PartiallyExposed { subjects } = &repo.status else {
+        panic!(
+            "expected HTTPie to be partially exposed, got {:?}",
+            repo.status
+        );
+    };
+    let expected: BTreeSet<_> = [
+        ("dependency_analysis", "httpie.__main__.main"),
+        ("dependency_analysis", "httpie.cli.nested_json.parse.parse"),
+        ("dependency_analysis", "httpie.compat.func"),
+        ("dependency_analysis", "httpie.core.program"),
+        ("dependency_analysis", "httpie.manager.core.program"),
+        ("import_chain", "httpie.cookies"),
+        ("import_chain", "httpie.compat"),
+    ]
+    .into_iter()
+    .map(
+        |(question_family, oracle_target_symbol)| aoa_gap::SubjectKey {
+            repo_id: "httpie".to_string(),
+            baseline_commit: HTTPIE_BASELINE.to_string(),
+            oracle_target_symbol: oracle_target_symbol.to_string(),
+            question_family: question_family.to_string(),
+        },
+    )
+    .collect();
+
+    assert_eq!(subjects, &expected);
 }
 
 #[test]
