@@ -200,8 +200,7 @@ verify_health() {
     # looking live. "You've reached your Fable 5 limit. Run /usage-credits to
     # continue" is a real observed terminator (aoa-0ltiu, mayor gc-527414)
     # that matches none of those patterns, on a seat that wrote to its pane on
-    # every retry. The failure mode most worth catching is the one that best
-    # imitates work in flight.
+    # every retry.
     #
     # So, from a HEALTHY verdict, a caller MAY conclude: every closed step of
     # this convoy carries passing outcome evidence, and this seat's pane showed
@@ -210,9 +209,7 @@ verify_health() {
     # HEALTHY is evidence about the past and must not gate anything that
     # assumes forward progress; that needs evidence of a COMPLETED turn — a new
     # closure stamp, a bead transition — which only leg A reads, also about the
-    # past. There is no present-tense liveness signal available at this
-    # interface: the registry is blind to the provider wall, and every other
-    # pane tell is the randomized spinner verb.
+    # past.
     if grep -Eq "esc to interrupt|[0-9]+s ·|[0-9.]+k tokens" <<<"$peek_output" &&
       grep -Eq "ctx: [0-9]+%|esc to interrupt" <<<"$peek_output"; then
       verdict 0 "HEALTHY $root: passing bead evidence and work in flight on seat $active_assignee"
