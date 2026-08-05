@@ -32,42 +32,18 @@ usage() {
   verdict 2 "ERROR usage: convoy-verify.sh {land <branch-or-commit> <base>|health <root-bead-id>|recovery <bead-id>}"
 }
 
-# Sets scratch_dir. Like patch_state this reports through a global rather than
-# stdout: called through a command substitution, the mktemp and its cleanup
-# trap would both belong to the subshell, which deletes the directory the
-# caller is about to write to.
-scratch_dir=
-scratch() {
-  [ -z "$scratch_dir" ] || return 0
-  scratch_dir=$(mktemp -d) || return 1
-  # shellcheck disable=SC2064  # expand now; verdict() exits from anywhere
-  trap "rm -rf '$scratch_dir'" EXIT
-}
-
-# Patch-equivalence, not SHA containment (aoa-el8m1). Sets patch_result to one
-# of "empty" (branch introduces no changes), "equal", or "differ"; on failure
-# returns non-zero and leaves an operator-readable reason in patch_error.
-# Both results come back through globals rather than stdout, because a command
-# substitution would run this in a subshell: the scratch-dir EXIT trap would
-# fire on the subshell and delete the path list mid-read, and patch_error would
-# never reach the caller.
-patch_error=
-patch_result=
-patch_state() {
-  local repo=$1 branch=$2 base=$3
+verify_land() {
+  [ "$#" -eq 2 ] || usage
+  local branch=$1 base=$2 list
   local -a paths
-  local list
 
-  patch_error=
-  git -C "$repo" rev-parse --verify --quiet "${branch}^{commit}" >/dev/null || {
-    patch_error="ref does not resolve: $branch"
-    return 1
-  }
-  git -C "$repo" rev-parse --verify --quiet "${base}^{commit}" >/dev/null || {
-    patch_error="base does not resolve: $base"
-    return 1
-  }
+  git rev-parse --verify --quiet "${branch}^{commit}" >/dev/null ||
+    verdict 2 "ERROR land: ref does not resolve: $branch"
+  git rev-parse --verify --quiet "${base}^{commit}" >/dev/null ||
+    verdict 2 "ERROR land: base does not resolve: $base"
 
+  # Patch-equivalence, not SHA containment (aoa-el8m1).
+  #
   # Paths must come from the whole base..branch range, not the tip commit: a
   # multi-commit branch whose earlier commits touch other files would otherwise
   # be compared on the tip's paths alone and blessed patch-equivalent. The
@@ -80,46 +56,23 @@ patch_state() {
   # substitution silently drops the NUL delimiters and collapses every path
   # into one. Either way the result is zero or one bogus path, a clean diff,
   # and a PASS — the exact false-pass shape this subcommand exists to catch.
-  if ! scratch; then
-    patch_error="cannot allocate scratch space"
-    return 1
-  fi
-  list=$scratch_dir/paths
-  if ! : >"$list"; then
-    patch_error="cannot allocate scratch space"
-    return 1
-  fi
-  git -C "$repo" diff --name-only -z "${base}...${branch}" >"$list" || {
-    patch_error="cannot diff $base...$branch (no merge base?)"
-    return 1
-  }
+  # The mktemp and its cleanup trap stay in this function for the same family
+  # of reason: created inside a command substitution, the trap would fire on
+  # the subshell and delete the file the caller is about to read.
+  list=$(mktemp) || verdict 2 "ERROR land: cannot allocate scratch space"
+  # shellcheck disable=SC2064  # expand $list now; verdict() exits from here
+  trap "rm -f '$list'" EXIT
+  git diff --name-only -z "${base}...${branch}" >"$list" ||
+    verdict 2 "ERROR land: cannot diff $base...$branch (no merge base?)"
   mapfile -d '' -t paths <"$list"
-  if [ "${#paths[@]}" -eq 0 ]; then
-    patch_result=empty
-    return 0
-  fi
+  [ "${#paths[@]}" -gt 0 ] ||
+    verdict 0 "PASS land: $branch introduces no changes relative to $base"
 
-  git -C "$repo" diff --quiet "$branch" "$base" -- "${paths[@]}"
+  git diff --quiet "$branch" "$base" -- "${paths[@]}"
   case $? in
-    0) patch_result=equal ;;
-    1) patch_result=differ ;;
-    *)
-      patch_error="cannot compare $branch to $base"
-      return 1
-      ;;
-  esac
-}
-
-verify_land() {
-  [ "$#" -eq 2 ] || usage
-  local branch=$1 base=$2
-
-  patch_state . "$branch" "$base" ||
-    verdict 2 "ERROR land: $patch_error"
-  case $patch_result in
-    empty) verdict 0 "PASS land: $branch introduces no changes relative to $base" ;;
-    equal) verdict 0 "PASS land: $branch is patch-equivalent to $base" ;;
-    *) verdict 1 "FAIL land: $branch differs from $base on its changed paths" ;;
+    0) verdict 0 "PASS land: $branch is patch-equivalent to $base" ;;
+    1) verdict 1 "FAIL land: $branch differs from $base on its changed paths" ;;
+    *) verdict 2 "ERROR land: cannot compare $branch to $base" ;;
   esac
 }
 
