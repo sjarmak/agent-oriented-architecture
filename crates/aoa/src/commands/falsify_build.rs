@@ -58,6 +58,9 @@ pub(crate) fn run(args: &ExperimentArgs) -> Result<i32> {
         }
     }
     let manifest: Manifest = load_json_capped(&args.manifest, "manifest")?;
+    if args.min_pair_yield.is_some() {
+        manifest.validate_pair_yield_preflight()?;
+    }
     let base_dir = args.manifest.parent().unwrap_or_else(|| Path::new("."));
     let (input, report, observations) = build(&manifest, &args.tasks, base_dir)?;
     let input_json = serde_json::to_string_pretty(&input)?;

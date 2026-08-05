@@ -344,9 +344,9 @@ convention set that is not structurally identical to the pre-registered one.
 
 ## Step 3 — build + gate
 
-Before paying for all `K=3` replications, build a manifest containing only the
-first seed for each repo and require a healthy fraction of candidate tasks to
-survive as measured identical pairs:
+Before paying for all `K=3` replications, build a manifest with `k_runs: 1` and
+only the first seed for each repo, then require a healthy fraction of candidate
+tasks to survive as measured identical pairs:
 
 ```bash
 aoa eval experiment \

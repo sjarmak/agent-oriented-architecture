@@ -170,6 +170,43 @@ fn experiment_answer_shape_computes_real_convention_inputs() {
     );
 }
 
+fn write_seed_one_manifest(dir: &Path) -> PathBuf {
+    let fixture_dir = fixture("experiment_answer");
+    let fixture_path = |relative: &str| fixture_dir.join(relative).display().to_string();
+    let manifest = serde_json::json!({
+        "k_runs": 1,
+        "min_holdout_size": 1,
+        "min_effect_size": 0.0,
+        "expected_repo_ids": ["sample/answers"],
+        "repos": [{
+            "repo_id": "sample/answers",
+            "repo_commit": {
+                "algorithm": "sha1",
+                "hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "confidence": "high",
+            "exposure": "unexposed",
+            "calibration_artifact": fixture_path("calibration.json"),
+            "repo_arm_config": fixture_path("repo-config.json"),
+            "harness_arm_config": fixture_path("harness-config.json"),
+            "task_shape": "answer",
+            "scip_index": fixture_path("../answer_scip_index.json"),
+            "runs": [{
+                "seed": 1,
+                "repo_arm": fixture_path("seed1/repo_arm"),
+                "harness_arm": fixture_path("seed1/harness_arm")
+            }]
+        }]
+    });
+    let preflight_manifest = dir.join("manifest.seed-1.json");
+    std::fs::write(
+        &preflight_manifest,
+        serde_json::to_vec_pretty(&manifest).expect("serialize manifest"),
+    )
+    .expect("write manifest");
+    preflight_manifest
+}
+
 #[test]
 fn experiment_pair_yield_preflight_stops_low_yield_before_full_campaign() {
     let dir = TempDir::new().expect("tempdir");
@@ -178,6 +215,22 @@ fn experiment_pair_yield_preflight_stops_low_yield_before_full_campaign() {
     aoa()
         .args(["eval", "experiment", "--manifest"])
         .arg(fixture("experiment_answer/manifest.json"))
+        .arg("--tasks")
+        .arg(fixture("answer_tasks"))
+        .arg("--out")
+        .arg(&input)
+        .args(["--min-pair-yield", "0.5"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "--min-pair-yield is a seed-1 preflight and requires exactly one run per repo",
+        ));
+
+    let preflight_manifest = write_seed_one_manifest(dir.path());
+
+    aoa()
+        .args(["eval", "experiment", "--manifest"])
+        .arg(&preflight_manifest)
         .arg("--tasks")
         .arg(fixture("answer_tasks"))
         .arg("--out")
@@ -200,7 +253,7 @@ fn experiment_pair_yield_preflight_stops_low_yield_before_full_campaign() {
 
     aoa()
         .args(["eval", "experiment", "--manifest"])
-        .arg(fixture("experiment_answer/manifest.json"))
+        .arg(&preflight_manifest)
         .arg("--tasks")
         .arg(fixture("answer_tasks"))
         .arg("--out")

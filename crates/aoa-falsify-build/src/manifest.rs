@@ -21,7 +21,7 @@ use aoa_metrics::Confidence;
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
-    /// Determinism replication count (>= 3); each repo must supply this many runs.
+    /// Runs required per repo: 1 for pair-yield preflight, >= 3 for a verdict.
     pub(crate) k_runs: u32,
     /// Power precondition: minimum per-repo held-out size.
     pub(crate) min_holdout_size: u32,
@@ -67,6 +67,30 @@ impl Manifest {
             );
         }
         Ok(())
+    }
+
+    /// Require the seed-1-only manifest used by the pair-yield budget preflight.
+    pub fn validate_pair_yield_preflight(&self) -> crate::Result<()> {
+        let invalid_repo = self.repos.iter().find(|repo| repo.runs.len() != 1);
+        if self.k_runs == 1 && invalid_repo.is_none() {
+            return Ok(());
+        }
+
+        let detail = invalid_repo.map_or_else(
+            || format!("manifest declares k_runs={}", self.k_runs),
+            |repo| {
+                format!(
+                    "repo {} supplies {} runs and manifest declares k_runs={}",
+                    repo.repo_id,
+                    repo.runs.len(),
+                    self.k_runs
+                )
+            },
+        );
+        Err(crate::FalsifyBuildError::from_anyhow(anyhow::anyhow!(
+            "--min-pair-yield is a seed-1 preflight and requires exactly one run per repo with \
+             k_runs=1; {detail}. Use the seed-1 manifest from docs/r0_runbook.md Step 3"
+        )))
     }
 }
 
@@ -177,6 +201,14 @@ mod tests {
         .unwrap()
     }
 
+    fn manifest_with_runs(k_runs: u32, runs: &str) -> Manifest {
+        serde_json::from_str(&format!(
+            r#"{{"k_runs":{k_runs},"min_holdout_size":1,"expected_repo_ids":["r"],"repos":[{REPO_PREFIX}
+            "runs":{runs}}}]}}"#
+        ))
+        .unwrap()
+    }
+
     fn repo(repo_id: &str) -> String {
         format!(r#"{REPO_PREFIX}"runs":[]}}"#)
             .replace(r#""repo_id":"r""#, &format!(r#""repo_id":"{repo_id}""#))
@@ -247,6 +279,26 @@ mod tests {
             error.contains(r#""legit], unexpected [forged""#),
             "delimiter-shaped ID must remain quoted: {error}"
         );
+    }
+
+    #[test]
+    fn pair_yield_preflight_requires_one_declared_and_supplied_run() {
+        let one_run = r#"[{"seed":1,"repo_arm":"a","harness_arm":"b"}]"#;
+        let two_runs = r#"[{"seed":1,"repo_arm":"a","harness_arm":"b"},
+            {"seed":2,"repo_arm":"c","harness_arm":"d"}]"#;
+
+        manifest_with_runs(1, one_run)
+            .validate_pair_yield_preflight()
+            .unwrap();
+        for manifest in [
+            manifest_with_runs(3, one_run),
+            manifest_with_runs(1, two_runs),
+        ] {
+            let error = manifest.validate_pair_yield_preflight().unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("requires exactly one run per repo"));
+        }
     }
 
     #[test]
