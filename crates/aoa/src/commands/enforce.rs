@@ -840,7 +840,6 @@ fn is_not_found(err: &anyhow::Error) -> bool {
 
 /// How the live log is opened. The two modes the hook needs; see [`open_log`]
 /// for why the choice is an enum rather than a caller-supplied builder.
-#[derive(Clone, Copy)]
 enum LogAccess {
     Read,
     AppendCreate,
@@ -960,8 +959,12 @@ mod unix_log {
         Ok((repo, aoa_dir, traces_dir, name))
     }
 
-    fn open_traces_dir(log: &Path, access: LogAccess) -> Result<OwnedFd> {
-        let (repo, aoa_dir, traces_dir, _) = log_parts(log)?;
+    fn open_traces_dir(
+        repo: &Path,
+        aoa_dir: &Path,
+        traces_dir: &Path,
+        access: LogAccess,
+    ) -> Result<OwnedFd> {
         // The caller-selected repository is the trust root. Every component
         // below it is acquired relative to a stable descriptor.
         let repo_fd = fs::open(repo, OFlags::RDONLY | OFlags::DIRECTORY, Mode::empty())
@@ -981,13 +984,13 @@ mod unix_log {
     }
 
     pub(super) fn open(log: &Path, access: LogAccess) -> Result<File> {
-        let (_, _, _, name) = log_parts(log)?;
-        let traces_fd = open_traces_dir(log, access)?;
         let flags = match access {
             LogAccess::Read => OFlags::RDONLY,
             LogAccess::AppendCreate => OFlags::RDWR | OFlags::CREATE | OFlags::APPEND,
         } | OFlags::NOFOLLOW
             | OFlags::NONBLOCK;
+        let (repo, aoa_dir, traces_dir, name) = log_parts(log)?;
+        let traces_fd = open_traces_dir(repo, aoa_dir, traces_dir, access)?;
         let fd = fs::openat(&traces_fd, name, flags, FILE_MODE)
             .map_err(|source| map_nofollow_error(&traces_fd, name, log, source))?;
         let file = File::from(fd);
