@@ -1,9 +1,38 @@
 # R0 confirmatory extension: authorized two-repository amendment
 
-Originally prepared on 2026-08-04 for `aoa-h4q5`. The preparation chain
-performed only offline planning: it ran no agent trial and inspected no trial
-outcome. Stephanie authorized the amendment below on 2026-08-04 in response to
-escalation `gc-720157` (relayed as `gc-722425`).
+Originally prepared on 2026-08-04 for `aoa-h4q5`. At the time this record was
+prepared, that preparation chain had performed only offline planning: it had
+run no agent trial and inspected no trial outcome. Stephanie authorized the
+amendment below on 2026-08-04 in response to escalation `gc-720157` (relayed as
+`gc-722425`). The dated correction below records the live run that followed.
+
+## Post-preparation exposure correction (2026-08-05)
+
+On 2026-08-04, a confirmatory run subsequently launched against sqlparse and
+websockets and was halted. Its preserved residue contains 80 trials: 56 for
+sqlparse and 24 for websockets. Every `scoring.json` records a top-level score
+of `0.0`. The run therefore exposed all 16 admitted sqlparse subjects and all
+12 admitted websockets subjects, even though it produced no valid outcome
+signal.
+
+The zero-score distribution came from the container `TASK_REPO_ROOT` scoping
+fault tracked as `aoa-oer4`: the repository root was not propagated and staged
+for the direct scoring channel. The Codeprobe corrections are `d799a98` and
+`53da421`; AOA recorded the workflow fix in `0379e08`. The residue remains in
+place under:
+
+- `sqlparse/seed1/expA/.codeprobe/runs/harness_swap`
+- `sqlparse/seed1/expB/.codeprobe/runs/aoa_migrated`
+- `sqlparse/seed2/expA/.codeprobe/runs/harness_swap`
+- `sqlparse/seed2/expB/.codeprobe/runs/aoa_migrated`
+- `websockets/seed1/expA/.codeprobe/runs/harness_swap`
+- `websockets/seed1/expB/.codeprobe/runs/aoa_migrated`
+
+The outcome-artifact mtime ranges are 2026-08-04 15:37:41-16:17:58 EDT for
+sqlparse and 15:55:40-16:00:51 EDT for websockets. Repository-local
+`PROVENANCE.md` files record the exact timestamps and inventory. Under the
+existing admission rule both repositories remain `exposed`; this correction
+does not rule that instrument-void trials may be treated as unexposed.
 
 ## Authorized amendment (2026-08-04)
 
@@ -64,8 +93,9 @@ with two arms and `K=3`. Models, conventions, `min_holdout=7`,
 Preparation used the existing scripts under
 `/home/ds/projects/codeprobe/runs/r0-campaign/bin/`. Migration was completed
 before the current corpus was mined and used mechanical source-only
-transforms. For sqlparse and websockets, which have no pre-existing trial
-outcomes, that ordering preserved operator blindness to the held-out tasks.
+transforms. That ordering preserved operator blindness when this preparation
+was written, but the subsequent halted run described in the 2026-08-05
+correction exposed every admitted sqlparse and websockets subject.
 For HTTPie, the migrated diff contains no answer-derived change, but operator
 blindness is unverified because seven equivalent July task outcomes predated
 the migration and no timestamped access or operator-session audit log exists.
@@ -129,8 +159,10 @@ transcription error, not as authorization to retune the preregistered rate.
 
 ## Integrity boundary
 
-The five completed repositories and their campaign evidence were not touched.
-The protected file remains:
+The original preparation did not touch the five completed repositories or their
+campaign evidence. The later halted confirmatory run wrote the sqlparse and
+websockets residue enumerated in the 2026-08-05 correction. It did not modify
+the protected file, which remains:
 
 ```text
 /home/ds/projects/codeprobe/runs/r0-file-read-seed1/out/falsification.k3.json
@@ -138,9 +170,10 @@ SHA-256 8c5471a321c5e0cb9fbc570969eaaa1df60f5e1c0d44fe1cb17f66bc37992c1b
 ```
 
 The shorter hash recorded in `aoa-6anq` omits the final hexadecimal digit;
-the full digest above is the value verified on disk. This preparation did not
-execute a seed, run a live agent, build the eight-repository arm assignments,
-or change a convention.
+the full digest above is the value verified on disk. The original preparation
+did not execute a seed, run a live agent, build the eight-repository arm
+assignments, or change a convention. Those historical claims apply only to the
+preparation chain and not to the subsequent halted run.
 
 ## Pre-existing HTTPie run evidence
 

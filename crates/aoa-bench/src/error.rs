@@ -197,4 +197,16 @@ pub enum BenchError {
     /// An empty admitted set has no held-out supply to classify.
     #[error("campaign corpus for repository {repo_id:?} has no admitted tasks")]
     EmptyExposureCorpus { repo_id: String },
+
+    /// Filesystem mtimes must serialize as unambiguous Unix timestamps.
+    #[error("exposure evidence {} has a modification time before the Unix epoch", raw_path(.0))]
+    ExposureMtimeBeforeEpoch(PathBuf),
+
+    /// A platform timestamp exceeded the report wire type.
+    #[error("exposure evidence {} has a modification time too large to report", raw_path(.0))]
+    ExposureMtimeOverflow(PathBuf),
+
+    /// Internal invariant: a recorded exposure trial always has an evidence mtime.
+    #[error("cannot report exposure provenance without evidence-file modification times")]
+    EmptyExposureProvenance,
 }

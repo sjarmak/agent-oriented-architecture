@@ -86,10 +86,41 @@ fn renamed_trials_rediscover_exactly_seven_of_fourteen_subjects() {
         repo.status,
         ExposureStatus::PartiallyExposed { .. }
     ));
+    let provenance = repo.provenance.as_ref().unwrap();
+    assert_eq!(provenance.trial_count, 7);
+    assert_eq!(provenance.unscored_trials, 7);
 }
 
 #[test]
-fn real_r0_campaign_matches_documented_httpie_exposure() {
+fn void_scored_trials_remain_exposed_and_report_their_provenance() {
+    let (_temp, runs) = campaign_fixture(2, 2);
+    for index in 0..2 {
+        write(
+            &runs.join(format!("quarantine/old-{index}/scoring.json")),
+            r#"{"score":0.0}"#,
+        );
+    }
+
+    let scan = scan_exposure(&runs).unwrap();
+    let repo = &scan.repos[0];
+
+    assert_eq!(repo.status, ExposureStatus::Exposed);
+    let provenance = repo
+        .provenance
+        .as_ref()
+        .expect("persisted exposure carries provenance");
+    assert_eq!(
+        provenance.causing_run_paths,
+        [runs.join("quarantine")].into_iter().collect()
+    );
+    assert_eq!(provenance.trial_count, 2);
+    assert!(provenance.mtime_range.earliest_unix_ms <= provenance.mtime_range.latest_unix_ms);
+    assert_eq!(provenance.score_distribution.get("0.0"), Some(&2));
+    assert_eq!(provenance.unscored_trials, 0);
+}
+
+#[test]
+fn real_r0_campaign_matches_documented_exposure_and_void_score_provenance() {
     const RUNS_ROOT: &str = "/home/ds/projects/codeprobe/runs/r0-campaign";
     const HTTPIE_BASELINE: &str = "5b604c37c6c67e18e7c3e9aee6c88a8c22b98345";
 
@@ -129,6 +160,25 @@ fn real_r0_campaign_matches_documented_httpie_exposure() {
     .collect();
 
     assert_eq!(subjects, &expected);
+
+    for (repo_id, expected_trials, expected_run_paths) in
+        [("sqlparse", 56, 4), ("websockets", 24, 2)]
+    {
+        let repo = scan
+            .repos
+            .iter()
+            .find(|repo| repo.repo_id == repo_id)
+            .unwrap();
+        assert_eq!(repo.status, ExposureStatus::Exposed);
+        let provenance = repo.provenance.as_ref().unwrap();
+        assert_eq!(provenance.trial_count, expected_trials);
+        assert_eq!(provenance.causing_run_paths.len(), expected_run_paths);
+        assert_eq!(
+            provenance.score_distribution.get("0.0"),
+            Some(&expected_trials)
+        );
+        assert_eq!(provenance.unscored_trials, 0);
+    }
 }
 
 #[test]
