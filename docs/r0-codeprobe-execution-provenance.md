@@ -23,6 +23,34 @@ SHA.
 
 ## Preserved five-repository campaign
 
+The campaign used three configurations per repository and seed: `baseline`,
+`aoa_migrated` (the repo arm below), and `harness_swap` (the harness arm
+below). The 15 completed baseline configurations contain 210 outcome artifacts.
+They are part of the execution-basis record even though the falsification
+comparison names only the two changed arms.
+
+### Baseline configurations
+
+| Repository | Seed | Configuration | Completion | Outcome window | Producing codeprobe SHA | Contemporaneous codeprobe `main` observation |
+| --- | ---: | --- | --- | --- | --- | --- |
+| requests | 1 | baseline | complete (14/14) | 2026-07-04 21:24:06–21:27:21 | unknown | `cc3a352663efff20771923dc21e064bd6229974a` |
+| requests | 2 | baseline | complete (14/14) | 2026-07-04 21:36:39–21:40:26 | unknown | `cc3a352663efff20771923dc21e064bd6229974a` |
+| requests | 3 | baseline | complete (14/14) | 2026-07-04 21:47:55–21:50:47 | unknown | `cc3a352663efff20771923dc21e064bd6229974a` |
+| isort | 1 | baseline | complete (14/14) | 2026-07-28 14:24:31–14:29:32 | unknown | `a5cee977639c2f33a5494429c35fe7334232f44d` |
+| isort | 2 | baseline | complete (14/14) | 2026-07-28 11:24:38–11:29:34 | unknown | `f86980147a910bb24eef8c2f942b2ca088337ce6` |
+| isort | 3 | baseline | complete (14/14) | 2026-07-28 14:41:56–14:47:27 | unknown | `f6e4162051f02c9c12b2ced8cb06364cb8c64d7d` |
+| marshmallow | 1 | baseline | complete (7/7) | 2026-07-28 17:13:58–17:16:15 | unknown | `f6e4162051f02c9c12b2ced8cb06364cb8c64d7d` |
+| marshmallow | 2 | baseline | complete (7/7) | 2026-07-28 17:25:16–17:34:20 | unknown | `f6e4162051f02c9c12b2ced8cb06364cb8c64d7d` |
+| marshmallow | 3 | baseline | complete (7/7) | 2026-07-28 18:42:44–18:44:16 | unknown | `f6e4162051f02c9c12b2ced8cb06364cb8c64d7d` |
+| rich | 1 | baseline | complete (19/19) | 2026-07-28 18:52:38–18:58:07 | unknown | `f6e4162051f02c9c12b2ced8cb06364cb8c64d7d` |
+| rich | 2 | baseline | complete (19/19) | 2026-07-28 19:13:46–19:18:34 | unknown | `f6e4162051f02c9c12b2ced8cb06364cb8c64d7d` |
+| rich | 3 | baseline | complete (19/19) | 2026-07-28 22:17:32–22:23:00 | unknown | `f6e4162051f02c9c12b2ced8cb06364cb8c64d7d` |
+| gunicorn | 1 | baseline | complete (16/16) | 2026-07-28 18:52:24–19:02:58 | unknown | `f6e4162051f02c9c12b2ced8cb06364cb8c64d7d` |
+| gunicorn | 2 | baseline | complete (16/16) | 2026-07-28 22:12:18–22:23:07 | unknown | `f6e4162051f02c9c12b2ced8cb06364cb8c64d7d` |
+| gunicorn | 3 | baseline | complete (16/16) | 2026-07-28 22:49:11–23:00:36 | unknown | `f6e4162051f02c9c12b2ced8cb06364cb8c64d7d` |
+
+### Changed arms
+
 | Repository | Seed | Arm | Outcome window | Producing codeprobe SHA | Contemporaneous codeprobe `main` observation |
 | --- | ---: | --- | --- | --- | --- |
 | requests | 1 | harness | 2026-07-04 21:27:49–21:32:48 | unknown | `cc3a352663efff20771923dc21e064bd6229974a` |
