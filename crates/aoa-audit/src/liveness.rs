@@ -70,14 +70,6 @@ pub enum EnforcementLiveness {
 }
 
 impl EnforcementLiveness {
-    /// Whether the plane is demonstrably running. `false` for both silence and
-    /// absence — a caller asking this question must not have to remember that
-    /// two of the three states are negative.
-    #[must_use]
-    pub fn is_enforcing(&self) -> bool {
-        matches!(self, EnforcementLiveness::Enforcing { .. })
-    }
-
     /// The silence reason, when the plane is installed and silent.
     #[must_use]
     pub fn silence(&self) -> Option<Silence> {
@@ -332,7 +324,6 @@ mod tests {
             enforcement_liveness(repo.path(), None),
             EnforcementLiveness::NotInstalled
         );
-        assert!(!enforcement_liveness(repo.path(), None).is_enforcing());
     }
 
     /// Only `live-<session>.jsonl` files are the enforcement lane. A whole-trace
@@ -401,7 +392,13 @@ mod tests {
         );
 
         let past = SystemTime::now() - Duration::from_secs(3_600);
-        assert!(enforcement_liveness(repo.path(), Some(past)).is_enforcing());
+        assert_eq!(
+            enforcement_liveness(repo.path(), Some(past)),
+            EnforcementLiveness::Enforcing {
+                live_logs: 1,
+                spans: 1
+            }
+        );
     }
 
     /// Records are summed across sessions: a repo with several live logs is one
@@ -455,6 +452,9 @@ mod tests {
     /// deserializes to. It must land on the conservative side: never enforcing.
     #[test]
     fn the_default_state_is_never_enforcing() {
-        assert!(!EnforcementLiveness::default().is_enforcing());
+        assert_eq!(
+            EnforcementLiveness::default(),
+            EnforcementLiveness::NotInstalled
+        );
     }
 }
