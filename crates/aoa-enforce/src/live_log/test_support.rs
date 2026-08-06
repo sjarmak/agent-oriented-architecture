@@ -9,18 +9,6 @@ use serde_json::{Map, Value};
 
 use aoa_trace::{Span, SpanSource, SpanType};
 
-/// A span of the given type and sequence, with the fields the lock tests
-/// never vary. They assert on ordering and on whether a write landed at
-/// all, so `source` and `attributes` are noise in every one of them.
-pub(super) fn span(span_type: SpanType, seq: u64) -> Span {
-    Span {
-        span_type,
-        source: SpanSource::Native,
-        seq,
-        attributes: Map::new(),
-    }
-}
-
 /// A live-log path under `dir`, with its parent created.
 pub(super) fn log_path(dir: &tempfile::TempDir, name: &str) -> PathBuf {
     let log = dir.path().join(".aoa/traces").join(name);

@@ -337,8 +337,20 @@ fn append_span_within(
 
 #[cfg(test)]
 mod tests {
-    use super::test_support::{log_path, seed_log, span, span_line};
+    use super::test_support::{log_path, seed_log, span_line};
     use super::*;
+
+    /// A span of the given type and sequence, with the fields the orchestration
+    /// tests never vary. They assert on ordering and on whether a write landed
+    /// at all, so `source` and `attributes` are noise in every one of them.
+    fn span(span_type: SpanType, seq: u64) -> Span {
+        Span {
+            span_type,
+            source: SpanSource::Native,
+            seq,
+            attributes: Map::new(),
+        }
+    }
 
     #[test]
     fn sanitize_session_strips_path_traversal() {
