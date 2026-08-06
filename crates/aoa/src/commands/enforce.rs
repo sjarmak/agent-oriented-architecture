@@ -58,7 +58,7 @@
 use std::fmt;
 use std::fs::File;
 use std::io::Read;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
 use anyhow::{anyhow, Context, Result};
@@ -71,7 +71,7 @@ use aoa_enforce::{
     TornTailRepair,
 };
 use aoa_policy::Policy;
-use aoa_trace::SpanType;
+use aoa_trace::{normalize_lexically, resolve_canonicalizing, PathTrustError, SpanType};
 
 use crate::cli::{EnforceArgs, EnforceCommand};
 use crate::commands::generated::generated_rules;
@@ -350,13 +350,7 @@ fn write_target(event: &HookEvent) -> Option<&str> {
 /// protected destination.
 fn policy_write_targets(base: &Path, raw: &str) -> Result<Vec<String>> {
     let resolved = normalize_write_target(base, raw)?;
-    let raw_path = Path::new(raw);
-    let candidate = if raw_path.is_absolute() {
-        raw_path.to_path_buf()
-    } else {
-        base.join(raw_path)
-    };
-    let lexical = normalize_path_lexically(&candidate)?;
+    let lexical = normalize_lexically(&hook_candidate(base, Path::new(raw)))?;
     let Some(lexical) = lexical
         .strip_prefix(base)
         .ok()
@@ -373,51 +367,37 @@ fn policy_write_targets(base: &Path, raw: &str) -> Result<Vec<String>> {
     }
 }
 
-fn normalize_path_lexically(path: &Path) -> Result<PathBuf> {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Prefix(_) | Component::RootDir => normalized.push(component.as_os_str()),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !normalized.pop() {
-                    return Err(anyhow!("write target traverses above the filesystem root"));
-                }
-            }
-            Component::Normal(part) => normalized.push(part),
-        }
+/// Where a hook target points before any resolution: absolute spellings stand
+/// alone, relative ones hang off the repository root.
+fn hook_candidate(base: &Path, raw: &Path) -> PathBuf {
+    if raw.is_absolute() {
+        raw.to_path_buf()
+    } else {
+        base.join(raw)
     }
-    Ok(normalized)
 }
 
 /// Resolve a hook target against the canonical repository root and return the
 /// repository-relative spelling consumed by policy globs.
 ///
-/// Write hooks may name files that do not exist yet, so `Path::canonicalize`
-/// cannot be applied only at the leaf. Existing components are canonicalized
-/// as they are encountered (which resolves symlinks); after the first missing
-/// component, `.` and `..` are reduced lexically until an existing ancestor is
-/// reached again. The final containment check rejects both traversal and
-/// symlink escapes.
+/// The resolution rule for a not-yet-existing target belongs to
+/// [`resolve_canonicalizing`]; what this adds is the repository containment
+/// check on its result, which rejects both traversal and symlink escapes.
 fn normalize_write_target(base: &Path, raw: &str) -> Result<String> {
     if raw.is_empty() {
         return Err(anyhow!("hook write target must not be empty"));
     }
 
     let raw = Path::new(raw);
-    let candidate = if raw.is_absolute() {
-        raw.to_path_buf()
-    } else {
-        base.join(raw)
-    };
-    let resolved = resolve_write_target_components(base, raw, &candidate)?;
-
-    let relative = resolved.strip_prefix(base).map_err(|_| {
-        anyhow!(
-            "hook write target resolves outside repository {}: {raw:?}",
-            base.display()
-        )
+    let candidate = hook_candidate(base, raw);
+    let resolved = resolve_canonicalizing(&candidate).map_err(|source| match source {
+        PathTrustError::EscapesRoot { .. } => outside_repository(base, raw),
+        other => anyhow!(other),
     })?;
+
+    let relative = resolved
+        .strip_prefix(base)
+        .map_err(|_| outside_repository(base, raw))?;
     if relative.as_os_str().is_empty() {
         return Err(anyhow!("hook write target resolves to repository root"));
     }
@@ -427,59 +407,11 @@ fn normalize_write_target(base: &Path, raw: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("resolved hook write target is not UTF-8: {relative:?}"))
 }
 
-fn resolve_write_target_components(base: &Path, raw: &Path, candidate: &Path) -> Result<PathBuf> {
-    let mut resolved = PathBuf::new();
-    let mut missing_component = false;
-
-    for component in candidate.components() {
-        match component {
-            Component::Prefix(_) | Component::RootDir => resolved.push(component.as_os_str()),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !resolved.pop() {
-                    return Err(anyhow!(
-                        "hook write target resolves outside repository {}: {raw:?}",
-                        base.display()
-                    ));
-                }
-                if missing_component {
-                    if let Some(canonical) = canonicalize_existing_target_component(&resolved)? {
-                        resolved = canonical;
-                        missing_component = false;
-                    }
-                }
-            }
-            Component::Normal(part) => {
-                resolved.push(part);
-                if !missing_component {
-                    if let Some(canonical) = canonicalize_existing_target_component(&resolved)? {
-                        resolved = canonical;
-                    } else {
-                        missing_component = true;
-                    }
-                }
-            }
-        }
-    }
-    Ok(resolved)
-}
-
-fn canonicalize_existing_target_component(path: &Path) -> Result<Option<PathBuf>> {
-    match std::fs::symlink_metadata(path) {
-        Ok(_) => path.canonicalize().map(Some).with_context(|| {
-            format!(
-                "failed to resolve write target component {}",
-                path.display()
-            )
-        }),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(anyhow!(err)).with_context(|| {
-            format!(
-                "failed to inspect write target component {}",
-                path.display()
-            )
-        }),
-    }
+fn outside_repository(base: &Path, raw: &Path) -> anyhow::Error {
+    anyhow!(
+        "hook write target resolves outside repository {}: {raw:?}",
+        base.display()
+    )
 }
 
 /// Load `<base>/aoa-policy.yaml` if it exists, failing loud on a malformed file

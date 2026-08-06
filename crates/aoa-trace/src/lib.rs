@@ -9,7 +9,7 @@ mod envelope;
 mod error;
 mod metric_input;
 mod model;
-mod path_component;
+mod path_trust;
 mod report;
 mod span_type;
 mod validate;
@@ -20,7 +20,12 @@ pub use metric_input::{
     Confidence, IndexQuality, MetricInput, MetricInputRef, SymbolGraph, TransformMap,
 };
 pub use model::{Span, Trace};
-pub use path_component::{validate_single_component, UnsafePathComponent};
+#[cfg(unix)]
+pub use path_trust::dirfd;
+pub use path_trust::{
+    is_symlink_nofollow, normalize_lexically, reject_symlink, resolve_canonicalizing,
+    safe_join_nofollow, validate_single_component, PathTrustError, UnsafePathComponent,
+};
 pub use report::TraceReport;
 pub use span_type::{SpanSource, SpanType};
 pub use validate::{validate_trace, validate_trace_value};

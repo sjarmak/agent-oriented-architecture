@@ -1,9 +1,11 @@
 use std::io::{Read, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 #[cfg(not(unix))]
 use aoa_trace::validate_trace;
-use aoa_trace::{validate_single_component, Trace, TraceReport};
+use aoa_trace::{
+    safe_join_nofollow, validate_single_component, PathTrustError, Trace, TraceReport,
+};
 
 use crate::error::AuditError;
 
@@ -74,35 +76,23 @@ fn validate_trace_name(name: &str) -> Result<(), AuditError> {
     }
 }
 
-/// Is `node` a symlink, without following it? The single spelling of that
-/// question in this module — every symlink guard below goes through here.
-///
-/// Deliberately not [`Path::is_symlink`]: that helper folds *every* lstat
-/// failure into `false`, so a guard built on it fails OPEN on
-/// `EACCES`/`ENOTDIR`/`ELOOP`. Nothing is currently exploitable through that gap
-/// — the `create_dir_all`/`fs::write` that follows hits the same condition and
-/// errors — but a security check whose fallthrough is invisible is one refactor
-/// away from being a real hole. Here, only `NotFound` means "absent, safe to
-/// create"; any other error surfaces as [`AuditError::Io`].
-fn is_symlink_nofollow(node: &Path) -> Result<bool, AuditError> {
-    match std::fs::symlink_metadata(node) {
-        Ok(meta) => Ok(meta.file_type().is_symlink()),
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(source) => Err(AuditError::Io {
-            path: node.to_path_buf(),
-            source,
-        }),
+/// Map a path-trust refusal onto this crate's error surface. The trust
+/// boundary itself lives in `aoa_trace::path_trust`; this crate only decides
+/// how a refusal reads to an audit caller.
+fn install_path_error(source: PathTrustError) -> AuditError {
+    match source {
+        PathTrustError::Io { path, source } => AuditError::Io { path, source },
+        other => AuditError::UnsafeInstallPath {
+            path: other.path().to_path_buf(),
+        },
     }
 }
 
-/// Refuse a single install-path node that already exists as a symlink.
+/// Refuse a single install-path node that already exists as a symlink. Only the
+/// non-Unix lane still needs it: on Unix every mutation is descriptor-relative.
+#[cfg(not(unix))]
 fn reject_symlink(node: &Path) -> Result<(), AuditError> {
-    if is_symlink_nofollow(node)? {
-        return Err(AuditError::UnsafeInstallPath {
-            path: node.to_path_buf(),
-        });
-    }
-    Ok(())
+    aoa_trace::reject_symlink(node).map_err(install_path_error)
 }
 
 /// Refuse when any node of the installed `.aoa/traces` path already exists as a
@@ -139,41 +129,24 @@ pub fn reject_symlinked_trace_dir(traces_dir: &Path) -> Result<(), AuditError> {
 /// Join a relative path beneath `root`, rejecting illegal components and every
 /// existing symlink encountered from the root downward.
 ///
-/// This is the shared check-then-act fallback for AOA write paths that cannot
-/// use descriptor-relative `openat`. A missing component is safe to create;
-/// every other metadata failure is surfaced instead of being treated as absent.
+/// The audit-facing spelling of [`aoa_trace::safe_join_nofollow`], which owns
+/// the rule; this only translates a refusal into [`AuditError`].
 pub fn reject_symlinked_path(root: &Path, relative: &Path) -> Result<PathBuf, AuditError> {
-    let mut resolved = root.to_path_buf();
-    for component in relative.components() {
-        let Component::Normal(part) = component else {
-            return Err(AuditError::UnsafeInstallPath {
-                path: root.join(relative),
-            });
-        };
-        let Some(part_name) = part.to_str() else {
-            return Err(AuditError::UnsafeInstallPath {
-                path: root.join(relative),
-            });
-        };
-        validate_single_component(part_name).map_err(|_| AuditError::UnsafeInstallPath {
-            path: root.join(relative),
-        })?;
-        resolved.push(part);
-        reject_symlink(&resolved)?;
-    }
-    Ok(resolved)
+    safe_join_nofollow(root, relative).map_err(install_path_error)
 }
 
 #[cfg(unix)]
 mod unix {
     use super::*;
+    use aoa_trace::dirfd::{
+        is_symlink_at, map_nofollow_error, open_dir_at, open_or_create_dir_at, open_trust_root,
+    };
     use aoa_trace::{validate_trace_value, TraceError};
-    use rustix::fs::{self, AtFlags, FileType, Mode, OFlags};
+    use rustix::fs::{self, FileType, Mode, OFlags};
     use rustix::io::Errno;
     use std::fs::File;
     use std::os::fd::{AsFd, OwnedFd};
 
-    const DIR_MODE: Mode = Mode::RWXU;
     const FILE_MODE: Mode = Mode::RUSR
         .union(Mode::WUSR)
         .union(Mode::RGRP)
@@ -188,61 +161,23 @@ mod unix {
         }
     }
 
-    fn is_symlink_at(parent: impl AsFd, name: &str) -> bool {
-        fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)
-            .map(|stat| FileType::from_raw_mode(stat.st_mode) == FileType::Symlink)
-            .unwrap_or(false)
+    /// Acquire the repo as the trust root. Symlinks above or at that root remain
+    /// allowed; every component beneath it is opened relative to this stable
+    /// descriptor with `O_NOFOLLOW`.
+    fn open_repo(repo: &Path) -> Result<OwnedFd, AuditError> {
+        open_trust_root(repo).map_err(install_path_error)
     }
 
-    fn map_nofollow_error(parent: impl AsFd, name: &str, path: &Path, source: Errno) -> AuditError {
-        if source == Errno::LOOP || is_symlink_at(parent, name) {
-            AuditError::UnsafeInstallPath {
-                path: path.to_path_buf(),
-            }
-        } else {
-            io(path, source)
-        }
+    fn open_dir(parent: impl AsFd, name: &str, path: &Path) -> Result<OwnedFd, AuditError> {
+        open_dir_at(parent, name, path).map_err(install_path_error)
     }
 
-    fn open_dir_at(parent: impl AsFd, name: &str, path: &Path) -> Result<OwnedFd, AuditError> {
-        fs::openat(
-            parent.as_fd(),
-            name,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW,
-            Mode::empty(),
-        )
-        .map_err(|source| map_nofollow_error(parent, name, path, source))
-    }
-
-    fn open_or_create_dir_at(
+    fn open_or_create_dir(
         parent: impl AsFd,
         name: &str,
         path: &Path,
     ) -> Result<OwnedFd, AuditError> {
-        match fs::openat(
-            parent.as_fd(),
-            name,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW,
-            Mode::empty(),
-        ) {
-            Ok(fd) => Ok(fd),
-            Err(Errno::NOENT) => {
-                match fs::mkdirat(parent.as_fd(), name, DIR_MODE) {
-                    Ok(()) | Err(Errno::EXIST) => {}
-                    Err(source) => return Err(io(path, source)),
-                }
-                open_dir_at(parent, name, path)
-            }
-            Err(source) => Err(map_nofollow_error(parent, name, path, source)),
-        }
-    }
-
-    fn open_repo(repo: &Path) -> Result<OwnedFd, AuditError> {
-        // `repo` is the caller-selected trust root. Symlinks above or at that
-        // root remain allowed; every component created beneath it is opened
-        // relative to this stable descriptor with `O_NOFOLLOW`.
-        fs::open(repo, OFlags::RDONLY | OFlags::DIRECTORY, Mode::empty())
-            .map_err(|source| io(repo, source))
+        open_or_create_dir_at(parent, name, path).map_err(install_path_error)
     }
 
     fn open_installed_dirs(traces_dir: &Path) -> Result<(OwnedFd, OwnedFd, OwnedFd), AuditError> {
@@ -257,8 +192,8 @@ mod unix {
                 path: traces_dir.to_path_buf(),
             })?;
         let repo_fd = open_repo(repo)?;
-        let aoa_fd = open_dir_at(&repo_fd, ".aoa", aoa_dir)?;
-        let traces_fd = open_dir_at(&aoa_fd, "traces", traces_dir)?;
+        let aoa_fd = open_dir(&repo_fd, ".aoa", aoa_dir)?;
+        let traces_fd = open_dir(&aoa_fd, "traces", traces_dir)?;
         Ok((repo_fd, aoa_fd, traces_fd))
     }
 
@@ -274,11 +209,11 @@ mod unix {
         let aoa_dir = repo.join(".aoa");
         let gitignore = aoa_dir.join(".gitignore");
         let repo_fd = open_repo(repo)?;
-        let aoa_fd = open_or_create_dir_at(&repo_fd, ".aoa", &aoa_dir)?;
+        let aoa_fd = open_or_create_dir(&repo_fd, ".aoa", &aoa_dir)?;
 
         after_aoa_open();
 
-        let _traces_fd = open_or_create_dir_at(&aoa_fd, "traces", &traces_dir)?;
+        let _traces_fd = open_or_create_dir(&aoa_fd, "traces", &traces_dir)?;
         let gitignore_fd = match fs::openat(
             &aoa_fd,
             ".gitignore",
@@ -288,12 +223,12 @@ mod unix {
             Ok(fd) => Some(fd),
             Err(Errno::EXIST) => None,
             Err(source) => {
-                return Err(map_nofollow_error(
+                return Err(install_path_error(map_nofollow_error(
                     &aoa_fd,
                     ".gitignore",
                     &gitignore,
                     source,
-                ))
+                )))
             }
         };
         if let Some(fd) = gitignore_fd {
@@ -314,7 +249,14 @@ mod unix {
                 OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK,
                 Mode::empty(),
             )
-            .map_err(|source| map_nofollow_error(&aoa_fd, ".gitignore", &gitignore, source))?;
+            .map_err(|source| {
+                install_path_error(map_nofollow_error(
+                    &aoa_fd,
+                    ".gitignore",
+                    &gitignore,
+                    source,
+                ))
+            })?;
             let stat = fs::fstat(&fd).map_err(|source| io(&gitignore, source))?;
             if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
                 || stat.st_nlink != 1
@@ -488,7 +430,7 @@ pub fn write_trace(
     // follows symlinks, so writing through one would clobber whatever it targets.
     // Reported as an unsafe NAME, not an unsafe install path: the offending node
     // is the caller's `name`, and callers already handle that variant.
-    if is_symlink_nofollow(&path)? {
+    if aoa_trace::is_symlink_nofollow(&path).map_err(install_path_error)? {
         return Err(AuditError::UnsafeTraceName {
             name: name.to_string(),
         });

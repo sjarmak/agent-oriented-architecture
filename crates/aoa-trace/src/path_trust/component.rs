@@ -1,11 +1,6 @@
 use std::path::{Component, Path};
 
-/// A name that is not one safe path component.
-#[derive(Debug, thiserror::Error)]
-#[error("{name:?} is not a single safe path component")]
-pub struct UnsafePathComponent {
-    pub name: String,
-}
+use super::UnsafePathComponent;
 
 /// Accept `name` only when joining it to a trusted base cannot escape that base.
 ///
