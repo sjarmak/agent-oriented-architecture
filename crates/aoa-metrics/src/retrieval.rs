@@ -70,13 +70,10 @@ pub fn compute_retrieval_locality(
     // is the truthful measure — so an empty batch must reach the scoring arm
     // below rather than be skipped and reported as absent evidence. Only a
     // wholly absent `results` key across every span means no evidence.
-    let mut first_batch = None;
-    for span in &spans {
-        if let Some(results) = ranked_results(span)? {
-            first_batch = Some(results);
-            break;
-        }
-    }
+    let first_batch = spans
+        .iter()
+        .find_map(|span| ranked_results(span).transpose())
+        .transpose()?;
 
     let k = input.k;
     let (recall_at_k, mrr, unavailable) = match (anchored.is_empty(), first_batch) {
