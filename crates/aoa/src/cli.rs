@@ -158,6 +158,13 @@ pub struct AuditArgs {
     #[arg(long, requires = "self_audit", requires = "baseline")]
     pub migrated: Option<PathBuf>,
 
+    /// Only count enforcement records emitted within the last N seconds when
+    /// deciding whether the runtime plane is live. Without it the question is
+    /// asked over the repository's whole history, so a plane that ran once and
+    /// then went inert still reads as enforcing.
+    #[arg(long, conflicts_with = "self_audit")]
+    pub enforcement_window_secs: Option<u64>,
+
     /// Emit the structured JSON rendering instead of human text.
     #[arg(long)]
     pub json: bool,

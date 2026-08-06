@@ -18,6 +18,7 @@
 //! scores one the caller supplies.
 
 use std::path::Path;
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 
@@ -41,19 +42,26 @@ use aoa_recommend::RecommendationReport;
 /// Unsupported contents in an individual source file (oversized or non-UTF-8)
 /// are isolated by the best-effort indexer; access failures still reach this
 /// fatal boundary.
-fn repo_audit_config(repo: &Path) -> Result<aoa_audit::AuditConfig> {
+fn repo_audit_config(
+    repo: &Path,
+    enforcement_since: Option<SystemTime>,
+) -> Result<aoa_audit::AuditConfig> {
     let indexed = aoa_scip_graph::index_best_effort(repo)
         .with_context(|| format!("failed to index {}", repo.display()))?;
     Ok(aoa_audit::AuditConfig {
         graph: indexed.graph,
+        enforcement_since,
         ..aoa_audit::AuditConfig::default()
     })
 }
 
 /// Audit `repo` through its own measured config — the prefix of the chain that
 /// `aoa audit` needs on its own.
-pub(crate) fn audited(repo: &Path) -> Result<AuditReport> {
-    let cfg = repo_audit_config(repo)?;
+///
+/// `enforcement_since` narrows the enforcement-liveness question to a recent
+/// window; `None` asks it over the whole history.
+pub(crate) fn audited(repo: &Path, enforcement_since: Option<SystemTime>) -> Result<AuditReport> {
+    let cfg = repo_audit_config(repo, enforcement_since)?;
     aoa_audit::audit(repo, &cfg).with_context(|| format!("failed to audit {}", repo.display()))
 }
 
@@ -79,7 +87,9 @@ pub(crate) struct Readiness {
 /// never `Advisory`. An unconditioned determination would contradict the audit
 /// it ships alongside.
 pub(crate) fn readiness(repo: &Path) -> Result<Readiness> {
-    let audit = audited(repo)?;
+    // The readiness view asks whether the plane has *ever* enforced; narrowing
+    // to a window is a live-session question `aoa audit` owns.
+    let audit = audited(repo, None)?;
     let determination = audit.determination();
     let fixes = aoa_migrate::all_fixes();
     let recommendations = aoa_recommend::recommend(&audit, &determination, &fixes);

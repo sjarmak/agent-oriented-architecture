@@ -9,8 +9,9 @@ use aoa_trace::{
 
 use crate::error::AuditError;
 
-/// Where telemetry traces are written, relative to a repo root.
-const TRACES_SUBDIR: &str = ".aoa/traces";
+/// Where telemetry traces are written, relative to a repo root. Shared with
+/// [`crate::liveness`], which reads the live logs this tree collects.
+pub(crate) const TRACES_SUBDIR: &str = ".aoa/traces";
 
 /// The extension every whole-trace file carries. Distinguishes this lane from
 /// the `.jsonl` live logs that share the traces directory.

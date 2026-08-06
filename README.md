@@ -94,6 +94,8 @@ The wrapper resolves the binary itself, in order: `$AOA_BIN`, then `aoa` on PATH
 
 Finding the wrapper is the one step it cannot do for itself, so each registered command guards that too. It locates the wrapper through `$CLAUDE_PROJECT_DIR`, the repo root the host passes to hooks, and refuses to run if nothing executable is there — an unset variable or a deleted wrapper produces the same explicit stderr line and the same exit code the wrapper itself would use (deny for `check`, non-zero for the advisory hooks). The earlier `"${CLAUDE_PROJECT_DIR:-.}"` spelling resolved from the repo root and exited 127 from anywhere else, and the host reads 127 as a non-blocking warning, so the write went through. `aoa observe --enforce` retires the commands of every earlier hook set when it upgrades a repo, so the superseded form never fires beside the current one.
 
+An installed hook set is still not a running one, so `aoa audit` reports which of three states this plane is in — `enforcing`, `installed-but-silent`, or `not-installed` — in both registers, and raises `installed-but-silent` as a Tier-1 finding rather than leaving it as the blank it used to be (aoa-dpluh). The silence reason distinguishes an absent `.aoa/traces` from an empty one and from live logs holding no record, because those are different defects. `--enforcement-window-secs N` narrows the question to records emitted in the last N seconds, for a session asking whether the plane is running *now* rather than whether it ever ran.
+
 Know what you are opting into: once you accept Claude Code's one-time project-trust prompt for this repo, these hooks run automatically on every matching tool call for the rest of the session, and whichever binary the wrapper resolves is what runs.
 
 ## Pre-commit checks

@@ -77,6 +77,7 @@ fn structure_metric(kind: FindingKind) -> Option<MetricName> {
         FindingKind::ContextBudget
         | FindingKind::MutationSurface
         | FindingKind::MissingPlane
+        | FindingKind::SilentPlane
         | FindingKind::VerificationReachability
         | FindingKind::InvariantDiscoverability => None,
     }

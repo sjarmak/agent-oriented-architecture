@@ -21,6 +21,11 @@ pub enum FindingKind {
     MutationSurface,
     /// A required enforcement plane (runtime hook, pre-commit, CI) is absent.
     MissingPlane,
+    /// An enforcement plane is installed and has emitted nothing: present from
+    /// every configuration surface and enforcing nothing. Distinct from
+    /// [`FindingKind::MissingPlane`] because the remedy differs — the install is
+    /// done and something downstream of it is broken.
+    SilentPlane,
     /// Package roots lacking a navigability anchor (README).
     NavigabilityAnchor,
     /// Source files exceeding the self-calibrating module-size threshold.
@@ -60,6 +65,7 @@ impl FindingKind {
         FindingKind::ContextBudget,
         FindingKind::MutationSurface,
         FindingKind::MissingPlane,
+        FindingKind::SilentPlane,
         FindingKind::NavigabilityAnchor,
         FindingKind::ModuleSizeOutlier,
         FindingKind::UnusedImportProxy,
@@ -110,6 +116,7 @@ impl FindingKind {
             FindingKind::WriteSafetyZone => Some(MetricName::WriteSafetyZoneAbsence),
             // Pure presence facts with no construct-validity metric.
             FindingKind::MissingPlane
+            | FindingKind::SilentPlane
             | FindingKind::VerificationReachability
             | FindingKind::InvariantDiscoverability => None,
         }
@@ -185,6 +192,7 @@ mod tests {
                 FindingKind::ContextBudget
                 | FindingKind::MutationSurface
                 | FindingKind::MissingPlane
+                | FindingKind::SilentPlane
                 | FindingKind::NavigabilityAnchor
                 | FindingKind::ModuleSizeOutlier
                 | FindingKind::UnusedImportProxy
@@ -197,7 +205,7 @@ mod tests {
                 | FindingKind::WriteSafetyZone => {}
             }
         }
-        assert_eq!(FindingKind::ALL.len(), 13);
+        assert_eq!(FindingKind::ALL.len(), 14);
     }
 
     #[test]

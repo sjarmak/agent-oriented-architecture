@@ -35,7 +35,10 @@ const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
 /// Malformed, oversized, non-regular, and incomplete files are treated as a
 /// missing plane. The audit reports the resulting Tier-1 finding rather than
 /// failing its whole read-only pass on optional host configuration.
-fn runtime_hook_present(repo: &Path) -> bool {
+///
+/// Shared with [`crate::liveness`], which asks the follow-up question this one
+/// cannot answer: an installed hook set is not a running one.
+pub(crate) fn runtime_hook_present(repo: &Path) -> bool {
     let path = repo.join(".claude/settings.json");
     match std::fs::symlink_metadata(&path) {
         Ok(metadata) if metadata.file_type().is_file() && metadata.len() <= MAX_SETTINGS_BYTES => {}

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use aoa_construct::{BehavioralSignal, ConstructValidityReport, InsufficientDataNote};
 
+use crate::liveness::EnforcementLiveness;
 use crate::punch::PunchItem;
 use crate::tier::Tier;
 use crate::LiveMetricObservation;
@@ -39,6 +40,12 @@ pub struct AuditReport {
     /// Per-session measured or typed-excluded live metric evidence.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub live_observations: Vec<LiveMetricObservation>,
+    /// Whether the runtime enforcement plane is actually emitting records:
+    /// enforcing, installed-but-silent, or not installed. Always serialized —
+    /// the whole point is that silence used to be a blank (aoa-dpluh), and a
+    /// field omitted when uninteresting would restore exactly that.
+    #[serde(default)]
+    pub enforcement_liveness: EnforcementLiveness,
 }
 
 #[derive(Deserialize)]
@@ -54,6 +61,8 @@ struct AuditReportWire {
     _insufficient_data: Option<InsufficientDataNote>,
     #[serde(default)]
     live_observations: Vec<LiveMetricObservation>,
+    #[serde(default)]
+    enforcement_liveness: EnforcementLiveness,
 }
 
 impl<'de> Deserialize<'de> for AuditReport {
@@ -65,6 +74,7 @@ impl<'de> Deserialize<'de> for AuditReport {
             insufficient_data: wire.behavioral_signal.insufficient_data(),
             behavioral_signal: wire.behavioral_signal,
             live_observations: wire.live_observations,
+            enforcement_liveness: wire.enforcement_liveness,
         })
     }
 }
@@ -87,6 +97,7 @@ impl AuditReport {
             insufficient_data: behavioral_signal.insufficient_data(),
             behavioral_signal,
             live_observations: Vec::new(),
+            enforcement_liveness: EnforcementLiveness::default(),
         }
     }
 
@@ -108,7 +119,8 @@ impl AuditReport {
     /// the item's tier, title, and its measured cost. A repo below the
     /// behavioral-signal window gets the InsufficientData block with its
     /// reason, so the withheld behavioral metrics are explicit in this
-    /// register too.
+    /// register too, and the enforcement plane's liveness state is named
+    /// outright rather than left to be inferred from the punch-list.
     pub fn render_human(&self) -> String {
         let mut out = String::new();
         let _ = writeln!(out, "AOA audit punch-list ({} item(s))", self.items.len());
@@ -126,6 +138,10 @@ impl AuditReport {
                 item.measured_cost.unit,
             );
         }
+        // Unconditional, and above the optional blocks: the state this line
+        // reports is one an operator read as healthy for a whole night of
+        // sessions precisely because nothing printed it (aoa-dpluh).
+        let _ = writeln!(out, "{}", self.enforcement_liveness.render_line());
         if !self.live_observations.is_empty() {
             let measured = self
                 .live_observations

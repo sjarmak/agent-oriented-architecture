@@ -5,6 +5,10 @@
 //! - [`observe`] installs trace logging without touching any tracked file — it
 //!   only creates the explicitly-ignored `.aoa/` tree. [`write_trace`] is the
 //!   instrumentation path that lands a validated trace under `.aoa/traces/`.
+//! - [`enforcement_liveness`] answers whether the installed runtime enforcement
+//!   plane is actually emitting records, in three states rather than two:
+//!   enforcing, installed-but-silent, or not installed. [`audit`] carries the
+//!   same answer on its report and raises silence as a Tier-1 finding.
 //! - [`audit`] builds a ranked, tiered punch-list grounded in measured numbers
 //!   and emits a typed measured/excluded record for every live session.
 //!   [`LiveMetricContext`] supplies same-task evidence that ambient traces
@@ -16,6 +20,7 @@
 
 mod audit;
 mod error;
+mod liveness;
 mod observe;
 mod planes;
 mod punch;
@@ -28,6 +33,7 @@ pub use audit::{
     LiveObservationState,
 };
 pub use error::AuditError;
+pub use liveness::{enforcement_liveness, EnforcementLiveness, Silence};
 pub use observe::{
     observe, reject_symlinked_path, reject_symlinked_trace_dir, write_trace, ObserveOutcome,
 };

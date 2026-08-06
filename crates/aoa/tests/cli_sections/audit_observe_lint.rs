@@ -118,6 +118,11 @@ fn audit_fail_on_tier1_exits_non_zero_when_tier1_present() {
 fn audit_fail_on_tier1_exits_zero_without_tier1_gap() {
     // Present the two Tier-1 planes (runtime hook + CI) so only the Tier-2
     // pre-commit plane is missing; --fail-on tier1 must then exit 0.
+    //
+    // The runtime plane has to be *live*, not merely installed: an installed
+    // hook set that has emitted nothing is itself a Tier-1 finding (aoa-dpluh),
+    // so a fixture that only writes settings.json no longer describes a repo
+    // with no Tier-1 gap.
     let repo = TempDir::new().expect("tempdir");
     std::fs::create_dir_all(repo.path().join(".claude")).unwrap();
     std::fs::write(
@@ -134,6 +139,12 @@ fn audit_fail_on_tier1_exits_zero_without_tier1_gap() {
     )
     .unwrap();
     std::fs::create_dir_all(repo.path().join(".github/workflows")).unwrap();
+    std::fs::create_dir_all(repo.path().join(".aoa/traces")).unwrap();
+    std::fs::write(
+        repo.path().join(".aoa/traces/live-s1.jsonl"),
+        "{\"type\":\"test.run\",\"source\":\"native\",\"seq\":0,\"attributes\":{}}\n",
+    )
+    .unwrap();
 
     aoa()
         .args(["audit", "--fail-on", "tier1", "--repo"])

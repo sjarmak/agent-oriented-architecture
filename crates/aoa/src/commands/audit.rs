@@ -1,3 +1,5 @@
+use std::time::{Duration, SystemTime};
+
 use anyhow::Result;
 use serde::Serialize;
 
@@ -22,7 +24,10 @@ pub fn run(args: &AuditArgs) -> Result<i32> {
         return self_audit::run(args);
     }
 
-    let report = pipeline::audited(&args.repo)?;
+    let enforcement_since = args
+        .enforcement_window_secs
+        .map(|secs| SystemTime::now() - Duration::from_secs(secs));
+    let report = pipeline::audited(&args.repo, enforcement_since)?;
     let hook_warning = enforce_hook_warning(&args.repo);
 
     if args.json {

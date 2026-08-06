@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use aoa_budget::{count_budget, resolve_closure, Config};
 use aoa_construct::BehavioralSignal;
@@ -11,11 +12,12 @@ use aoa_trace::Trace;
 use serde::{Deserialize, Serialize};
 
 use crate::error::AuditError;
+use crate::liveness::{enforcement_liveness, EnforcementLiveness};
 use crate::planes::missing_planes;
 use crate::punch::{rank, FindingKind, MeasuredCost, PunchItem};
 use crate::report::AuditReport;
 use crate::structure::structure_items;
-use crate::tier::Tier;
+use crate::tier::{EnforcementPlane, Tier};
 
 /// The reference encoding used for the context-budget probe. o200k_base loads
 /// without network access and is the pinned reference encoding of aoa-budget.
@@ -60,6 +62,10 @@ pub struct AuditConfig {
     /// `size_outlier_k ×` the repo's own median source-file line count is
     /// counted. Documented, overridable; never an absolute size threshold.
     pub size_outlier_k: f64,
+    /// Window for the enforcement-liveness question: only live logs appended to
+    /// at or after this instant count as evidence the plane is running. `None`
+    /// asks it over the repository's whole history.
+    pub enforcement_since: Option<SystemTime>,
 }
 
 impl Default for AuditConfig {
@@ -78,6 +84,7 @@ impl Default for AuditConfig {
             k: DEFAULT_MUTATION_K,
             live_metric_contexts: BTreeMap::new(),
             size_outlier_k: DEFAULT_SIZE_OUTLIER_K,
+            enforcement_since: None,
         }
     }
 }
@@ -167,13 +174,15 @@ pub fn audit(repo: &Path, cfg: &AuditConfig) -> Result<AuditReport, AuditError> 
     if signal.is_sufficient() {
         items.extend(mutation_surface_item(&measured));
     }
-    items.extend(plane_items(repo));
+    let liveness = enforcement_liveness(repo, cfg.enforcement_since);
+    items.extend(plane_items(repo, &liveness));
     items.extend(structure_items(repo, cfg.size_outlier_k, &partition)?);
 
     rank(&mut items);
     Ok(AuditReport {
         subtree_discovery_warning,
         live_observations,
+        enforcement_liveness: liveness,
         ..AuditReport::with_signal(items, signal)
     })
 }
@@ -314,10 +323,21 @@ fn mutation_surface_item(metrics: &[&MetricRecord]) -> Option<PunchItem> {
     })
 }
 
-/// One punch item per missing enforcement plane, tier mapped from the plane.
-/// Cost = 1 missing plane (a real count: the plane is absent).
-fn plane_items(repo: &Path) -> Vec<PunchItem> {
-    missing_planes(repo)
+/// One punch item per missing enforcement plane, tier mapped from the plane,
+/// plus one for a runtime plane that is installed and emitting nothing.
+///
+/// Cost = 1 plane in both cases (a real count, not a score). The silent item is
+/// what keeps an inert plane off the pass side of the ledger: `missing_planes`
+/// sees an installed hook set and says nothing, so before this the only two
+/// readings were "missing" and silence-as-health. An installed-but-silent plane
+/// is missing *evidence*, and the audit reports it at the plane's own tier
+/// rather than withholding it (the aoa-xo8y0 rule, one layer over).
+///
+/// The two never both fire for one plane: `missing_planes` reports the runtime
+/// plane only when the hook set is absent, and liveness reports silence only
+/// when it is present.
+fn plane_items(repo: &Path, liveness: &EnforcementLiveness) -> Vec<PunchItem> {
+    let mut items: Vec<PunchItem> = missing_planes(repo)
         .into_iter()
         .map(|plane| PunchItem {
             title: format!("missing enforcement plane: {}", plane.label()),
@@ -327,7 +347,24 @@ fn plane_items(repo: &Path) -> Vec<PunchItem> {
             plane: Some(plane),
             subtree: None,
         })
-        .collect()
+        .collect();
+
+    if let Some(silence) = liveness.silence() {
+        let plane = EnforcementPlane::RuntimeHook;
+        items.push(PunchItem {
+            title: format!(
+                "enforcement plane installed but silent: {} ({})",
+                plane.label(),
+                silence.reason()
+            ),
+            kind: FindingKind::SilentPlane,
+            tier: plane.tier(),
+            measured_cost: MeasuredCost::new(1, "silent plane"),
+            plane: Some(plane),
+            subtree: None,
+        });
+    }
+    items
 }
 
 #[cfg(test)]

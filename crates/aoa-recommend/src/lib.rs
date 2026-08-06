@@ -243,6 +243,10 @@ fn join(kind: FindingKind) -> (Option<MetricName>, Option<&'static str>) {
         FindingKind::ContextBudget
         | FindingKind::MutationSurface
         | FindingKind::MissingPlane
+        // No migration can make an installed-but-inert plane emit: the install
+        // already happened, and what broke is downstream of anything this
+        // registry writes.
+        | FindingKind::SilentPlane
         | FindingKind::ModuleSizeOutlier
         | FindingKind::VerificationReachability
         | FindingKind::InvariantDiscoverability
