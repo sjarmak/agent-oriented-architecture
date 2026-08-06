@@ -174,15 +174,26 @@ fn observe_enforce_writes_idempotent_settings_and_plain_observe_does_not() {
 
     observe_enforce(repo.path());
     let first = std::fs::read_to_string(&settings).expect("settings written");
-    assert!(first.contains(".claude/hooks/aoa-enforce check"));
-    assert!(first.contains(".claude/hooks/aoa-enforce record"));
+    assert!(first.contains(".claude/hooks/aoa-enforce"));
+    for verb in ["check", "record"] {
+        assert!(
+            first.contains(&format!("exec \\\"$h\\\" {verb} ")),
+            "the {verb} hook must run the wrapper: {first}"
+        );
+    }
     // A bare `aoa ...` is the inert form this repo shipped for months: the
     // hooks resolve only where the binary happens to be on the host's PATH,
     // and where it is not they fail non-blocking and enforcement silently
     // never runs (aoa-zsem6). Reintroducing it must fail here.
     assert!(
-        !first.contains("\"aoa enforce"),
+        !first.contains("\\\"aoa enforce"),
         "hook commands must not be bare `aoa ...`: {first}"
+    );
+    // So is a cwd-relative wrapper path: it resolves from the repo root and
+    // exits 127 — a non-blocking warning — from anywhere else.
+    assert!(
+        !first.contains("CLAUDE_PROJECT_DIR:-."),
+        "hook commands must not fall back to the cwd: {first}"
     );
 
     // Re-running is byte-stable (idempotent merge).
@@ -277,7 +288,7 @@ fn current_enforce_hook_stamp_is_quiet_in_observe_and_audit() {
         serde_json::from_slice(&std::fs::read(repo.path().join(".claude/settings.json")).unwrap())
             .unwrap();
     assert_eq!(
-        settings["aoa"]["enforce_hook_set_version"], 2,
+        settings["aoa"]["enforce_hook_set_version"], 3,
         "installer must stamp the hook-set version"
     );
 
@@ -339,8 +350,13 @@ fn observe_enforce_installs_an_executable_wrapper() {
 }
 
 /// Criteria (a) and (b) of aoa-zsem6, checked the way the host runs a hook:
-/// `/bin/sh` with a scrubbed environment, no login profile, and the cwd set to
-/// the repository root.
+/// `/bin/sh` with a scrubbed environment and no login profile.
+///
+/// The cwd is deliberately *outside* the repository. Running from the repo root
+/// is the one directory where a cwd-relative command resolves by luck, so a test
+/// that stays there cannot tell resolution from coincidence — that is how the
+/// `"${CLAUDE_PROJECT_DIR:-.}"` fallback passed while exiting 127 (a
+/// non-blocking warning, so the write proceeded) everywhere else.
 ///
 /// With the binary reachable the configured command resolves and exits 0. With
 /// it absent the hook must say so — the blocking `check` denies rather than
@@ -352,38 +368,48 @@ fn observe_enforce_installs_an_executable_wrapper() {
 fn the_configured_hook_command_resolves_and_is_loud_when_the_binary_is_absent() {
     let repo = TempDir::new().unwrap();
     observe_enforce(repo.path());
+    let elsewhere = TempDir::new().unwrap();
 
     let settings: Value =
         serde_json::from_slice(&std::fs::read(repo.path().join(".claude/settings.json")).unwrap())
             .unwrap();
-    let configured = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
-        .as_str()
-        .expect("PreToolUse check hook is installed")
-        .to_string();
-    assert!(
-        configured.ends_with(" check"),
-        "expected the check hook command, found {configured}"
-    );
+    let configured = |event: &str, verb: &str| {
+        let command = settings["hooks"][event][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{event} {verb} hook is installed"))
+            .to_string();
+        assert!(
+            command.contains(&format!(" {verb} ")),
+            "expected the {verb} hook command, found {command}"
+        );
+        command
+    };
+    let check = configured("PreToolUse", "check");
+    let record = configured("PostToolUse", "record");
 
-    let run = |command: &str, aoa_bin: Option<&Path>| {
+    let run = |command: &str, project_dir: Option<&Path>, aoa_bin: Option<&Path>| {
         let mut sh = std::process::Command::new("/bin/sh");
         sh.env_clear()
-            .current_dir(repo.path())
+            .current_dir(elsewhere.path())
             .arg("-c")
             .arg(command);
+        if let Some(dir) = project_dir {
+            sh.env("CLAUDE_PROJECT_DIR", dir);
+        }
         if let Some(bin) = aoa_bin {
             sh.env("AOA_BIN", bin);
         }
         sh.output().expect("hook command runs under /bin/sh")
     };
 
-    // (a) Resolution: reachable binary, scrubbed environment, exit 0.
+    // (a) Resolution: reachable binary, scrubbed environment, foreign cwd,
+    // exit 0. `--help` rides through the command's own `"$@"`.
     let bin = assert_cmd::cargo::cargo_bin("aoa");
-    let help = run(&format!("{configured} --help"), Some(&bin));
+    let help = run(&format!("{check} --help"), Some(repo.path()), Some(&bin));
     let help_err = String::from_utf8_lossy(&help.stderr);
     assert!(
         help.status.success(),
-        "configured hook command must resolve under a scrubbed environment; stderr: {help_err}"
+        "configured hook command must resolve from any cwd; stderr: {help_err}"
     );
     assert!(
         !help_err.contains("not found"),
@@ -391,19 +417,25 @@ fn the_configured_hook_command_resolves_and_is_loud_when_the_binary_is_absent() 
     );
 
     // (b) Loud on absent binary: no AOA_BIN, no PATH, no build outputs here.
-    for (verb, expected_code) in [("check", 2), ("record", 1)] {
-        let command = configured.replace(" check", &format!(" {verb}"));
-        let absent = run(&command, None);
-        let stderr = String::from_utf8_lossy(&absent.stderr);
-        assert_eq!(
-            absent.status.code(),
-            Some(expected_code),
-            "unavailable enforcement must not read as passing for `{command}`; stderr: {stderr}"
-        );
-        assert!(
-            stderr.contains("ENFORCEMENT UNAVAILABLE"),
-            "a missing binary must be explicit, not silent; stderr: {stderr}"
-        );
+    // And loud on an unfindable wrapper, which is the failure the command's own
+    // guard owns: an unset CLAUDE_PROJECT_DIR must deny, not exit 127.
+    for (verb, command, expected_code) in [("check", &check, 2), ("record", &record, 1)] {
+        for (case, project_dir) in [
+            ("binary absent", Some(repo.path())),
+            ("CLAUDE_PROJECT_DIR unset", None),
+        ] {
+            let unavailable = run(command, project_dir, None);
+            let stderr = String::from_utf8_lossy(&unavailable.stderr);
+            assert_eq!(
+                unavailable.status.code(),
+                Some(expected_code),
+                "unavailable enforcement must not read as passing ({verb}, {case}); stderr: {stderr}"
+            );
+            assert!(
+                stderr.contains("ENFORCEMENT UNAVAILABLE"),
+                "unavailable enforcement must be explicit, not silent ({verb}, {case}); stderr: {stderr}"
+            );
+        }
     }
 }
 

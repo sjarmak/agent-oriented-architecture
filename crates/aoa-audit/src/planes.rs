@@ -81,17 +81,38 @@ fn has_enforce_hook(settings: &Value, event: &str, verb: &str) -> bool {
         .any(|command| is_enforce_command(command, verb))
 }
 
+/// The repo-relative wrapper path `aoa observe --enforce` writes into every hook
+/// command it installs.
+///
+/// The whole path is matched, never an `aoa-enforce` suffix. A command that
+/// merely ends in those characters — `xaoa-enforce record`,
+/// `./tools/my-aoa-enforce record` — belongs to somebody else, and reporting the
+/// runtime plane present because of it is the exact failure class AOA ships to
+/// detect.
+const ENFORCE_WRAPPER_REL: &str = ".claude/hooks/aoa-enforce";
+
 fn is_enforce_command(command: &str, verb: &str) -> bool {
-    let mut words = command.split_whitespace();
-    let Some(entrypoint) = words.next() else {
+    // Shell punctuation around a word is quoting, not part of it: the installed
+    // command wraps its script in single quotes and its paths in double quotes.
+    let words: Vec<&str> = command
+        .split_whitespace()
+        .map(|word| word.trim_matches(|c| matches!(c, '"' | '\'' | ';')))
+        .collect();
+
+    // Wrapper form: some shell shape runs the installer's own wrapper for this
+    // verb. Matching the path and the verb rather than the whole command line
+    // keeps the audit reading installations written by an older `aoa` — the v2
+    // `sh -c` guard and the plain `<root>/.claude/hooks/aoa-enforce <verb>` it
+    // replaced both satisfy it.
+    if words.iter().any(|word| word.ends_with(ENFORCE_WRAPPER_REL)) {
+        return words.contains(&verb);
+    }
+
+    // v1: `aoa enforce <verb>`, bare or by absolute path. Retired by the
+    // installer on upgrade, but a repo that has not re-run it still enforces.
+    let [entrypoint, rest @ ..] = words.as_slice() else {
         return false;
     };
-    let rest: Vec<&str> = words.collect();
-    // `aoa enforce <verb>` (bare or absolute) and `<path>/aoa-enforce <verb>`
-    // are the two shapes the installer has ever written.
-    if entrypoint.ends_with("aoa-enforce") {
-        return rest.first() == Some(&verb);
-    }
     entrypoint.split('/').next_back() == Some("aoa") && rest == ["enforce", verb]
 }
 
@@ -169,13 +190,67 @@ mod tests {
         assert!(runtime_hook_present(repo.path()));
     }
 
+    /// The installed command guards its own resolution, so the wrapper path is
+    /// no longer the command's first word. The plane check reads the shape the
+    /// installer actually writes today.
+    #[test]
+    fn runtime_plane_accepts_the_guarded_wrapper_form() {
+        let repo = tempfile::tempdir().unwrap();
+        let guarded = |verb: &str| {
+            format!(
+                r#"{{"command":"sh -c 'h=\"${{CLAUDE_PROJECT_DIR:-}}\"/.claude/hooks/aoa-enforce; [ -x \"$h\" ] || {{ echo \"aoa-enforce: ENFORCEMENT UNAVAILABLE\" >&2; exit 2; }}; exec \"$h\" {verb} \"$@\"' aoa-enforce-hook"}}"#
+            )
+        };
+        settings(
+            repo.path(),
+            &format!(
+                r#"{{"hooks":{{
+                    "PostToolUse":[{{"hooks":[{}, {}]}}],
+                    "PreToolUse":[{{"hooks":[{}]}}],
+                    "PostToolUseFailure":[{{"hooks":[{}]}}],
+                    "PermissionDenied":[{{"hooks":[{}]}}]
+                }}}}"#,
+                guarded("record"),
+                guarded("commit"),
+                guarded("check"),
+                guarded("fail"),
+                guarded("deny"),
+            ),
+        );
+        assert!(runtime_hook_present(repo.path()));
+
+        // One verb's command must not satisfy another's, or a settings file
+        // holding five copies of the same hook would read as the full set.
+        assert!(!has_enforce_hook(
+            &serde_json::from_str::<Value>(&format!(
+                r#"{{"hooks":{{"PreToolUse":[{{"hooks":[{}]}}]}}}}"#,
+                guarded("record")
+            ))
+            .unwrap(),
+            "PreToolUse",
+            "check"
+        ));
+    }
+
     /// An unrelated command that merely mentions a verb is not the plane. The
-    /// match is on AOA's entrypoint plus its verb, not on a substring.
+    /// match is on AOA's own wrapper path (or its v1 entrypoint) plus its verb,
+    /// never on a suffix: `aoa-enforce` as a *substring* of another program's
+    /// name made someone else's hook report AOA's plane as installed, which is
+    /// the failure class this crate exists to detect.
     #[test]
     fn a_lookalike_command_does_not_satisfy_the_plane() {
         assert!(!is_enforce_command("echo aoa enforce record", "record"));
         assert!(!is_enforce_command("aoa-enforcer record", "record"));
         assert!(!is_enforce_command("aoa audit record", "record"));
+        assert!(!is_enforce_command("xaoa-enforce record", "record"));
+        assert!(!is_enforce_command(
+            "/opt/evil/notaoa-enforce record",
+            "record"
+        ));
+        assert!(!is_enforce_command(
+            "./tools/my-aoa-enforce record",
+            "record"
+        ));
         assert!(is_enforce_command(
             "/usr/local/bin/aoa enforce record",
             "record"

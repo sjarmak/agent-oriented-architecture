@@ -81,7 +81,9 @@ use crate::output::eprint_human;
 /// mutation and must be preceded by a reproduction (`test.run`) span.
 const MUTATION_TOOLS: [&str; 4] = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
 
-const ENFORCE_HOOK_SET_VERSION: u64 = 2;
+/// Bumped whenever [`hook_command`] changes shape, so a repo carrying the old
+/// spelling reports as behind and re-running the installer retires it.
+const ENFORCE_HOOK_SET_VERSION: u64 = 3;
 const AOA_SETTINGS_KEY: &str = "aoa";
 const HOOK_VERSION_KEY: &str = "enforce_hook_set_version";
 
@@ -98,13 +100,43 @@ const ENFORCE_WRAPPER_SCRIPT: &str = include_str!("enforce_hook.sh");
 /// `aoa enforce <verb>` form enforced only where the binary happened to be on
 /// that environment's PATH. Where it was not, the hooks failed non-blocking and
 /// the plane was inert while still reading as installed — the exact
-/// silently-degraded guard AOA exists to detect. The command now names a
-/// repo-local wrapper that resolves the binary itself and is loud when it
-/// cannot. `CLAUDE_PROJECT_DIR` is the host's repo root; the `.` fallback keeps
-/// the command runnable from the repo root by hand and under a scrubbed
-/// environment, which is how the resolution criterion is checked.
+/// silently-degraded guard AOA exists to detect. The command names a repo-local
+/// wrapper that resolves the binary itself and is loud when it cannot.
+///
+/// Finding that wrapper is the one step the wrapper cannot do for itself, so it
+/// is guarded here. `CLAUDE_PROJECT_DIR` is the host's repo root; an unset value
+/// used to fall back to `.`, which resolved by whatever cwd the host happened to
+/// use and exited 127 everywhere else. The host reads 127 as a non-blocking
+/// warning, so the write proceeded — the same silently-degraded guard, keyed on
+/// cwd instead of PATH. The command now tests the wrapper for executability
+/// first and exits with the verb's own unavailable code when it is not there,
+/// which also covers a deleted or non-executable wrapper. `"$@"` forwards the
+/// operator's extra arguments when the command is run by hand.
 fn hook_command(verb: &str) -> String {
-    format!("\"${{CLAUDE_PROJECT_DIR:-.}}\"/{ENFORCE_WRAPPER_REL} {verb}")
+    let unavailable = unavailable_exit_code(verb);
+    format!(
+        "sh -c 'h=\"${{CLAUDE_PROJECT_DIR:-}}\"/{ENFORCE_WRAPPER_REL}; \
+         [ -x \"$h\" ] || {{ \
+         echo \"aoa-enforce: ENFORCEMENT UNAVAILABLE — no executable hook at $h; \
+         is CLAUDE_PROJECT_DIR set? This hook did NOT enforce.\" >&2; \
+         exit {unavailable}; }}; \
+         exec \"$h\" {verb} \"$@\"' aoa-enforce-hook"
+    )
+}
+
+/// The exit code a hook uses when enforcement could not run at all.
+///
+/// `check` is the only blocking hook, so unavailable enforcement must deny
+/// rather than fall open. The advisory hooks cannot block; they exit non-zero so
+/// the host surfaces the failure instead of recording a span never written. The
+/// installed wrapper makes the same split for a missing binary, and the two must
+/// agree or the guard's exit code would depend on which step failed.
+fn unavailable_exit_code(verb: &str) -> i32 {
+    if verb == "check" {
+        BLOCK_EXIT_CODE
+    } else {
+        1
+    }
 }
 
 /// The exit code Claude Code reads as "deny this tool call"; every other
@@ -793,24 +825,41 @@ pub(crate) fn merge_enforce_hooks(mut settings: Value) -> Result<Value> {
     Ok(settings)
 }
 
-/// Drop the hook-set-1 commands (`aoa enforce <verb>`) this installer wrote.
+/// The verbs this installer registers a hook for.
+const ENFORCE_VERBS: [&str; 5] = ["record", "check", "commit", "fail", "deny"];
+
+/// Every command string this installer has written for `verb` and since
+/// superseded.
+///
+/// Hook set 1 ran a bare `aoa`, which enforced only where the binary happened to
+/// be on the host's PATH. Hook set 2 named the wrapper through a `.`-defaulted
+/// `CLAUDE_PROJECT_DIR`, which resolved by whatever cwd the host used and exited
+/// 127 — a non-blocking warning — from anywhere else. Both are kept here rather
+/// than deleted alongside the code that wrote them: a repo installed by an older
+/// `aoa` still has them registered, and they are removable only by the exact
+/// string that put them there.
+fn superseded_hook_commands(verb: &str) -> [String; 2] {
+    [
+        format!("aoa enforce {verb}"),
+        format!("\"${{CLAUDE_PROJECT_DIR:-.}}\"/{ENFORCE_WRAPPER_REL} {verb}"),
+    ]
+}
+
+/// Drop the superseded commands this installer wrote in an earlier hook set.
 ///
 /// The merge is otherwise purely additive, which is right for hooks it does not
 /// own but wrong for its own superseded ones: leaving them registered means the
-/// host keeps running the bare command beside the wrapper, so every tool call
-/// still emits the resolution failure the wrapper exists to end, and any repo
-/// where `aoa` *is* on PATH records two spans per event. Only the exact command
-/// strings this installer has written are removed; anything else an operator
-/// added is left alone. Groups emptied by the removal go with them, so a re-run
-/// stays byte-stable.
+/// host keeps running the old command beside the current one, so every tool call
+/// still emits the failure the current form exists to end, and any repo where
+/// the old form *does* resolve records two spans per event. Only the exact
+/// command strings this installer has written are removed; anything else an
+/// operator added is left alone. Groups emptied by the removal go with them, so
+/// a re-run stays byte-stable.
 fn retire_legacy_hooks(hooks: &mut Map<String, Value>) {
-    const LEGACY_COMMANDS: [&str; 5] = [
-        "aoa enforce record",
-        "aoa enforce check",
-        "aoa enforce commit",
-        "aoa enforce fail",
-        "aoa enforce deny",
-    ];
+    let legacy: Vec<String> = ENFORCE_VERBS
+        .iter()
+        .flat_map(|verb| superseded_hook_commands(verb))
+        .collect();
     for groups in hooks.values_mut() {
         let Some(groups) = groups.as_array_mut() else {
             continue;
@@ -821,7 +870,7 @@ fn retire_legacy_hooks(hooks: &mut Map<String, Value>) {
             };
             entries.retain(|entry| {
                 let command = entry.get("command").and_then(Value::as_str);
-                !command.is_some_and(|command| LEGACY_COMMANDS.contains(&command))
+                !command.is_some_and(|command| legacy.iter().any(|old| old == command))
             });
         }
         groups.retain(|group| {
@@ -1475,38 +1524,50 @@ mod tests {
         );
     }
 
-    /// Upgrading a hook-set-1 install must retire the bare commands, not sit
-    /// beside them. Left registered they keep failing to resolve on every tool
-    /// call — the error wall this change removes — and double every span in the
-    /// repos where they do resolve.
+    /// Upgrading from any earlier hook set must retire that set's commands, not
+    /// sit beside them. Left registered, a superseded command keeps failing the
+    /// way its replacement exists to stop — v1's bare `aoa` off PATH, v2's
+    /// cwd-relative wrapper from any other directory — and doubles every span in
+    /// the repos where it does resolve.
     #[test]
-    fn upgrading_retires_the_bare_command_hook_set() {
-        let installed_v1 = json!({
-            "aoa": { "enforce_hook_set_version": 1 },
-            "hooks": {
-                "PostToolUse": [
-                    { "matcher": "Bash", "hooks": [{ "type": "command", "command": "aoa enforce record" }] },
-                    { "matcher": mutation_tool_matcher(), "hooks": [{ "type": "command", "command": "aoa enforce commit" }] },
-                ],
-                "PreToolUse": [
-                    { "matcher": mutation_tool_matcher(), "hooks": [{ "type": "command", "command": "aoa enforce check" }] },
-                ],
-            }
-        });
-        let upgraded = merge_enforce_hooks(installed_v1).expect("upgrade from hook set 1");
+    fn upgrading_retires_every_superseded_hook_set() {
+        // Drawn from the retirement list itself, so a shape added there without
+        // being retired — or retired without being listed — fails here.
+        for (index, version) in (1u64..)
+            .enumerate()
+            .take(superseded_hook_commands("").len())
+        {
+            let command = |verb: &str| superseded_hook_commands(verb)[index].clone();
+            let installed = json!({
+                "aoa": { "enforce_hook_set_version": version },
+                "hooks": {
+                    "PostToolUse": [
+                        { "matcher": "Bash", "hooks": [{ "type": "command", "command": command("record") }] },
+                        { "matcher": mutation_tool_matcher(), "hooks": [{ "type": "command", "command": command("commit") }] },
+                    ],
+                    "PreToolUse": [
+                        { "matcher": mutation_tool_matcher(), "hooks": [{ "type": "command", "command": command("check") }] },
+                    ],
+                }
+            });
+            let upgraded =
+                merge_enforce_hooks(installed).expect("upgrade from an earlier hook set");
 
-        let rendered = serde_json::to_string(&upgraded).unwrap();
-        assert!(
-            !rendered.contains("\"aoa enforce"),
-            "no bare command may survive the upgrade: {rendered}"
-        );
-        assert_eq!(upgraded["aoa"][HOOK_VERSION_KEY], ENFORCE_HOOK_SET_VERSION);
-        // Exactly one entry per event/matcher pair: retired, then reinstalled.
-        assert_eq!(
-            upgraded["hooks"]["PostToolUse"].as_array().unwrap().len(),
-            2
-        );
-        assert_eq!(upgraded["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
+            let rendered = serde_json::to_string(&upgraded).unwrap();
+            for verb in ENFORCE_VERBS {
+                assert!(
+                    !rendered.contains(&serde_json::to_string(&command(verb)).unwrap()),
+                    "no hook-set-{version} command may survive the upgrade: {rendered}"
+                );
+            }
+            assert_eq!(upgraded["aoa"][HOOK_VERSION_KEY], ENFORCE_HOOK_SET_VERSION);
+            // Exactly one entry per event/matcher pair: retired, then reinstalled.
+            assert_eq!(
+                upgraded["hooks"]["PostToolUse"].as_array().unwrap().len(),
+                2
+            );
+            assert_eq!(upgraded["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
+        }
     }
 
     /// Retiring must not reach past the commands this installer wrote, and a
