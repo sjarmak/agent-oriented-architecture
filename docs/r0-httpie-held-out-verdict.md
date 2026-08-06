@@ -17,7 +17,8 @@ not select tasks or repositories after outcomes exist. It is not replaced.
 ## Provenance and chronology
 
 The preserved run is at
-`/home/ds/projects/codeprobe/runs/r0-campaign/quarantine-20260804-pre-confirmatory/httpie-seed1-expA-baseline`.
+`quarantine-20260804-pre-confirmatory/httpie-seed1-expA-baseline`, inside the
+`r0-campaign` run directory.
 Its directory name and former path, recorded in the adjacent `PROVENANCE.md`,
 identify repository `httpie`, seed 1, experiment A, configuration `baseline`.
 The read-only checkpoint table also records `config_name=baseline` and
@@ -43,7 +44,7 @@ quarantine on August 4.
 
 The current corpus is fixed to baseline commit
 `5b604c37c6c67e18e7c3e9aee6c88a8c22b98345` and recorded in
-`/home/ds/projects/codeprobe/runs/r0-campaign/httpie/mine.json`, whose mtime is
+the `r0-campaign` run directory's `httpie/mine.json`, whose mtime is
 2026-08-04 07:26:49 EDT. The following seven current tasks reproduce the July
 question and target. The five dependency-analysis identifiers changed when
 the miner added the file-read evidence requirement; their question bodies are
@@ -60,8 +61,8 @@ otherwise the same. The two import-chain identifiers are unchanged.
 | `comprehension-import_chain-002-474b5bdb` | `comprehension-import_chain-002-474b5bdb` | `httpie.compat` |
 
 The current instruction sources are under
-`/home/ds/projects/r0-repos/httpie/.codeprobe/tasks/<August-task-id>/instruction.md`;
-the July sources are the corresponding
+`.codeprobe/tasks/<August-task-id>/instruction.md` in the HTTPie baseline
+checkout; the July sources are the corresponding
 `<July-task-id>/instruction.resolved.md` files in the quarantine. The seven
 current tasks without a July scored record are import-chain questions for
 `httpie.utils` and `httpie.encoding`, plus five transitive-dependency

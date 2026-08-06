@@ -110,10 +110,9 @@ with two arms and `K=3`. Models, conventions, `min_holdout=7`,
 `min_effect_size=0.0`, and the alternative repository/harness weights of
 `0.75/1.25` remain unchanged.
 
-Preparation used the existing scripts under
-`/home/ds/projects/codeprobe/runs/r0-campaign/bin/`. Migration was completed
-before the current corpus was mined and used mechanical source-only
-transforms. That ordering preserved operator blindness when this preparation
+Preparation used the existing scripts under `bin/` in the `r0-campaign` run
+directory that codeprobe produced. Migration was completed before the current
+corpus was mined and used mechanical source-only transforms. That ordering preserved operator blindness when this preparation
 was written, but the subsequent halted run described in the 2026-08-05
 correction exposed every admitted sqlparse and websockets subject.
 For HTTPie, the migrated diff contains no answer-derived change, but operator
@@ -134,8 +133,8 @@ scorer path that emits `scorer_family=dual_composite`, has consensus from
 enrichment. The shipped and quarantined counts above come from each
 repository's `mine.json` consensus record.
 
-For each repository, the following offline artifacts are present under
-`/home/ds/projects/codeprobe/runs/r0-campaign/<repo>/`:
+For each repository, the following offline artifacts are present under its own
+`<repo>/` subdirectory of the `r0-campaign` run directory:
 
 - `prep.json` and `mine.json`
 - `index.scip` and `index.aoa.json`
@@ -182,10 +181,11 @@ transcription error, not as authorization to retune the preregistered rate.
 The original preparation did not touch the five completed repositories or their
 campaign evidence. The later halted confirmatory run wrote the sqlparse and
 websockets residue enumerated in the 2026-08-05 correction. It did not modify
-the protected file, which remains:
+the protected file, which remains, named relative to the codeprobe runs
+directory that holds every R0 run:
 
 ```text
-/home/ds/projects/codeprobe/runs/r0-file-read-seed1/out/falsification.k3.json
+r0-file-read-seed1/out/falsification.k3.json
 SHA-256 8c5471a321c5e0cb9fbc570969eaaa1df60f5e1c0d44fe1cb17f66bc37992c1b
 ```
 
@@ -204,10 +204,11 @@ and include seven `agent_output.txt` files and seven `scoring.json` files. They
 therefore do not contradict the narrower claim that this 2026-08-04 chain ran
 no agents, but they do mean the original seed scaffolding was not wholly empty.
 
-The pre-existing directory was preserved, not deleted, at:
+The pre-existing directory was preserved, not deleted, inside the `r0-campaign`
+run directory at:
 
 ```text
-/home/ds/projects/codeprobe/runs/r0-campaign/quarantine-20260804-pre-confirmatory/httpie-seed1-expA-baseline
+quarantine-20260804-pre-confirmatory/httpie-seed1-expA-baseline
 ```
 
 The quarantine's `PROVENANCE.md` records its source, timestamps, and inventory.

@@ -17,6 +17,21 @@ by AOA into the falsification gate. The gate's verdict —
 > `inconclusive` (the K≥3 determinism precondition) — that is a documented
 > outcome, not a bug.
 
+## Before you run: where codeprobe lives
+
+Every command below reaches into the codeprobe checkout, which is a separate
+project rather than a directory of this repository. Point `CODEPROBE_ROOT` at
+your clone once and the command blocks run unchanged:
+
+```bash
+export CODEPROBE_ROOT="${CODEPROBE_ROOT:-$HOME/projects/codeprobe}"
+```
+
+The default assumes `~/projects/codeprobe`; export a different value before the
+first command if your clone is elsewhere. `$CODEPROBE_ROOT/runs` is where
+codeprobe writes campaign output, so the run directories the later steps read
+(`$CODEPROBE_ROOT/runs/r0`, and its `tasks/` and `reports/`) follow from it.
+
 ## The two deltas
 
 | Delta | Codeprobe arm | What is varied | Fixed | Held-out source |
@@ -140,7 +155,7 @@ amendment. A rerun that also includes the later `9e38d21` timeout change must
 name that choice explicitly; it must not silently follow codeprobe `main`.
 
 ```bash
-cd /home/ds/projects/codeprobe
+cd "$CODEPROBE_ROOT"
 codeprobe experiment init runs --name r0   # creates runs/r0/experiment.json
 # add-config sets HARNESS knobs only (agent/model/mcp/tools/instruction/preamble).
 # The repo dimension is the repo STATE the tasks run against (see the treatment
@@ -356,7 +371,7 @@ tasks to survive as measured identical pairs:
 
 ```bash
 aoa eval experiment \
-  --tasks /home/ds/projects/codeprobe/runs/r0/tasks \
+  --tasks "$CODEPROBE_ROOT/runs/r0/tasks" \
   --manifest manifest.seed-1.json \
   --out preflight/falsify_input.json \
   --min-pair-yield 0.8
@@ -373,9 +388,9 @@ falsification threshold, and does not alter the R0 verdict.
 
 ```bash
 scripts/r0_experiment.sh \
-  --tasks    /home/ds/projects/codeprobe/runs/r0/tasks \
+  --tasks    "$CODEPROBE_ROOT/runs/r0/tasks" \
   --manifest manifest.json \
-  --aggregate /home/ds/projects/codeprobe/runs/r0/reports/aggregate.json \
+  --aggregate "$CODEPROBE_ROOT/runs/r0/reports/aggregate.json" \
   --out      out/
 # → out/falsify_input.json, out/falsify_input.observations.jsonl,
 #   out/falsify_input.build.json, out/falsification.json

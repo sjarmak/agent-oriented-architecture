@@ -120,12 +120,48 @@ fn void_scored_trials_remain_exposed_and_report_their_provenance() {
     assert_eq!(provenance.unscored_trials, 0);
 }
 
+/// Names the R0 campaign run directory the test below scans.
+///
+/// The campaign is an input this repository consumes rather than ships: it is
+/// produced by codeprobe, weighs far more than a fixture, and lives wherever
+/// the operator ran it. Pointing at it by variable keeps that machine-specific
+/// location out of the repository without giving up the assertions.
+const CAMPAIGN_RUNS_ENV: &str = "AOA_R0_CAMPAIGN_RUNS";
+
+/// Resolves the campaign directory, or `None` when the operator has not
+/// pointed at one.
+///
+/// Absence is announced, never silent, and a variable that IS set has to name
+/// a real directory — a typo'd path failing loudly is the whole reason this
+/// does not simply fall back to skipping.
+fn campaign_runs_root() -> Option<PathBuf> {
+    let Some(raw) = std::env::var_os(CAMPAIGN_RUNS_ENV) else {
+        eprintln!(
+            "SKIP real_r0_campaign_matches_documented_exposure_and_held_out_provenance: \
+             {CAMPAIGN_RUNS_ENV} is unset, so the real R0 campaign was not scanned. \
+             Export it with the campaign run directory to exercise this test."
+        );
+        return None;
+    };
+
+    let root = PathBuf::from(raw);
+    assert!(
+        root.is_dir(),
+        "{CAMPAIGN_RUNS_ENV} names {}, which is not a directory",
+        root.display()
+    );
+    Some(root)
+}
+
 #[test]
 fn real_r0_campaign_matches_documented_exposure_and_held_out_provenance() {
-    const RUNS_ROOT: &str = "/home/ds/projects/codeprobe/runs/r0-campaign";
     const HTTPIE_BASELINE: &str = "5b604c37c6c67e18e7c3e9aee6c88a8c22b98345";
 
-    let scan = scan_exposure(Path::new(RUNS_ROOT)).unwrap();
+    let Some(runs_root) = campaign_runs_root() else {
+        return;
+    };
+
+    let scan = scan_exposure(&runs_root).unwrap();
     let repo = scan
         .repos
         .iter()
