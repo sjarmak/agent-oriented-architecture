@@ -1,0 +1,6 @@
+{
+  "repos": [
+    { "repo_id": "sample/divergent", "baseline_commit": "cccccccccccccccccccccccccccccccccccccccc",
+      "total_subjects": 1, "status": "unexposed", "provenance": null }
+  ]
+}

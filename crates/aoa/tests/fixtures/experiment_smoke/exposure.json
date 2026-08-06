@@ -1,0 +1,6 @@
+{
+  "repos": [
+    { "repo_id": "sample/widget", "baseline_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "total_subjects": 1, "status": "unexposed", "provenance": null }
+  ]
+}

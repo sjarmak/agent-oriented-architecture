@@ -185,7 +185,7 @@ fn write_seed_one_manifest(dir: &Path) -> PathBuf {
                 "hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             },
             "confidence": "high",
-            "exposure": "unexposed",
+            "exposure_scan": fixture_path("exposure.json"),
             "calibration_artifact": fixture_path("calibration.json"),
             "repo_arm_config": fixture_path("repo-config.json"),
             "harness_arm_config": fixture_path("harness-config.json"),

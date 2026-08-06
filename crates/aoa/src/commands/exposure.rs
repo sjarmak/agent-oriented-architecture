@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use aoa_gap::ExposureStatus;
 
 use crate::cli::ExposureScanArgs;
@@ -8,6 +8,17 @@ use crate::output::{print_human, print_json};
 
 pub fn scan(args: &ExposureScanArgs) -> Result<i32> {
     let report = aoa_bench::scan_exposure(&args.runs)?;
+    if let Some(path) = &args.out {
+        let bytes = serde_json::to_vec_pretty(&report).with_context(|| {
+            format!(
+                "failed to render the exposure ledger for {}",
+                path.display()
+            )
+        })?;
+        std::fs::write(path, bytes).with_context(|| {
+            format!("failed to write the exposure ledger to {}", path.display())
+        })?;
+    }
     if args.json {
         print_json(&report)?;
     } else {

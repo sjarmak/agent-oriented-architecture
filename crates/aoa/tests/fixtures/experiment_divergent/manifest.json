@@ -8,7 +8,7 @@
       "repo_id": "sample/divergent",
       "repo_commit": { "algorithm": "sha1", "hex": "cccccccccccccccccccccccccccccccccccccccc" },
       "confidence": "high",
-      "exposure": "unexposed",
+      "exposure_scan": "exposure.json",
       "calibration_artifact": "calibration.json",
       "repo_arm_config": "repo-config.json",
       "harness_arm_config": "harness-config.json",

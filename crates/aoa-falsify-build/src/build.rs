@@ -38,6 +38,7 @@ use anyhow::{bail, Context, Result as AnyResult};
 use crate::answer::AnswerContext;
 use crate::error::FalsifyBuildError;
 use crate::evidence::{build_observation, read_artifact, read_calibration, RepoEvidence};
+use crate::exposure::resolve_exposure;
 use crate::manifest::{Manifest, RepoManifest, TaskShape};
 use crate::report::{BuildReport, DroppedRepo, ExcludedTask, RepoBuild};
 use aoa_bench::{
@@ -402,6 +403,18 @@ fn build_repo(
     let native_span = aggregate_provenance(&provenances)
         .with_context(|| format!("repo {}: held-out provenance", repo.repo_id))?;
 
+    // Derived from the persisted ledger, never asserted by the manifest: this is
+    // the anti-leakage check the whole gate rests on, so a ledger that does not
+    // describe this repo at this revision must fail the build rather than resolve
+    // to a votable `Unexposed`. Read here, where the status is about to be stated
+    // — a repo dropped for want of identical pairs states no eligibility facts at
+    // all, and the cheap structural checks above should fail before any IO.
+    let exposure = resolve_exposure(
+        &base_dir.join(&repo.exposure_scan),
+        &repo.repo_id,
+        &repo.repo_commit,
+    )?;
+
     let confidence: Confidence = repo.confidence.into();
     let holdout_size = min_pairs as u32;
     let calibrated = repo_evidence
@@ -413,7 +426,7 @@ fn build_repo(
         confidence,
         native_span,
         calibrated,
-        exposure: repo.exposure.clone(),
+        exposure: exposure.clone(),
     };
     // Reuse the gate's own predicate so the build report's `eligible` flag cannot
     // drift from the eligibility rule `aoa falsify` actually applies.
@@ -434,7 +447,7 @@ fn build_repo(
         native_span,
         confidence,
         calibrated,
-        exposure: repo.exposure.clone(),
+        exposure,
         eligible,
         excluded_tasks,
     };

@@ -79,8 +79,8 @@ Three guardrails make the treatment construct-valid; violating any one
 ## Pipeline
 
 ```
-aoa eval exposure scan --runs runs/r0 --json       # BEFORE admission/live runs; record each repo status
-        │  only status=unexposed may enter the manifest
+aoa eval exposure scan --runs runs/r0 --out exposure.json   # BEFORE admission/live runs
+        │  the manifest points at this ledger; only status=unexposed votes
         ▼
 codeprobe experiment init/add-config + run (≥2 arms, K seeds)   # you run this — needs a live agent
         │  runs/<arm>/<task_id>/scoring.json (dual_composite)
@@ -107,10 +107,15 @@ root. The walk includes active runs and every quarantine subtree and does not
 follow directory symlinks:
 
 ```bash
-aoa eval exposure scan --runs /path/to/codeprobe/runs/r0 --json
+aoa eval exposure scan --runs /path/to/codeprobe/runs/r0 --out exposure.json
 ```
 
-Record each candidate repo's result in the build manifest. Only `unexposed`
+`--out` persists the typed ledger; point the build manifest's `exposure_scan`
+at that file. The builder selects the entry whose `repo_id` matches and whose
+`baseline_commit` identifies the manifest's `repo_commit` (codeprobe records an
+abbreviated `baseline_sha`, so a hex prefix of at least 7 characters counts),
+and derives the status from it — a ledger that lacks the repo, or was scanned at another revision,
+fails the build rather than resolving toward eligibility. Only `unexposed`
 may vote; `partially_exposed` and `exposed` are both ineligible. The scan joins
 `prep.json`'s pinned baseline path/SHA with `mine.json`'s admitted task IDs and
 matches structured question-family/target subjects, not task IDs. This is why
@@ -175,7 +180,7 @@ resolved relative to the manifest file.
       "repo_id": "org/widget",
       "repo_commit": { "algorithm": "sha1", "hex": "0123456789abcdef0123456789abcdef01234567" },
       "confidence": "high",     // operator assertion: SCIP-grade index. REQUIRED — no default.
-      "exposure": "unexposed",  // from the pre-admission exposure scan. REQUIRED — no default.
+      "exposure_scan": "../org-widget/exposure.json",  // ledger from `aoa eval exposure scan --out`. REQUIRED — the status is READ from it, never declared.
       "calibration_artifact": "../org-widget/calibration.json",
       "repo_arm_config": "../org-widget/aoa-migrated-config.json",
       "harness_arm_config": "../org-widget/harness-swap-config.json",
@@ -192,8 +197,8 @@ resolved relative to the manifest file.
 }
 ```
 
-`expected_repo_ids`, `confidence`, `repo_commit`, `exposure`, and all three
-artifact paths are **required**. `expected_repo_ids` pins the pre-registered
+`expected_repo_ids`, `confidence`, `repo_commit`, `exposure_scan`, and all
+three artifact paths are **required**. `expected_repo_ids` pins the pre-registered
 campaign inventory; the command hard-errors before reading evidence when the
 IDs under `repos` are missing, unexpected, or duplicated relative to it.
 Verify
@@ -204,8 +209,9 @@ non-empty `criteria`, and `conclusion`. `native_span` is **derived** from each
 task's mined oracle — never declared. Only a high-confidence repo with certified
 held-out provenance (`external` or `native_composed`), backed by a complete
 artifact whose conclusion is `calibrated`, may vote.
-The repo must also carry the pre-admission `unexposed` result; partial or full
-exposure excludes it regardless of the other three facts.
+The repo's exposure is read from the `exposure_scan` ledger, not asserted:
+only `unexposed` votes, and partial or full exposure excludes it regardless of
+the other three facts.
 
 **R11 scope note for answer-shaped tasks (pre-registered 2026-07-05, before
 any campaign arm ran).** The calibration artifact attests *scoring validity*.

@@ -1,0 +1,6 @@
+{
+  "repos": [
+    { "repo_id": "sample/answers", "baseline_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "total_subjects": 1, "status": "unexposed", "provenance": null }
+  ]
+}

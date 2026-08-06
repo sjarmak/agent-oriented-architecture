@@ -11,7 +11,6 @@ use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
 use aoa_bench::GitObjectId;
-use aoa_gap::ExposureStatus;
 use aoa_metrics::Confidence;
 
 /// The whole build manifest.
@@ -124,9 +123,11 @@ pub struct RepoManifest {
     pub(crate) confidence: ConfidenceDecl,
     /// Typed, content-addressed evidence backing calibration eligibility.
     pub(crate) calibration_artifact: PathBuf,
-    /// Pre-admission result from `aoa eval exposure scan`. REQUIRED: absence
-    /// must never default toward eligibility.
-    pub(crate) exposure: ExposureStatus,
+    /// Persisted ledger written by `aoa eval exposure scan --out`, resolved
+    /// relative to the manifest. REQUIRED: the builder derives this repo's
+    /// exposure from the artifact, matched by `repo_id` and `repo_commit`, so
+    /// that an operator assertion can never stand in for a measurement.
+    pub(crate) exposure_scan: PathBuf,
     /// Exact configuration bytes used by every repo-arm replication.
     pub(crate) repo_arm_config: PathBuf,
     /// Exact configuration bytes used by every harness-arm replication.
@@ -191,7 +192,7 @@ impl From<ConfidenceDecl> for Confidence {
 mod tests {
     use super::*;
 
-    const REPO_PREFIX: &str = r#"{"repo_id":"r","confidence":"high","exposure":"unexposed",
+    const REPO_PREFIX: &str = r#"{"repo_id":"r","confidence":"high","exposure_scan":"exposure.json",
         "repo_commit":{"algorithm":"sha1","hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
         "calibration_artifact":"calibration.json","repo_arm_config":"repo.json",
         "harness_arm_config":"harness.json","#;
@@ -329,6 +330,33 @@ mod tests {
             let error = serde_json::from_str::<Manifest>(&json).unwrap_err();
             assert!(error.to_string().contains(key), "got: {error}");
         }
+    }
+
+    #[test]
+    fn the_legacy_hand_typed_exposure_key_is_rejected() {
+        // The word used to BE the verdict. A manifest that still carries it must
+        // fail loud rather than have it silently ignored while the ledger path is
+        // absent — `deny_unknown_fields` names `exposure_scan` in the message.
+        let json = format!(
+            r#"{{"k_runs":3,"min_holdout_size":1,"expected_repo_ids":["r"],"repos":[{REPO_PREFIX}
+            "exposure":"unexposed","runs":[]}}]}}"#
+        );
+        let error = serde_json::from_str::<Manifest>(&json).unwrap_err();
+        assert!(
+            error.to_string().contains("unknown field `exposure`"),
+            "got: {error}"
+        );
+    }
+
+    #[test]
+    fn an_absent_exposure_ledger_path_is_rejected() {
+        let json = r#"{"k_runs":3,"min_holdout_size":1,"expected_repo_ids":["r"],"repos":[
+            {"repo_id":"r","confidence":"high",
+            "repo_commit":{"algorithm":"sha1","hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+            "calibration_artifact":"calibration.json","repo_arm_config":"repo.json",
+            "harness_arm_config":"harness.json","runs":[]}]}"#;
+        let error = serde_json::from_str::<Manifest>(json).unwrap_err();
+        assert!(error.to_string().contains("exposure_scan"), "got: {error}");
     }
 
     #[test]

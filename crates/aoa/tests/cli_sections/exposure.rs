@@ -130,3 +130,57 @@ fn exposure_scan_human_output_explains_the_causing_run_and_scores() {
     assert!(stdout.contains("scores: 0.0=1; unscored=0"));
     assert!(stdout.contains("mtime (unix ms):"));
 }
+
+#[test]
+fn exposure_scan_out_persists_the_ledger_the_build_manifest_consumes() {
+    let temp = tempfile::tempdir().unwrap();
+    let runs = temp.path().join("runs");
+    let repo = temp.path().join("repo");
+    let campaign_repo = runs.join("sqlparse");
+    std::fs::create_dir_all(&campaign_repo).unwrap();
+    std::fs::write(
+        campaign_repo.join("prep.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "repo": "sqlparse",
+            "baseline_path": repo,
+            "baseline_sha": "f80af6a4"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        campaign_repo.join("mine.json"),
+        r#"{"repo":"sqlparse","task_ids":["current-a"]}"#,
+    )
+    .unwrap();
+    let task = repo.join(".codeprobe/tasks/current-a");
+    std::fs::create_dir_all(&task).unwrap();
+    std::fs::write(
+        task.join("instruction.md"),
+        "# import_chain: sqlparse.filters\n\n**Repository:** sqlparse\n",
+    )
+    .unwrap();
+    let ledger = temp.path().join("exposure.json");
+
+    let output = aoa()
+        .args(["eval", "exposure", "scan", "--runs"])
+        .arg(&runs)
+        .arg("--out")
+        .arg(&ledger)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // The persisted ledger is the artifact `RepoManifest.exposure_scan` points
+    // at, so it must round-trip as the typed scan rather than as display text.
+    let persisted: aoa_bench::ExposureScan =
+        serde_json::from_slice(&std::fs::read(&ledger).unwrap()).unwrap();
+    assert_eq!(persisted.repos.len(), 1);
+    assert_eq!(persisted.repos[0].repo_id, "sqlparse");
+    assert_eq!(persisted.repos[0].baseline_commit, "f80af6a4");
+    assert!(persisted.repos[0].status.is_unexposed());
+}

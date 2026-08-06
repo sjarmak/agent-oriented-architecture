@@ -257,6 +257,12 @@ pub struct ExposureScanArgs {
     #[arg(long, value_name = "DIR")]
     pub runs: PathBuf,
 
+    /// Persist the typed ledger here. This is the artifact a build manifest's
+    /// `exposure_scan` points at, so the gate reads a measured verdict rather
+    /// than a transcribed one.
+    #[arg(long, value_name = "FILE")]
+    pub out: Option<PathBuf>,
+
     /// Emit the structured JSON rendering instead of human text.
     #[arg(long)]
     pub json: bool,

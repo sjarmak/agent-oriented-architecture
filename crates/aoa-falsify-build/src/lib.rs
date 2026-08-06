@@ -5,6 +5,7 @@ mod answer;
 mod build;
 mod error;
 mod evidence;
+mod exposure;
 mod manifest;
 mod report;
 

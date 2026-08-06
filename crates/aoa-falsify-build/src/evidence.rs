@@ -16,7 +16,7 @@ use crate::answer::AnswerContext;
 use crate::manifest::{RepoManifest, TaskShape};
 
 /// Per-artifact and aggregate task-evidence read bound.
-const MAX_EVIDENCE_BYTES: u64 = 128 * 1024 * 1024;
+pub(crate) const MAX_EVIDENCE_BYTES: u64 = 128 * 1024 * 1024;
 
 pub(crate) struct LoadedArtifact<T> {
     pub(crate) digest: Option<Sha256Digest>,
