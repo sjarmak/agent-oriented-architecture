@@ -294,8 +294,8 @@ struct Probe {
     kind: FindingKind,
     /// The corpus count, or `None` for a punch-list-only probe — one that backs
     /// no external-outcome gating candidate and so is deliberately absent from
-    /// [`structure_measurements`]. Structural, not prose: the omission is the
-    /// probe's own declaration.
+    /// [`structure_measurements`]. The omission is structural, not prose: the
+    /// probe declares it here.
     measure: Option<MeasureFn>,
     /// The punch item, absent when the probe abstains (a clean repo, or one it
     /// cannot assess).
@@ -438,7 +438,7 @@ pub enum StructureMeasure {
 /// [`StructureMeasure`]). `size_outlier_k` is the audit's module-size multiplier.
 ///
 /// Only the measures that back an external-outcome gating candidate are reported:
-/// a punch-list-only probe declares itself by carrying no [`Probe::measure`].
+/// a punch-list-only probe declares itself by carrying no measure at all.
 pub fn structure_measurements(
     repo: &Path,
     size_outlier_k: f64,
@@ -1587,8 +1587,8 @@ mod tests {
         })
     }
 
-    /// Both registers are rendered from the one [`PROBES`] list, so a probe can
-    /// never be named twice or reported under a kind it does not own.
+    /// Both registers key off [`Probe::kind`], so two probes sharing a kind would
+    /// silently collide in the corpus map.
     #[test]
     fn every_probe_owns_exactly_one_finding_kind() {
         let kinds: BTreeSet<FindingKind> = PROBES.iter().map(|p| p.kind).collect();
@@ -1596,8 +1596,7 @@ mod tests {
     }
 
     /// The corpus register reports exactly the measure-bearing probes — nothing a
-    /// probe did not declare, and nothing silently dropped (the old two-list
-    /// failure mode, which read downstream as "no data" rather than as a bug).
+    /// probe did not declare, and nothing silently dropped.
     #[test]
     fn structure_measurements_reports_every_measure_bearing_probe() {
         let dir = tmp("measure-register");
