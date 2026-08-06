@@ -86,11 +86,11 @@ const AOA_SETTINGS_KEY: &str = "aoa";
 const HOOK_VERSION_KEY: &str = "enforce_hook_set_version";
 
 /// The wrapper every installed hook runs, relative to the repository root.
-pub(crate) const ENFORCE_WRAPPER_REL: &str = ".claude/hooks/aoa-enforce";
+const ENFORCE_WRAPPER_REL: &str = ".claude/hooks/aoa-enforce";
 
 /// The wrapper's contents, held here so the installer and the drift test read
 /// one source rather than two copies that can disagree.
-pub(crate) const ENFORCE_WRAPPER_SCRIPT: &str = include_str!("enforce_hook.sh");
+const ENFORCE_WRAPPER_SCRIPT: &str = include_str!("enforce_hook.sh");
 
 /// The command Claude Code runs for one enforce `verb`.
 ///
@@ -975,7 +975,7 @@ pub(crate) fn install_enforce_hooks(repo: &Path) -> Result<PathBuf> {
 /// Installing the settings without the wrapper would register hooks pointing at
 /// a file that does not exist, which is the failure this whole path exists to
 /// remove; the two are written together or the install fails.
-pub(crate) fn install_enforce_wrapper(repo: &Path) -> Result<PathBuf> {
+fn install_enforce_wrapper(repo: &Path) -> Result<()> {
     let wrapper_path = repo.join(ENFORCE_WRAPPER_REL);
     if let Some(parent) = wrapper_path.parent() {
         std::fs::create_dir_all(parent)
@@ -989,7 +989,7 @@ pub(crate) fn install_enforce_wrapper(repo: &Path) -> Result<PathBuf> {
         std::fs::set_permissions(&wrapper_path, std::fs::Permissions::from_mode(0o755))
             .with_context(|| format!("failed to make {} executable", wrapper_path.display()))?;
     }
-    Ok(wrapper_path)
+    Ok(())
 }
 
 /// Ensure `hooks[event]` contains a matcher group running `command`.
