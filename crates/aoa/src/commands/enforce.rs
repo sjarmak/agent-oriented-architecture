@@ -266,8 +266,15 @@ fn run_outcome(event: &HookEvent, span_type: SpanType) -> Result<i32> {
     if !MUTATION_TOOLS.contains(&event.tool_name.as_str()) {
         return Ok(0);
     }
-    if write_target(event).is_some() {
+    if let Some(raw) = write_target(event) {
         let base = resolve_base(event)?;
+        // A write landing outside this repository is not this repository's
+        // history. Recording it would put a foreign path in the live log the
+        // gate reads and the held-out corpus mines, and would show up on the
+        // liveness surface as this plane enforcing something.
+        if matches!(write_scope(&base, raw)?, WriteScope::Outside) {
+            return Ok(0);
+        }
         record_write_span(&base, event, span_type)?;
     }
     Ok(0)
@@ -320,6 +327,16 @@ fn run_record(event: &HookEvent) -> Result<i32> {
 /// (R7). Protected-path and generated-artifact are unconditional; the
 /// reproduction gate is skippable by policy. Protected-path is checked first —
 /// "may not write at all" outranks "edit the source instead".
+///
+/// Every one of those policies is about *this* repository, so the target's
+/// scope is settled before any of them runs. The hook matcher cannot express
+/// paths — it fires on `Write|Edit|MultiEdit|NotebookEdit` whatever they target
+/// — so if this function did not discriminate, the gate's path domain would be
+/// the whole machine: a session in this checkout could not write a note, a
+/// scratch file, or a report anywhere else until it ran a test here
+/// (aoa-7g14y.1). An over-broad gate is worse than a narrow one, because the
+/// natural workaround is to route the write through Bash, which defeats the
+/// gate for in-repo paths too.
 fn run_check(event: &HookEvent) -> Result<i32> {
     if !MUTATION_TOOLS.contains(&event.tool_name.as_str()) {
         // Not a guarded mutation; nothing to gate.
@@ -327,10 +344,19 @@ fn run_check(event: &HookEvent) -> Result<i32> {
     }
 
     let base = resolve_base(event)?;
+    let targets = match write_target(event)
+        .map(|raw| write_scope(&base, raw))
+        .transpose()?
+    {
+        // Out of scope entirely: allowed without consulting the policy, without
+        // the reproduction gate, and — deliberately — without a span. Asking
+        // this gate about a foreign path must not manufacture the `.aoa/traces`
+        // tree whose contents are read as evidence that this plane runs.
+        Some(WriteScope::Outside) => return Ok(0),
+        Some(WriteScope::Inside(targets)) => Some(targets),
+        None => None,
+    };
     let policy = load_policy(&base)?;
-    let targets = write_target(event)
-        .map(|raw| policy_write_targets(&base, raw))
-        .transpose()?;
 
     if let (Some(policy), Some(targets)) = (&policy, targets.as_deref()) {
         let compiled = policy.compile()?;
@@ -398,27 +424,76 @@ fn write_target(event: &HookEvent) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-/// Return every repository-relative spelling relevant to path policy: the
-/// lexical hook spelling and the symlink-resolved destination. Matching both
-/// prevents an in-repository symlink from hiding either a protected alias or a
-/// protected destination.
-fn policy_write_targets(base: &Path, raw: &str) -> Result<Vec<String>> {
-    let resolved = normalize_write_target(base, raw)?;
-    let lexical = normalize_lexically(&hook_candidate(base, Path::new(raw)))?;
-    let Some(lexical) = lexical
-        .strip_prefix(base)
-        .ok()
-        .filter(|path| !path.as_os_str().is_empty())
-        .and_then(Path::to_str)
-    else {
-        return Ok(vec![resolved]);
-    };
+/// Whether a pending write lands inside the enforcing repository, and if so
+/// under which repository-relative spellings the path policies must match it.
+#[derive(Debug, PartialEq, Eq)]
+enum WriteScope {
+    /// Inside: every repository-relative spelling relevant to path policy — the
+    /// lexical hook spelling and the symlink-resolved destination. Matching
+    /// both prevents an in-repository symlink from hiding either a protected
+    /// alias or a protected destination.
+    Inside(Vec<String>),
+    /// Outside: neither spelling lands in the repository, so no policy this
+    /// repository declares has anything to say about the write.
+    Outside,
+}
 
-    if lexical == resolved {
-        Ok(vec![resolved])
-    } else {
-        Ok(vec![lexical.to_string(), resolved])
+/// Classify a hook target against the canonical repository root.
+///
+/// A target counts as inside when *either* resolution lands under `base`, and
+/// the asymmetry is load-bearing in both directions:
+///
+/// - Resolved-inside catches the `../`-relative and symlinked spellings that
+///   walk back into the repository. Containment has to be decided on the
+///   resolved path or the check is a string comparison anyone can spell around.
+/// - Lexical-inside keeps a repository-local symlink that points out of the
+///   tree in scope. Deciding on the resolved path alone would turn such an
+///   alias into a way to name any protected path and have the gate wave it
+///   through, which is the R5 alias hole the two-spelling match exists to
+///   close.
+///
+/// Only a target outside by both readings is out of scope. Resolution failures
+/// other than containment still propagate, so `check` keeps denying on them.
+fn write_scope(base: &Path, raw: &str) -> Result<WriteScope> {
+    if raw.is_empty() {
+        return Err(anyhow!("hook write target must not be empty"));
     }
+    let candidate = hook_candidate(base, Path::new(raw));
+    let lexical = contained(base, normalize_lexically(&candidate))?;
+    let resolved = contained(base, resolve_canonicalizing(&candidate))?;
+
+    Ok(match (lexical, resolved) {
+        (None, None) => WriteScope::Outside,
+        (Some(lexical), Some(resolved)) if lexical == resolved => {
+            WriteScope::Inside(vec![resolved])
+        }
+        (Some(lexical), Some(resolved)) => WriteScope::Inside(vec![lexical, resolved]),
+        (Some(only), None) | (None, Some(only)) => WriteScope::Inside(vec![only]),
+    })
+}
+
+/// The repository-relative spelling of one resolution of a hook target, or
+/// `None` when that resolution lands outside the repository.
+///
+/// [`PathTrustError::EscapesRoot`] — a `..` chain walking off the filesystem
+/// root — is outside by construction, not a failure. Every other error is a
+/// real failure and propagates.
+fn contained(base: &Path, resolution: Result<PathBuf, PathTrustError>) -> Result<Option<String>> {
+    let path = match resolution {
+        Ok(path) => path,
+        Err(PathTrustError::EscapesRoot { .. }) => return Ok(None),
+        Err(other) => return Err(anyhow!(other)),
+    };
+    let Ok(relative) = path.strip_prefix(base) else {
+        return Ok(None);
+    };
+    if relative.as_os_str().is_empty() {
+        return Err(anyhow!("hook write target resolves to repository root"));
+    }
+    relative
+        .to_str()
+        .map(|relative| Some(relative.to_owned()))
+        .ok_or_else(|| anyhow!("resolved hook write target is not UTF-8: {relative:?}"))
 }
 
 /// Where a hook target points before any resolution: absolute spellings stand
@@ -429,43 +504,6 @@ fn hook_candidate(base: &Path, raw: &Path) -> PathBuf {
     } else {
         base.join(raw)
     }
-}
-
-/// Resolve a hook target against the canonical repository root and return the
-/// repository-relative spelling consumed by policy globs.
-///
-/// The resolution rule for a not-yet-existing target belongs to
-/// [`resolve_canonicalizing`]; what this adds is the repository containment
-/// check on its result, which rejects both traversal and symlink escapes.
-fn normalize_write_target(base: &Path, raw: &str) -> Result<String> {
-    if raw.is_empty() {
-        return Err(anyhow!("hook write target must not be empty"));
-    }
-
-    let raw = Path::new(raw);
-    let candidate = hook_candidate(base, raw);
-    let resolved = resolve_canonicalizing(&candidate).map_err(|source| match source {
-        PathTrustError::EscapesRoot { .. } => outside_repository(base, raw),
-        other => anyhow!(other),
-    })?;
-
-    let relative = resolved
-        .strip_prefix(base)
-        .map_err(|_| outside_repository(base, raw))?;
-    if relative.as_os_str().is_empty() {
-        return Err(anyhow!("hook write target resolves to repository root"));
-    }
-    relative
-        .to_str()
-        .map(str::to_owned)
-        .ok_or_else(|| anyhow!("resolved hook write target is not UTF-8: {relative:?}"))
-}
-
-fn outside_repository(base: &Path, raw: &Path) -> anyhow::Error {
-    anyhow!(
-        "hook write target resolves outside repository {}: {raw:?}",
-        base.display()
-    )
 }
 
 /// Load `<base>/aoa-policy.yaml` if it exists, failing loud on a malformed file
@@ -1141,8 +1179,12 @@ mod tests {
         assert_eq!(recorded_span_type(&event("Write", None)), None);
     }
 
+    fn scope(base: &Path, raw: &str) -> WriteScope {
+        write_scope(base, raw).expect("supported hook target")
+    }
+
     #[test]
-    fn write_target_normalization_accepts_supported_in_repository_shapes() {
+    fn in_repository_shapes_are_in_scope_under_one_normalized_spelling() {
         let repo = tempfile::tempdir().unwrap();
         let base = repo.path().canonicalize().unwrap();
         let absolute = base.join(".github/workflows/ci.yml");
@@ -1153,23 +1195,62 @@ mod tests {
             "src/../.github/workflows/ci.yml",
         ] {
             assert_eq!(
-                normalize_write_target(&base, raw).unwrap(),
-                ".github/workflows/ci.yml"
+                scope(&base, raw),
+                WriteScope::Inside(vec![".github/workflows/ci.yml".to_string()]),
+                "{raw} resolves back inside the repository"
             );
         }
     }
 
+    /// The bead's subject (aoa-7g14y.1): a target in another directory tree is
+    /// not this repository's business, however it is spelled.
     #[test]
-    fn write_target_normalization_rejects_invalid_boundaries() {
+    fn targets_outside_the_repository_are_out_of_scope() {
+        let repo = tempfile::tempdir().unwrap();
+        let base = repo.path().canonicalize().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let absolute = elsewhere.path().join("notes.md");
+
+        assert_eq!(scope(&base, "../outside.rs"), WriteScope::Outside);
+        assert_eq!(
+            scope(&base, absolute.to_str().unwrap()),
+            WriteScope::Outside
+        );
+        // A `..` chain walking off the filesystem root cannot be inside either.
+        assert_eq!(
+            scope(&base, "../../../../../../../../../../etc/passwd"),
+            WriteScope::Outside
+        );
+    }
+
+    /// A repository-local symlink pointing out of the tree stays in scope under
+    /// its lexical spelling, so the R5 protected-path match still sees it.
+    #[cfg(unix)]
+    #[test]
+    fn a_repo_local_symlink_leaving_the_tree_stays_in_scope() {
+        let repo = tempfile::tempdir().unwrap();
+        let base = repo.path().canonicalize().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), base.join("escape")).unwrap();
+
+        assert_eq!(
+            scope(&base, "escape/planted.rs"),
+            WriteScope::Inside(vec!["escape/planted.rs".to_string()])
+        );
+    }
+
+    /// Containment is the only thing that stopped being an error. A target that
+    /// names nothing writable is still a failure, and `check` denies on it.
+    #[test]
+    fn unusable_write_targets_are_still_errors_not_out_of_scope() {
         let repo = tempfile::tempdir().unwrap();
         let base = repo.path().canonicalize().unwrap();
 
-        assert!(normalize_write_target(&base, "../outside.rs")
+        assert!(write_scope(&base, "").is_err());
+        assert!(write_scope(&base, ".")
             .unwrap_err()
             .to_string()
-            .contains("outside repository"));
-        assert!(normalize_write_target(&base, "").is_err());
-        assert!(normalize_write_target(&base, ".").is_err());
+            .contains("repository root"));
     }
 
     #[test]

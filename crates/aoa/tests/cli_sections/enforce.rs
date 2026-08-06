@@ -741,25 +741,115 @@ fn enforce_check_blocks_generated_symlink_alias_and_destination() {
     }
 }
 
+/// Criterion (a): the gate's subject is this repository. A write whose target
+/// resolves outside it is not this repo's business, and is allowed with no
+/// reproduction span present — the `../` spelling and the absolute one alike.
+///
+/// Allowed *silently*: no span, and no `.aoa/traces` tree. Asking the gate
+/// about a foreign path must not manufacture this repo's telemetry, which the
+/// liveness surface reads as evidence the plane is running.
 #[test]
-fn enforce_check_rejects_write_target_outside_repository() {
+fn enforce_check_allows_write_target_outside_repository_ungated() {
+    let outside = TempDir::new().unwrap();
+    std::fs::write(outside.path().join("notes.md"), "original\n").unwrap();
+    let absolute = outside.path().join("notes.md");
+
+    for (index, target) in ["../outside.rs", absolute.to_str().unwrap()]
+        .iter()
+        .enumerate()
+    {
+        let repo = TempDir::new().unwrap();
+        aoa_stdin()
+            .args(["enforce", "check"])
+            .write_stdin(write_payload(
+                target,
+                &format!("it-outside-target-{index}"),
+                repo.path(),
+            ))
+            .assert()
+            .success();
+
+        assert!(
+            !repo.path().join(".aoa/traces").exists(),
+            "an out-of-repo target must not create this repo's traces tree"
+        );
+    }
+}
+
+/// The other half of criterion (a): the outcome hooks agree with the gate.
+/// Were they to keep recording, `check` would allow an out-of-repo write in
+/// silence while `commit` wrote a foreign path into this repo's live log —
+/// activity the liveness surface would read as this plane enforcing.
+#[test]
+fn enforce_outcome_hooks_record_nothing_for_a_target_outside_the_repository() {
+    let outside = TempDir::new().unwrap();
+    let absolute = outside.path().join("notes.md");
+    let repo = TempDir::new().unwrap();
+
+    for verb in ["commit", "fail", "deny"] {
+        aoa_stdin()
+            .args(["enforce", verb])
+            .write_stdin(write_payload(
+                absolute.to_str().unwrap(),
+                "it-outside-outcome",
+                repo.path(),
+            ))
+            .assert()
+            .success();
+    }
+
+    assert!(
+        !repo.path().join(".aoa/traces").exists(),
+        "no outcome hook may record a write to a path outside the repository"
+    );
+}
+
+/// Criterion (b): scoping the gate to the repository must not weaken it for its
+/// actual subject. The same call with an in-repo target and no reproduction is
+/// still denied.
+#[test]
+fn enforce_check_still_blocks_an_in_repo_write_without_reproduction() {
     let repo = TempDir::new().unwrap();
 
     aoa_stdin()
         .args(["enforce", "check"])
         .write_stdin(write_payload(
-            "../outside.rs",
-            "it-outside-target",
+            "crates/api/handler.rs",
+            "it-inrepo-target",
             repo.path(),
         ))
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("outside repository"));
+        .stderr(predicate::str::contains("reproduction-before-mutation"));
 }
 
+/// Criterion (c): containment is decided on the resolved path, not the literal
+/// string. A `../` spelling that walks back into the repository is in scope and
+/// stays gated.
+#[test]
+fn enforce_check_gates_a_relative_target_that_resolves_back_inside_the_repository() {
+    let repo = TempDir::new().unwrap();
+
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(write_payload(
+            "crates/../src/lib.rs",
+            "it-reentrant-target",
+            repo.path(),
+        ))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("reproduction-before-mutation"));
+}
+
+/// The other direction of criterion (c), and the reason containment is not
+/// decided on the resolved path alone: a repo-local symlink pointing out of the
+/// tree is spelled as an in-repo path, so it stays in scope and stays gated.
+/// Deciding scope on the resolved path alone would make this alias a way to
+/// spell any in-repo path the policy protects and have the gate wave it through.
 #[cfg(unix)]
 #[test]
-fn enforce_check_rejects_write_target_through_symlink_outside_repository() {
+fn enforce_check_gates_a_repo_local_symlink_pointing_outside_the_repository() {
     use std::os::unix::fs::symlink;
 
     let repo = TempDir::new().unwrap();
@@ -777,7 +867,7 @@ fn enforce_check_rejects_write_target_through_symlink_outside_repository() {
         ))
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("outside repository"));
+        .stderr(predicate::str::contains("reproduction-before-mutation"));
 
     assert_eq!(
         std::fs::read_to_string(planted).unwrap(),
