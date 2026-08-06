@@ -81,9 +81,31 @@ use crate::output::eprint_human;
 /// mutation and must be preceded by a reproduction (`test.run`) span.
 const MUTATION_TOOLS: [&str; 4] = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
 
-const ENFORCE_HOOK_SET_VERSION: u64 = 1;
+const ENFORCE_HOOK_SET_VERSION: u64 = 2;
 const AOA_SETTINGS_KEY: &str = "aoa";
 const HOOK_VERSION_KEY: &str = "enforce_hook_set_version";
+
+/// The wrapper every installed hook runs, relative to the repository root.
+pub(crate) const ENFORCE_WRAPPER_REL: &str = ".claude/hooks/aoa-enforce";
+
+/// The wrapper's contents, held here so the installer and the drift test read
+/// one source rather than two copies that can disagree.
+pub(crate) const ENFORCE_WRAPPER_SCRIPT: &str = include_str!("enforce_hook.sh");
+
+/// The command Claude Code runs for one enforce `verb`.
+///
+/// Hooks run under `/bin/sh` with the host's environment, so the earlier bare
+/// `aoa enforce <verb>` form enforced only where the binary happened to be on
+/// that environment's PATH. Where it was not, the hooks failed non-blocking and
+/// the plane was inert while still reading as installed — the exact
+/// silently-degraded guard AOA exists to detect. The command now names a
+/// repo-local wrapper that resolves the binary itself and is loud when it
+/// cannot. `CLAUDE_PROJECT_DIR` is the host's repo root; the `.` fallback keeps
+/// the command runnable from the repo root by hand and under a scrubbed
+/// environment, which is how the resolution criterion is checked.
+fn hook_command(verb: &str) -> String {
+    format!("\"${{CLAUDE_PROJECT_DIR:-.}}\"/{ENFORCE_WRAPPER_REL} {verb}")
+}
 
 /// The exit code Claude Code reads as "deny this tool call"; every other
 /// non-zero exit is only a non-blocking warning.
@@ -740,23 +762,22 @@ pub(crate) fn merge_enforce_hooks(mut settings: Value) -> Result<Value> {
     };
 
     let matcher = mutation_tool_matcher();
-    // Deliberately portable, team-shared commands: an absolute installer path
-    // would break on every other checkout. The accepted trust boundary is PATH
-    // on the host that executes committed project hooks; README's Runtime hooks
-    // section discloses that requirement to operators. Keep the spelling here,
-    // in the generator, so repositories cannot make the decision independently.
-    add_hook(hooks, "PostToolUse", "Bash", "aoa enforce record")?;
-    add_hook(hooks, "PreToolUse", &matcher, "aoa enforce check")?;
+    retire_legacy_hooks(hooks);
+    // Every command runs the repo-local wrapper, never a bare `aoa`: see
+    // `hook_command`. Keep the spelling there, in the generator, so
+    // repositories cannot make the decision independently.
+    add_hook(hooks, "PostToolUse", "Bash", &hook_command("record"))?;
+    add_hook(hooks, "PreToolUse", &matcher, &hook_command("check"))?;
     // One hook per write outcome, each with its own command string. The distinct
     // commands are still required even though `add_hook` now keys on matcher as
     // well: the host runs every group whose matcher fits, so two entries sharing
     // a command would run it twice per tool call and double every span it emits.
-    for (event, command) in [
-        ("PostToolUse", "aoa enforce commit"),
-        ("PostToolUseFailure", "aoa enforce fail"),
-        ("PermissionDenied", "aoa enforce deny"),
+    for (event, verb) in [
+        ("PostToolUse", "commit"),
+        ("PostToolUseFailure", "fail"),
+        ("PermissionDenied", "deny"),
     ] {
-        add_hook(hooks, event, &matcher, command)?;
+        add_hook(hooks, event, &matcher, &hook_command(verb))?;
     }
     let aoa = object.entry(AOA_SETTINGS_KEY).or_insert_with(|| json!({}));
     let Some(aoa) = aoa.as_object_mut() else {
@@ -770,6 +791,47 @@ pub(crate) fn merge_enforce_hooks(mut settings: Value) -> Result<Value> {
         json!(ENFORCE_HOOK_SET_VERSION),
     );
     Ok(settings)
+}
+
+/// Drop the hook-set-1 commands (`aoa enforce <verb>`) this installer wrote.
+///
+/// The merge is otherwise purely additive, which is right for hooks it does not
+/// own but wrong for its own superseded ones: leaving them registered means the
+/// host keeps running the bare command beside the wrapper, so every tool call
+/// still emits the resolution failure the wrapper exists to end, and any repo
+/// where `aoa` *is* on PATH records two spans per event. Only the exact command
+/// strings this installer has written are removed; anything else an operator
+/// added is left alone. Groups emptied by the removal go with them, so a re-run
+/// stays byte-stable.
+fn retire_legacy_hooks(hooks: &mut Map<String, Value>) {
+    const LEGACY_COMMANDS: [&str; 5] = [
+        "aoa enforce record",
+        "aoa enforce check",
+        "aoa enforce commit",
+        "aoa enforce fail",
+        "aoa enforce deny",
+    ];
+    for groups in hooks.values_mut() {
+        let Some(groups) = groups.as_array_mut() else {
+            continue;
+        };
+        for group in groups.iter_mut() {
+            let Some(entries) = group.get_mut("hooks").and_then(Value::as_array_mut) else {
+                continue;
+            };
+            entries.retain(|entry| {
+                let command = entry.get("command").and_then(Value::as_str);
+                !command.is_some_and(|command| LEGACY_COMMANDS.contains(&command))
+            });
+        }
+        groups.retain(|group| {
+            group
+                .get("hooks")
+                .and_then(Value::as_array)
+                .is_none_or(|entries| !entries.is_empty())
+        });
+    }
+    hooks.retain(|_, groups| groups.as_array().is_none_or(|groups| !groups.is_empty()));
 }
 
 pub(crate) fn enforce_hook_warning(repo: &Path) -> Option<String> {
@@ -818,8 +880,41 @@ pub(crate) fn enforce_hook_warning(repo: &Path) -> Option<String> {
             "{} enforce hooks are ahead of this binary (installed {version}, current {ENFORCE_HOOK_SET_VERSION}); upgrade AOA before reinstalling",
             path.display()
         )),
-        std::cmp::Ordering::Equal => None,
+        std::cmp::Ordering::Equal => missing_wrapper_warning(repo),
     }
+}
+
+/// Report a current stamp whose wrapper is absent or not executable.
+///
+/// A stamp says which hook set was installed; it cannot say whether the file
+/// those hooks run still exists. Without this check a deleted wrapper leaves
+/// the settings looking current while every hook fails, which is the same
+/// installed-but-inert reading the wrapper was introduced to end.
+fn missing_wrapper_warning(repo: &Path) -> Option<String> {
+    let wrapper = repo.join(ENFORCE_WRAPPER_REL);
+    let Ok(metadata) = std::fs::symlink_metadata(&wrapper) else {
+        return Some(format!(
+            "{} is missing; the installed enforce hooks have nothing to run — rerun `aoa observe --enforce`",
+            wrapper.display()
+        ));
+    };
+    if !metadata.file_type().is_file() {
+        return Some(format!(
+            "{} is not a regular file; enforce hooks cannot run — rerun `aoa observe --enforce`",
+            wrapper.display()
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return Some(format!(
+                "{} is not executable; enforce hooks cannot run — rerun `aoa observe --enforce`",
+                wrapper.display()
+            ));
+        }
+    }
+    None
 }
 
 /// Name a JSON value's type for an error message.
@@ -870,7 +965,31 @@ pub(crate) fn install_enforce_hooks(repo: &Path) -> Result<PathBuf> {
     std::fs::write(&settings_path, format!("{rendered}\n"))
         .with_context(|| format!("failed to write {}", settings_path.display()))?;
 
+    install_enforce_wrapper(repo)?;
+
     Ok(settings_path)
+}
+
+/// Write the wrapper the installed hooks invoke, and make it executable.
+///
+/// Installing the settings without the wrapper would register hooks pointing at
+/// a file that does not exist, which is the failure this whole path exists to
+/// remove; the two are written together or the install fails.
+pub(crate) fn install_enforce_wrapper(repo: &Path) -> Result<PathBuf> {
+    let wrapper_path = repo.join(ENFORCE_WRAPPER_REL);
+    if let Some(parent) = wrapper_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    std::fs::write(&wrapper_path, ENFORCE_WRAPPER_SCRIPT)
+        .with_context(|| format!("failed to write {}", wrapper_path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wrapper_path, std::fs::Permissions::from_mode(0o755))
+            .with_context(|| format!("failed to make {} executable", wrapper_path.display()))?;
+    }
+    Ok(wrapper_path)
 }
 
 /// Ensure `hooks[event]` contains a matcher group running `command`.
@@ -1312,17 +1431,17 @@ mod tests {
         // conflict `add_hook` rejects, so sharing one would fail the install.
         let post = once["hooks"]["PostToolUse"].as_array().unwrap();
         assert_eq!(post.len(), 2);
-        assert_eq!(post[0]["hooks"][0]["command"], "aoa enforce record");
+        assert_eq!(post[0]["hooks"][0]["command"], hook_command("record"));
         assert_eq!(post[0]["matcher"], "Bash");
-        assert_eq!(post[1]["hooks"][0]["command"], "aoa enforce commit");
+        assert_eq!(post[1]["hooks"][0]["command"], hook_command("commit"));
         assert_eq!(post[1]["matcher"], matcher);
 
         let pre = &once["hooks"]["PreToolUse"];
-        assert_eq!(pre[0]["hooks"][0]["command"], "aoa enforce check");
+        assert_eq!(pre[0]["hooks"][0]["command"], hook_command("check"));
 
         for (event, command) in [
-            ("PostToolUseFailure", "aoa enforce fail"),
-            ("PermissionDenied", "aoa enforce deny"),
+            ("PostToolUseFailure", hook_command("fail")),
+            ("PermissionDenied", hook_command("deny")),
         ] {
             let group = once["hooks"][event].as_array().unwrap();
             assert_eq!(group.len(), 1, "{event} registers exactly one hook");
@@ -1338,17 +1457,83 @@ mod tests {
     fn every_write_outcome_has_a_registered_hook() {
         let merged = merge_enforce_hooks(json!({})).expect("fresh settings merge");
         let matcher = mutation_tool_matcher();
-        let commands: Vec<&str> = ["PostToolUse", "PostToolUseFailure", "PermissionDenied"]
+        let commands: Vec<String> = ["PostToolUse", "PostToolUseFailure", "PermissionDenied"]
             .iter()
             .filter_map(|event| merged["hooks"][event].as_array())
             .flatten()
             .filter(|g| g["matcher"] == matcher)
-            .map(|g| g["hooks"][0]["command"].as_str().unwrap())
+            .map(|g| g["hooks"][0]["command"].as_str().unwrap().to_string())
             .collect();
 
         assert_eq!(
             commands,
-            ["aoa enforce commit", "aoa enforce fail", "aoa enforce deny"]
+            [
+                hook_command("commit"),
+                hook_command("fail"),
+                hook_command("deny")
+            ]
+        );
+    }
+
+    /// Upgrading a hook-set-1 install must retire the bare commands, not sit
+    /// beside them. Left registered they keep failing to resolve on every tool
+    /// call — the error wall this change removes — and double every span in the
+    /// repos where they do resolve.
+    #[test]
+    fn upgrading_retires_the_bare_command_hook_set() {
+        let installed_v1 = json!({
+            "aoa": { "enforce_hook_set_version": 1 },
+            "hooks": {
+                "PostToolUse": [
+                    { "matcher": "Bash", "hooks": [{ "type": "command", "command": "aoa enforce record" }] },
+                    { "matcher": mutation_tool_matcher(), "hooks": [{ "type": "command", "command": "aoa enforce commit" }] },
+                ],
+                "PreToolUse": [
+                    { "matcher": mutation_tool_matcher(), "hooks": [{ "type": "command", "command": "aoa enforce check" }] },
+                ],
+            }
+        });
+        let upgraded = merge_enforce_hooks(installed_v1).expect("upgrade from hook set 1");
+
+        let rendered = serde_json::to_string(&upgraded).unwrap();
+        assert!(
+            !rendered.contains("\"aoa enforce"),
+            "no bare command may survive the upgrade: {rendered}"
+        );
+        assert_eq!(upgraded["aoa"][HOOK_VERSION_KEY], ENFORCE_HOOK_SET_VERSION);
+        // Exactly one entry per event/matcher pair: retired, then reinstalled.
+        assert_eq!(
+            upgraded["hooks"]["PostToolUse"].as_array().unwrap().len(),
+            2
+        );
+        assert_eq!(upgraded["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
+    }
+
+    /// Retiring must not reach past the commands this installer wrote, and a
+    /// group it empties must go rather than linger as an empty shell that a
+    /// re-run would then diff against.
+    #[test]
+    fn retiring_leaves_other_hooks_and_drops_the_groups_it_empties() {
+        let mut hooks = json!({
+            "PostToolUse": [
+                { "matcher": "Bash", "hooks": [
+                    { "command": "aoa enforce record" },
+                    { "command": "my-own-recorder" },
+                ]},
+                { "matcher": "Read", "hooks": [{ "command": "aoa enforce check" }] },
+            ],
+            "SessionStart": [{ "hooks": [{ "command": "aoa observe" }] }],
+        });
+        retire_legacy_hooks(hooks.as_object_mut().unwrap());
+
+        let post = hooks["PostToolUse"].as_array().unwrap();
+        assert_eq!(post.len(), 1, "the emptied Read group is dropped");
+        assert_eq!(post[0]["hooks"].as_array().unwrap().len(), 1);
+        assert_eq!(post[0]["hooks"][0]["command"], "my-own-recorder");
+        // `aoa observe` is not one of the retired commands.
+        assert_eq!(
+            hooks["SessionStart"][0]["hooks"][0]["command"],
+            "aoa observe"
         );
     }
 
@@ -1368,7 +1553,11 @@ mod tests {
         // alongside it.
         let post = merged["hooks"]["PostToolUse"].as_array().unwrap();
         assert_eq!(post.len(), 3);
-        for command in ["log-read", "aoa enforce record", "aoa enforce commit"] {
+        for command in [
+            "log-read".to_string(),
+            hook_command("record"),
+            hook_command("commit"),
+        ] {
             assert!(
                 post.iter().any(|g| g["hooks"][0]["command"] == command),
                 "{command} missing from merged PostToolUse hooks"
@@ -1419,15 +1608,19 @@ mod tests {
             "hooks": {
                 "PostToolUse": [{
                     "matcher": "Bash",
-                    "hooks": [{ "type": "command", "command": "aoa enforce commit" }],
+                    "hooks": [{ "type": "command", "command": hook_command("commit") }],
                 }]
             }
         });
         let err = merge_enforce_hooks(seeded).unwrap_err();
         let message = err.to_string();
-        for expected in ["aoa enforce commit", "Bash", &mutation_tool_matcher()] {
+        for expected in [
+            hook_command("commit"),
+            "Bash".to_string(),
+            mutation_tool_matcher(),
+        ] {
             assert!(
-                message.contains(expected),
+                message.contains(&expected),
                 "conflict must name {expected}, got: {message}"
             );
         }
@@ -1442,7 +1635,7 @@ mod tests {
         let seeded = json!({
             "hooks": {
                 "PostToolUse": [{
-                    "hooks": [{ "type": "command", "command": "aoa enforce commit" }],
+                    "hooks": [{ "type": "command", "command": hook_command("commit") }],
                 }]
             }
         });

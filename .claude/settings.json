@@ -1,13 +1,13 @@
 {
   "aoa": {
-    "enforce_hook_set_version": 1
+    "enforce_hook_set_version": 2
   },
   "hooks": {
     "PermissionDenied": [
       {
         "hooks": [
           {
-            "command": "aoa enforce deny",
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}\"/.claude/hooks/aoa-enforce deny",
             "type": "command"
           }
         ],
@@ -18,7 +18,7 @@
       {
         "hooks": [
           {
-            "command": "aoa enforce record",
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}\"/.claude/hooks/aoa-enforce record",
             "type": "command"
           }
         ],
@@ -27,7 +27,7 @@
       {
         "hooks": [
           {
-            "command": "aoa enforce commit",
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}\"/.claude/hooks/aoa-enforce commit",
             "type": "command"
           }
         ],
@@ -38,7 +38,7 @@
       {
         "hooks": [
           {
-            "command": "aoa enforce fail",
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}\"/.claude/hooks/aoa-enforce fail",
             "type": "command"
           }
         ],
@@ -49,7 +49,7 @@
       {
         "hooks": [
           {
-            "command": "aoa enforce check",
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}\"/.claude/hooks/aoa-enforce check",
             "type": "command"
           }
         ],

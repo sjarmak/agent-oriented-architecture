@@ -174,8 +174,16 @@ fn observe_enforce_writes_idempotent_settings_and_plain_observe_does_not() {
 
     observe_enforce(repo.path());
     let first = std::fs::read_to_string(&settings).expect("settings written");
-    assert!(first.contains("aoa enforce check"));
-    assert!(first.contains("aoa enforce record"));
+    assert!(first.contains(".claude/hooks/aoa-enforce check"));
+    assert!(first.contains(".claude/hooks/aoa-enforce record"));
+    // A bare `aoa ...` is the inert form this repo shipped for months: the
+    // hooks resolve only where the binary happens to be on the host's PATH,
+    // and where it is not they fail non-blocking and enforcement silently
+    // never runs (aoa-zsem6). Reintroducing it must fail here.
+    assert!(
+        !first.contains("\"aoa enforce"),
+        "hook commands must not be bare `aoa ...`: {first}"
+    );
 
     // Re-running is byte-stable (idempotent merge).
     observe_enforce(repo.path());
@@ -269,7 +277,7 @@ fn current_enforce_hook_stamp_is_quiet_in_observe_and_audit() {
         serde_json::from_slice(&std::fs::read(repo.path().join(".claude/settings.json")).unwrap())
             .unwrap();
     assert_eq!(
-        settings["aoa"]["enforce_hook_set_version"], 1,
+        settings["aoa"]["enforce_hook_set_version"], 2,
         "installer must stamp the hook-set version"
     );
 
@@ -307,4 +315,133 @@ fn audit_surfaces_a_stale_hook_stamp_in_both_registers() {
             .stdout(predicate::str::contains("behind"))
             .stdout(predicate::str::contains(".claude/settings.json"));
     }
+}
+
+/// The wrapper is what makes the hooks resolvable, so the installer must write
+/// it alongside the settings that point at it. Settings naming a file that does
+/// not exist is the installed-but-inert state this whole path removes.
+#[test]
+fn observe_enforce_installs_an_executable_wrapper() {
+    let repo = TempDir::new().unwrap();
+    observe_enforce(repo.path());
+
+    let wrapper = repo.path().join(".claude/hooks/aoa-enforce");
+    let metadata = std::fs::metadata(&wrapper).expect("wrapper installed beside settings.json");
+    assert!(metadata.is_file());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert!(
+            metadata.permissions().mode() & 0o111 != 0,
+            "wrapper must be executable or every hook fails to run"
+        );
+    }
+}
+
+/// Criteria (a) and (b) of aoa-zsem6, checked the way the host runs a hook:
+/// `/bin/sh` with a scrubbed environment, no login profile, and the cwd set to
+/// the repository root.
+///
+/// With the binary reachable the configured command resolves and exits 0. With
+/// it absent the hook must say so — the blocking `check` denies rather than
+/// waving the write through, the advisory hooks exit non-zero so the host
+/// surfaces them, and neither is silent. A bare `aoa <verb>` command form fails
+/// this test at the first assertion, which is what keeps it from coming back.
+#[cfg(unix)]
+#[test]
+fn the_configured_hook_command_resolves_and_is_loud_when_the_binary_is_absent() {
+    let repo = TempDir::new().unwrap();
+    observe_enforce(repo.path());
+
+    let settings: Value =
+        serde_json::from_slice(&std::fs::read(repo.path().join(".claude/settings.json")).unwrap())
+            .unwrap();
+    let configured = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        .as_str()
+        .expect("PreToolUse check hook is installed")
+        .to_string();
+    assert!(
+        configured.ends_with(" check"),
+        "expected the check hook command, found {configured}"
+    );
+
+    let run = |command: &str, aoa_bin: Option<&Path>| {
+        let mut sh = std::process::Command::new("/bin/sh");
+        sh.env_clear()
+            .current_dir(repo.path())
+            .arg("-c")
+            .arg(command);
+        if let Some(bin) = aoa_bin {
+            sh.env("AOA_BIN", bin);
+        }
+        sh.output().expect("hook command runs under /bin/sh")
+    };
+
+    // (a) Resolution: reachable binary, scrubbed environment, exit 0.
+    let bin = assert_cmd::cargo::cargo_bin("aoa");
+    let help = run(&format!("{configured} --help"), Some(&bin));
+    let help_err = String::from_utf8_lossy(&help.stderr);
+    assert!(
+        help.status.success(),
+        "configured hook command must resolve under a scrubbed environment; stderr: {help_err}"
+    );
+    assert!(
+        !help_err.contains("not found"),
+        "configured hook command must not fail to resolve; stderr: {help_err}"
+    );
+
+    // (b) Loud on absent binary: no AOA_BIN, no PATH, no build outputs here.
+    for (verb, expected_code) in [("check", 2), ("record", 1)] {
+        let command = configured.replace(" check", &format!(" {verb}"));
+        let absent = run(&command, None);
+        let stderr = String::from_utf8_lossy(&absent.stderr);
+        assert_eq!(
+            absent.status.code(),
+            Some(expected_code),
+            "unavailable enforcement must not read as passing for `{command}`; stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("ENFORCEMENT UNAVAILABLE"),
+            "a missing binary must be explicit, not silent; stderr: {stderr}"
+        );
+    }
+}
+
+/// The repo's own wrapper is generated, like its settings.json. Without this
+/// the two drift and the committed copy keeps whatever an editor left behind.
+#[test]
+fn tracked_wrapper_matches_observe_enforce_output() {
+    let fresh = TempDir::new().unwrap();
+    observe_enforce(fresh.path());
+    let generated = std::fs::read_to_string(fresh.path().join(".claude/hooks/aoa-enforce"))
+        .expect("observe --enforce writes the wrapper");
+
+    let tracked_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(".claude/hooks/aoa-enforce");
+    let tracked = std::fs::read_to_string(&tracked_path)
+        .expect("repo-root .claude/hooks/aoa-enforce is tracked (runtime-hook plane)");
+
+    assert_eq!(
+        tracked, generated,
+        "tracked .claude/hooks/aoa-enforce drifted from `aoa observe --enforce` output; \
+         regenerate it with `cargo run -p aoa -- observe --repo . --enforce`"
+    );
+}
+
+/// A current stamp over a deleted wrapper is the same lie as a bare command:
+/// the settings read as installed while nothing can run.
+#[test]
+fn a_missing_wrapper_is_reported_even_when_the_stamp_is_current() {
+    let repo = TempDir::new().unwrap();
+    observe_enforce(repo.path());
+    std::fs::remove_file(repo.path().join(".claude/hooks/aoa-enforce")).unwrap();
+
+    aoa_stdin()
+        .args(["observe", "--json", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("enforce_hook_warning"))
+        .stdout(predicate::str::contains("is missing"));
 }
