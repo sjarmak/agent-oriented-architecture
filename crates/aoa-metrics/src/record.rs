@@ -33,7 +33,7 @@ pub struct MetricRecord {
 pub fn compute_metrics(input: MetricInputRef<'_>) -> Result<MetricRecord, MetricError> {
     let quality = input.graph.quality;
     Ok(MetricRecord {
-        retrieval_locality: compute_retrieval_locality(input),
+        retrieval_locality: compute_retrieval_locality(input)?,
         edit_locality: compute_edit_locality(input)?,
         invariant_discoverability: compute_invariant_discoverability(input),
         mutation_surface: compute_mutation_surface(input),

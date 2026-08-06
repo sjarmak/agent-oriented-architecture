@@ -64,7 +64,7 @@ fn retrieval_locality_anchors_gold_through_rename() {
         ..base_input()
     };
 
-    let r = compute_retrieval_locality(input.as_view());
+    let r = compute_retrieval_locality(input.as_view()).expect("well-formed ranked results");
 
     // Anchored gold is the migrated name, not the raw base name.
     assert!(r.anchored_gold.contains("orders::Service"));
@@ -91,7 +91,7 @@ fn retrieval_locality_misses_when_only_raw_name_present() {
         k: 3,
         ..base_input()
     };
-    let r = compute_retrieval_locality(input.as_view());
+    let r = compute_retrieval_locality(input.as_view()).expect("well-formed ranked results");
     assert_eq!(r.tool_calls_to_first_relevant_artifact, None);
     assert_eq!(r.recall_at_k, Some(0.0));
     assert_eq!(r.mrr, Some(0.0));
@@ -112,7 +112,8 @@ fn retrieval_locality_is_unavailable_when_no_gold_symbol_anchors() {
         ..base_input()
     };
 
-    let retrieval = compute_retrieval_locality(input.as_view());
+    let retrieval =
+        compute_retrieval_locality(input.as_view()).expect("well-formed ranked results");
 
     assert!(retrieval.anchored_gold.is_empty());
     assert_eq!(retrieval.recall_at_k, None);
@@ -149,7 +150,8 @@ fn retrieval_locality_is_unavailable_when_no_span_carries_ranked_results() {
         ..base_input()
     };
 
-    let retrieval = compute_retrieval_locality(input.as_view());
+    let retrieval =
+        compute_retrieval_locality(input.as_view()).expect("well-formed ranked results");
 
     assert!(retrieval.anchored_gold.contains("OrderService"));
     assert_eq!(retrieval.recall_at_k, None);
@@ -163,6 +165,86 @@ fn retrieval_locality_is_unavailable_when_no_span_carries_ranked_results() {
     assert_eq!(json["recall_at_k"], serde_json::Value::Null);
     assert_eq!(json["mrr"], serde_json::Value::Null);
     assert_eq!(json["unavailable"], "no ranked-results span in trace");
+}
+
+// The other side of the same split: `results: []` is a retriever that ran and
+// ranked nothing. That is a measured zero, not absent evidence, and reporting
+// it as "no ranked-results span in trace" would be false — the span is right
+// there in the trace.
+#[test]
+fn retrieval_locality_scores_zero_when_a_retriever_ranked_nothing() {
+    let input = MetricInput {
+        trace: Trace {
+            spans: vec![span(
+                SpanType::RetrievalSearch,
+                1,
+                serde_json::json!({ "results": [] }),
+            )],
+        },
+        gold_set: set(&["OrderService"]),
+        ..base_input()
+    };
+
+    let retrieval =
+        compute_retrieval_locality(input.as_view()).expect("an empty ranking is well-formed");
+
+    assert!(retrieval.anchored_gold.contains("OrderService"));
+    assert_eq!(retrieval.recall_at_k, Some(0.0));
+    assert_eq!(retrieval.mrr, Some(0.0));
+    assert_eq!(retrieval.unavailable, None);
+
+    let json = serde_json::to_value(&retrieval).expect("retrieval metric serializes");
+    assert_eq!(json["recall_at_k"], 0.0);
+    assert_eq!(json["mrr"], 0.0);
+    assert_eq!(json.get("unavailable"), None);
+}
+
+// A present-but-broken `results` is neither evidence nor a measurement, so it
+// fails loudly instead of degrading into either.
+#[test]
+fn retrieval_locality_rejects_a_non_array_results_attribute() {
+    let input = MetricInput {
+        trace: Trace {
+            spans: vec![span(
+                SpanType::RetrievalSearch,
+                1,
+                serde_json::json!({ "results": 42 }),
+            )],
+        },
+        gold_set: set(&["OrderService"]),
+        ..base_input()
+    };
+
+    let err = compute_retrieval_locality(input.as_view())
+        .expect_err("a non-array `results` is a broken measurement artifact");
+    assert_eq!(
+        err.to_string(),
+        "retrieval span `results` must be an array of strings, but the attribute is a number"
+    );
+}
+
+// Dropping the non-string entry would silently promote every later artifact by
+// one rank, and MRR is read off exactly that rank.
+#[test]
+fn retrieval_locality_rejects_a_non_string_results_entry() {
+    let input = MetricInput {
+        trace: Trace {
+            spans: vec![span(
+                SpanType::RetrievalSearch,
+                1,
+                serde_json::json!({ "results": ["orders::Other", 42, "OrderService"] }),
+            )],
+        },
+        gold_set: set(&["OrderService"]),
+        ..base_input()
+    };
+
+    let err = compute_retrieval_locality(input.as_view())
+        .expect_err("a non-string ranking entry is a broken measurement artifact");
+    assert_eq!(
+        err.to_string(),
+        "retrieval span `results` must be an array of strings, but entry 1 is a number"
+    );
 }
 
 // Criterion 2: edit-locality emits inflation against BOTH an intersection floor

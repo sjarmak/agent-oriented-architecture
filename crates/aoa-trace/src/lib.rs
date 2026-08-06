@@ -59,4 +59,27 @@ mod tests {
         let required = schema["required"].as_array().expect("required array");
         assert!(!required.iter().any(|r| r == "version"));
     }
+
+    #[test]
+    fn embedded_schema_publishes_the_ranked_results_attribute() {
+        let schema: serde_json::Value =
+            serde_json::from_str(TRACE_SCHEMA).expect("schema is valid JSON");
+        let attributes = &schema["$defs"]["span"]["properties"]["attributes"];
+        let results = &attributes["properties"]["results"];
+
+        // An array of strings, and optional: a producer with no ranking to
+        // report omits the key rather than emitting an empty array.
+        assert_eq!(results["type"], "array");
+        assert_eq!(results["items"]["type"], "string");
+        assert!(attributes["required"].is_null());
+
+        // The absent-vs-empty split is the whole point of naming the key here,
+        // so the schema must state it rather than leave readers to infer it.
+        let description = results["description"].as_str().expect("described");
+        assert!(description.contains("no evidence"));
+        assert!(description.contains("measured zero"));
+
+        // Other attribute keys stay unconstrained.
+        assert!(attributes["additionalProperties"].is_null());
+    }
 }

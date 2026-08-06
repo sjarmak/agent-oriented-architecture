@@ -389,7 +389,7 @@ fn subtree_metrics_split_a_two_subtree_trace() {
         held_out_success: true,
     };
 
-    let rows = compute_subtree_metrics(input, &partition);
+    let rows = compute_subtree_metrics(input, &partition).expect("well-formed ranked results");
 
     // Only active subtrees appear, in lexicographic order; crates/idle is absent.
     let names: Vec<&str> = rows.iter().map(|r| r.subtree.as_str()).collect();
@@ -494,7 +494,7 @@ fn subtree_rows_count_mutation_surface_and_cross_subtree_leakage() {
         held_out_success: true,
     };
 
-    let rows = compute_subtree_metrics(input, &partition);
+    let rows = compute_subtree_metrics(input, &partition).expect("well-formed ranked results");
     let names: Vec<&str> = rows.iter().map(|r| r.subtree.as_str()).collect();
     assert_eq!(names, ["crates/core", "crates/legacy"]);
 
@@ -568,7 +568,7 @@ fn subtree_rows_mark_mutation_unavailable_when_no_node_attributes_to_the_subtree
         held_out_success: true,
     };
 
-    let rows = compute_subtree_metrics(input, &partition);
+    let rows = compute_subtree_metrics(input, &partition).expect("well-formed ranked results");
     assert_eq!(rows.len(), 1);
     let core = &rows[0];
     assert_eq!(core.subtree, "crates/core");
@@ -614,7 +614,7 @@ fn subtree_metrics_surface_insufficient_solutions_instead_of_fabricating() {
         held_out_success: true,
     };
 
-    let rows = compute_subtree_metrics(input, &partition);
+    let rows = compute_subtree_metrics(input, &partition).expect("well-formed ranked results");
     assert_eq!(rows.len(), 1);
     assert!(rows[0].edit_locality.is_none());
     assert!(rows[0]
@@ -661,7 +661,7 @@ fn subtree_metrics_anchor_gold_through_the_transform_map() {
         held_out_success: true,
     };
 
-    let rows = compute_subtree_metrics(input, &partition);
+    let rows = compute_subtree_metrics(input, &partition).expect("well-formed ranked results");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].subtree, "crates/core");
     assert_eq!(

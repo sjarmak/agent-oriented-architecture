@@ -28,6 +28,11 @@
 //!   vacuous.
 //! - **edit-locality** requires ≥2 accepted solutions; with fewer it is reported
 //!   `null` with a reason (`InsufficientAcceptedSolutions`), never invented.
+//! - **retrieval-locality** splits absent evidence from a measured zero on the
+//!   span `results` attribute: no span carries the key at all → `null` with a
+//!   reason; a span carries an empty ranking → Recall@k `0.0`, because a
+//!   retriever that ran and ranked nothing is a real observation. A `results`
+//!   that is present but not an array of strings fails the record.
 //! - **a trial whose `scoring.json` carries neither `passed` nor `score`** has
 //!   no held-out signal, so it is reported as a per-trial error and excluded
 //!   from `records` — never counted as a held-out failure, which would bias the
@@ -338,15 +343,17 @@ fn process_task(
     };
 
     // Edit-locality needs ≥2 accepted solutions; surface the shortfall rather
-    // than fail the whole record. The match is intentionally exhaustive on
-    // `MetricError`'s sole variant: a future variant must become a compile error
-    // here so it is handled deliberately, never silently nulled.
+    // than fail the whole record. The match is intentionally exhaustive by
+    // variant: a future variant must become a compile error here so it is
+    // handled deliberately, never silently nulled. A malformed measurement
+    // artifact is not a shortfall — it fails the record.
     let (edit_locality, edit_locality_unavailable) = match compute_edit_locality(input) {
         Ok(e) => (Some(e), None),
         Err(MetricError::InsufficientAcceptedSolutions(n)) => (
             None,
             Some(format!("insufficient accepted solutions: {n} (need ≥2)")),
         ),
+        Err(e @ MetricError::MalformedRankedResults { .. }) => return Err(e.into()),
     };
 
     // The reward-hacking gap from codeprobe's oracle, built through the bench
@@ -382,12 +389,14 @@ fn process_task(
         repo_eligible_for_r0: quality.eligible_for_r0(),
         graph_degrade_reason: indexed.degrade_reason.clone(),
         transcript_warnings,
-        retrieval_locality: compute_retrieval_locality(input),
+        retrieval_locality: compute_retrieval_locality(input)?,
         invariant_discoverability: compute_invariant_discoverability(input),
         mutation_surface: compute_mutation_surface(input),
         edit_locality,
         edit_locality_unavailable,
-        subtree_metrics: partition.map(|p| compute_subtree_metrics(input, p)),
+        subtree_metrics: partition
+            .map(|p| compute_subtree_metrics(input, p))
+            .transpose()?,
         gap,
     })
 }

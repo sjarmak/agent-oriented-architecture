@@ -51,8 +51,15 @@
           "minimum": 0
         },
         "attributes": {
-          "description": "Free-form span-type-specific metadata.",
-          "type": "object"
+          "description": "Free-form span-type-specific metadata. Keys named here carry a published meaning that readers depend on; any other key is unconstrained.",
+          "type": "object",
+          "properties": {
+            "results": {
+              "description": "The artifacts a retrieval span ranked, best first. Absent and empty are DIFFERENT observations and readers must not collapse them: absent means the trace carries no retrieval-ranking instrumentation at all (no evidence, so Recall@k and MRR are unavailable), while an empty array means a retriever ran and ranked nothing (a measured zero, so Recall@k is 0.0). A producer that cannot report a ranking must omit the key rather than emit an empty array.",
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
         }
       }
     }

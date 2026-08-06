@@ -59,11 +59,13 @@ pub struct SubtreeMetrics {
 }
 
 /// Compute per-subtree metric rows by filtering the input per member and
-/// re-running the existing extractors on each filtered view.
+/// re-running the existing extractors on each filtered view. Fails when a span
+/// carries a malformed `results` attribute; only *missing* evidence degrades to
+/// an unavailable row.
 pub fn compute_subtree_metrics(
     input: MetricInputRef<'_>,
     partition: &SubtreePartition,
-) -> Vec<SubtreeMetrics> {
+) -> Result<Vec<SubtreeMetrics>, MetricError> {
     let mut spans_by: BTreeMap<&str, Vec<Span>> = BTreeMap::new();
     for span in &input.trace.spans {
         let Some(path) = span.attributes.get("path").and_then(|v| v.as_str()) else {
@@ -150,14 +152,17 @@ pub fn compute_subtree_metrics(
                 ..input
             };
 
-            // Exhaustive on MetricError's sole variant, mirroring the CLI: a
-            // future variant must be handled deliberately, never silently nulled.
+            // Exhaustive by variant, mirroring the CLI: a future variant must
+            // be handled deliberately, never silently nulled. Only missing
+            // evidence degrades to an unavailable row; a malformed measurement
+            // artifact fails the whole computation.
             let (edit_locality, edit_locality_unavailable) = match compute_edit_locality(view) {
                 Ok(e) => (Some(e), None),
                 Err(MetricError::InsufficientAcceptedSolutions(n)) => (
                     None,
                     Some(format!("insufficient accepted solutions: {n} (need ≥2)")),
                 ),
+                Err(e @ MetricError::MalformedRankedResults { .. }) => return Err(e),
             };
 
             // Per-subtree mutation numbers (aoa-d6t.30): k-bounded BFS seeded
@@ -192,17 +197,17 @@ pub fn compute_subtree_metrics(
                 (Some(inside), Some(outside), None)
             };
 
-            SubtreeMetrics {
+            Ok(SubtreeMetrics {
                 subtree: subtree.to_string(),
                 attributed_span_count: trace.spans.len(),
                 edited_file_count: edited_files.len(),
-                retrieval_locality: compute_retrieval_locality(view),
+                retrieval_locality: compute_retrieval_locality(view)?,
                 edit_locality,
                 edit_locality_unavailable,
                 mutation_surface,
                 mutation_leakage,
                 mutation_unavailable,
-            }
+            })
         })
         .collect()
 }

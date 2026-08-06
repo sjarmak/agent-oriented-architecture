@@ -182,5 +182,6 @@ fn fewer_than_two_accepted_solutions_surfaces_insufficient_never_fabricated() {
         MetricError::InsufficientAcceptedSolutions(n) => {
             assert_eq!(n, task.accepted_solutions.len())
         }
+        other => panic!("expected InsufficientAcceptedSolutions, got {other:?}"),
     }
 }

@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::common::{is_access_span, ranked_results, span_artifact, ConditionedOn};
+use crate::error::MetricError;
 use crate::input::{Confidence, MetricInputRef};
 
 /// Retrieval-locality bundle: time-to-first-relevant, Recall@k, and MRR, with
@@ -38,7 +39,12 @@ pub struct RetrievalLocality {
 
 /// Compute retrieval-locality. `G_t` is anchored to migrated names so a renamed
 /// gold symbol still matches the migrated identifier the trace references.
-pub fn compute_retrieval_locality(input: MetricInputRef<'_>) -> RetrievalLocality {
+///
+/// Fails when a span carries a malformed `results` attribute; a broken
+/// measurement artifact is an error, never a silently empty batch.
+pub fn compute_retrieval_locality(
+    input: MetricInputRef<'_>,
+) -> Result<RetrievalLocality, MetricError> {
     let anchored: BTreeSet<String> = input.transform.anchor(input.gold_set);
 
     let mut spans: Vec<_> = input.trace.spans.iter().collect();
@@ -59,13 +65,18 @@ pub fn compute_retrieval_locality(input: MetricInputRef<'_>) -> RetrievalLocalit
         }
     }
 
-    // Kept as an `Option`: collapsing a missing batch into an empty one makes a
-    // trace with broken retrieval instrumentation indistinguishable from a
-    // retriever that ranked results and hit no gold.
-    let first_batch = spans.iter().find_map(|s| {
-        let results = ranked_results(s);
-        (!results.is_empty()).then_some(results)
-    });
+    // Select on PRESENCE of the `results` attribute, not on a non-empty list. A
+    // retriever that ran and ranked nothing is a real observation — recall 0.0
+    // is the truthful measure — so an empty batch must reach the scoring arm
+    // below rather than be skipped and reported as absent evidence. Only a
+    // wholly absent `results` key across every span means no evidence.
+    let mut first_batch = None;
+    for span in &spans {
+        if let Some(results) = ranked_results(span)? {
+            first_batch = Some(results);
+            break;
+        }
+    }
 
     let k = input.k;
     let (recall_at_k, mrr, unavailable) = match (anchored.is_empty(), first_batch) {
@@ -96,7 +107,7 @@ pub fn compute_retrieval_locality(input: MetricInputRef<'_>) -> RetrievalLocalit
         }
     };
 
-    RetrievalLocality {
+    Ok(RetrievalLocality {
         tool_calls_to_first_relevant_artifact: tool_calls_to_first,
         recall_at_k,
         mrr,
@@ -106,5 +117,5 @@ pub fn compute_retrieval_locality(input: MetricInputRef<'_>) -> RetrievalLocalit
         conditioned_on: ConditionedOn::HeldOut,
         confidence: input.graph.quality.confidence(),
         weight: input.graph.quality.weight(),
-    }
+    })
 }

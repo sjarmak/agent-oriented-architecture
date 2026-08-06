@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use aoa_trace::{Span, SpanType};
 
+use crate::error::MetricError;
+
 /// The conditioning marker stamped on every metric record: all metrics are
 /// reported conditioned on held-out success.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -35,11 +37,44 @@ pub(crate) fn span_artifact(span: &Span) -> Option<&str> {
 }
 
 /// The ranked artifact list of a retrieval span, read from its `results`
-/// attribute. Returns an empty vec when absent.
-pub(crate) fn ranked_results(span: &Span) -> Vec<&str> {
-    span.attributes
-        .get("results")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
-        .unwrap_or_default()
+/// attribute.
+///
+/// Absent and empty are distinct observations and the caller must be able to
+/// tell them apart: `None` means the span carries no retrieval-ranking
+/// instrumentation at all, while `Some(vec![])` means a retriever ran and
+/// ranked nothing — a measured zero. Collapsing the two is what let a genuine
+/// zero-recall retrieval report as absent evidence.
+///
+/// A present-but-malformed `results` is an error, not an empty list — a broken
+/// measurement artifact must fail loudly rather than read as a measured zero.
+pub(crate) fn ranked_results(span: &Span) -> Result<Option<Vec<&str>>, MetricError> {
+    let Some(value) = span.attributes.get("results") else {
+        return Ok(None);
+    };
+    let malformed = |found: String| MetricError::MalformedRankedResults { found };
+    let array = value
+        .as_array()
+        .ok_or_else(|| malformed(format!("the attribute is {}", json_type_name(value))))?;
+    array
+        .iter()
+        .enumerate()
+        .map(|(i, entry)| {
+            entry
+                .as_str()
+                .ok_or_else(|| malformed(format!("entry {i} is {}", json_type_name(entry))))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+/// The JSON type name of a value, for naming what a malformed attribute held.
+fn json_type_name(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "a boolean",
+        serde_json::Value::Number(_) => "a number",
+        serde_json::Value::String(_) => "a string",
+        serde_json::Value::Array(_) => "an array",
+        serde_json::Value::Object(_) => "an object",
+    }
 }
