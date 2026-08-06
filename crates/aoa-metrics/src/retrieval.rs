@@ -14,14 +14,17 @@ pub struct RetrievalLocality {
     pub tool_calls_to_first_relevant_artifact: Option<u32>,
     /// Recall@k over the first ranked retrieval batch: anchored gold hits in the
     /// first `k` results divided by gold-set size. `None` when that denominator
-    /// is empty.
+    /// is empty, or when the trace carries no ranked batch to measure.
     pub recall_at_k: Option<f64>,
     /// Mean reciprocal rank of the first anchored gold artifact in the first
-    /// ranked retrieval batch. `Some(0.0)` means a defined gold set had no hit;
-    /// `None` means there was no anchored gold set to measure.
+    /// ranked retrieval batch. `Some(0.0)` means a retriever ranked results and
+    /// none of them were gold; `None` means there was no anchored gold set, or
+    /// no ranked batch at all, to measure against.
     pub mrr: Option<f64>,
-    /// Why Recall@k and MRR are unavailable. Present exactly when the anchored
-    /// gold set is empty: a 0/0 recall row is not a retrieval observation.
+    /// Why Recall@k and MRR are unavailable. Present exactly when one of the two
+    /// inputs is missing: an empty anchored gold set (a 0/0 recall row is not a
+    /// retrieval observation) or a trace with no ranked-results span (absent
+    /// evidence is not a measured zero).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unavailable: Option<String>,
     /// The `k` used for Recall@k, emitted as data.
@@ -56,33 +59,41 @@ pub fn compute_retrieval_locality(input: MetricInputRef<'_>) -> RetrievalLocalit
         }
     }
 
+    // Kept as an `Option`: collapsing a missing batch into an empty one makes a
+    // trace with broken retrieval instrumentation indistinguishable from a
+    // retriever that ranked results and hit no gold.
     let first_batch = spans
         .iter()
         .find(|s| !ranked_results(s).is_empty())
-        .map(|s| ranked_results(s))
-        .unwrap_or_default();
+        .map(|s| ranked_results(s));
 
     let k = input.k;
-    let (recall_at_k, mrr, unavailable) = if anchored.is_empty() {
-        (
+    let (recall_at_k, mrr, unavailable) = match (anchored.is_empty(), first_batch) {
+        (true, _) => (
             None,
             None,
             Some("no gold symbols anchored through the transform map".to_string()),
-        )
-    } else {
-        let hits_in_k = first_batch
-            .iter()
-            .take(k as usize)
-            .copied()
-            .filter(|result| anchored.contains(*result))
-            .count();
-        let recall_at_k = hits_in_k as f64 / anchored.len() as f64;
-        let mrr = first_batch
-            .iter()
-            .position(|r| anchored.contains(*r))
-            .map(|pos| 1.0 / (pos as f64 + 1.0))
-            .unwrap_or(0.0);
-        (Some(recall_at_k), Some(mrr), None)
+        ),
+        (false, None) => (
+            None,
+            None,
+            Some("no ranked-results span in trace".to_string()),
+        ),
+        (false, Some(batch)) => {
+            let hits_in_k = batch
+                .iter()
+                .take(k as usize)
+                .copied()
+                .filter(|result| anchored.contains(*result))
+                .count();
+            let recall_at_k = hits_in_k as f64 / anchored.len() as f64;
+            let mrr = batch
+                .iter()
+                .position(|r| anchored.contains(*r))
+                .map(|pos| 1.0 / (pos as f64 + 1.0))
+                .unwrap_or(0.0);
+            (Some(recall_at_k), Some(mrr), None)
+        }
     };
 
     RetrievalLocality {

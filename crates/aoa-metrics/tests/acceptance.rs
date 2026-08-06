@@ -131,6 +131,41 @@ fn retrieval_locality_is_unavailable_when_no_gold_symbol_anchors() {
     );
 }
 
+#[test]
+fn retrieval_locality_is_unavailable_when_no_span_carries_ranked_results() {
+    // A trace whose spans never carry a `results` list has no retrieval
+    // observation at all. That is broken instrumentation, and it must not read
+    // as the measured zero that
+    // `retrieval_locality_misses_when_only_raw_name_present` produces from a
+    // retriever that did rank results, none of them gold.
+    let input = MetricInput {
+        trace: Trace {
+            spans: vec![span(
+                SpanType::FileRead,
+                1,
+                serde_json::json!({ "path": "orders.rs" }),
+            )],
+        },
+        gold_set: set(&["OrderService"]),
+        ..base_input()
+    };
+
+    let retrieval = compute_retrieval_locality(input.as_view());
+
+    assert!(retrieval.anchored_gold.contains("OrderService"));
+    assert_eq!(retrieval.recall_at_k, None);
+    assert_eq!(retrieval.mrr, None);
+    assert_eq!(
+        retrieval.unavailable.as_deref(),
+        Some("no ranked-results span in trace")
+    );
+
+    let json = serde_json::to_value(&retrieval).expect("retrieval metric serializes");
+    assert_eq!(json["recall_at_k"], serde_json::Value::Null);
+    assert_eq!(json["mrr"], serde_json::Value::Null);
+    assert_eq!(json["unavailable"], "no ranked-results span in trace");
+}
+
 // Criterion 2: edit-locality emits inflation against BOTH an intersection floor
 // and a union ceiling of >=2 solutions; floor <= ceiling.
 #[test]
