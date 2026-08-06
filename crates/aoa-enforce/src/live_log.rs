@@ -206,9 +206,9 @@ enum LogAccess {
 /// `open` *block* until a counterpart appears, so no error is ever produced and
 /// the host's fail-closed conversion of an error into a denial never runs — the
 /// hook hangs instead, and a hook the host eventually abandons is not a denied
-/// write. The bounded
-/// lock wait cannot cover this either: it only begins once the open has already
-/// returned. A directory or a device node likewise has no business here.
+/// write. The bounded lock wait cannot cover this either: it only begins once
+/// the open has already returned. A directory or a device node likewise has no
+/// business here.
 ///
 /// - A **symlink** at the path is followed by a naive open, so the hook appends
 ///   its spans into whatever the link names. `O_NOFOLLOW` fails the open instead
@@ -1188,9 +1188,9 @@ mod tests {
     ///
     /// This deliberately narrows corruption detection on the append path.
     /// Mid-log corruption is still caught loudly by the full [`read_spans`] a
-    /// gating host performs, and again by validation at corpus ingest; refusing to
-    /// append here would instead freeze all further recording on a log with any
-    /// historical bad line — on an append-only file with no repair path.
+    /// gating host performs, and again by validation at corpus ingest; refusing
+    /// to append here would instead freeze all further recording on a log with
+    /// any historical bad line — on an append-only file with no repair path.
     #[test]
     fn append_reads_only_the_tail_and_ignores_an_unparseable_prefix() {
         let dir = tempfile::tempdir().unwrap();
@@ -1351,6 +1351,47 @@ mod tests {
         assert!(repaired.starts_with(&committed));
         assert!(!repaired.contains(r#"{"type":"test.run"{"#));
         assert_eq!(last_seq(&log), 1);
+    }
+
+    /// The repair is returned, not printed, so the byte count a host renders has
+    /// to be the count actually discarded. Asserting only that the file was
+    /// repaired (as the two tests around this one do) would pass just as well
+    /// against a hard-coded zero, leaving the operator a truncation notice that
+    /// understates what was lost.
+    #[test]
+    fn a_repairing_append_reports_the_bytes_it_discarded() {
+        let dir = tempfile::tempdir().unwrap();
+        let committed = span_line(0);
+        let fragment = r#"{"type":"test.run""#;
+        let log = seed_log(&dir, &format!("{committed}{fragment}"));
+
+        let repair = append_span(&log, SpanType::TestRun, Map::new()).unwrap();
+        assert_eq!(
+            repair,
+            Some(TornTailRepair {
+                discarded_bytes: fragment.len() as u64
+            })
+        );
+    }
+
+    /// The common case reports nothing, so a host has no repair to render on an
+    /// ordinary append. Without this, a returned `Some` on every append would
+    /// still satisfy the test above and cry truncation on a healthy log.
+    #[test]
+    fn an_append_to_an_intact_log_reports_no_repair() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = seed_log(&dir, &span_line(0));
+
+        assert_eq!(
+            append_span(&log, SpanType::TestRun, Map::new()).unwrap(),
+            None
+        );
+        // The empty log is the other healthy shape: nothing to tear yet.
+        let fresh = log_path(&dir, "live-fresh.jsonl");
+        assert_eq!(
+            append_span(&fresh, SpanType::TestRun, Map::new()).unwrap(),
+            None
+        );
     }
 
     #[test]
