@@ -120,10 +120,6 @@ what the reinvention gate asks for, so the path has to keep resolving —
 a record is added without an index row, or if the index links a file that does
 not exist.
 
-Three records exist so far, and each one documents something this file already
-states: the layer assignment in "Architecture Overview", and the wire-format and
-held-out-provenance conventions in "Conventions & Patterns".
-
 ## Conventions & Patterns
 
 - Fail loudly on malformed or oversized measurement artifacts; missing optional

@@ -5,7 +5,7 @@ stands in `CLAUDE.md` and `crates/aoa/tests/architecture_doc.rs`.
 
 ## Context
 
-AOA is a workspace of sixteen library crates plus a CLI composition root. A
+AOA is a workspace of narrow library crates plus a CLI composition root. A
 contributor deciding where new code goes has to answer two questions: which
 crate owns this reason to change, and may that crate depend on what the code
 needs. Neither question has an answer the compiler can give — `cargo build`
@@ -18,15 +18,16 @@ the workspace with no declared layer at all. Nothing failed.
 ## Decision
 
 `CLAUDE.md`'s "Architecture Overview" assigns every library crate to exactly one
-of four layers — inputs, measurement, decisions and reporting, controlled
-changes and enforcement — and that assignment is the authoritative answer to
-"where does this new code go". The intended dependency direction is inputs →
-measurement → decisions → CLI, and library crates must not depend on CLI
-concerns.
+layer, and that assignment is the authoritative answer to "where does this new
+code go". The layers are ordered, dependencies run one way along that order, and
+library crates must not depend on CLI concerns.
 
-Membership in that list is enforced: `crates/aoa/tests/architecture_doc.rs`
-fails the workspace tests when a crate under `crates/` has no layer, or when a
-layer names a crate that no longer exists.
+The layer list itself is not restated here. It changes as crates are added or
+split, and a second copy would be a copy that drifts — this record fixes the
+rule, `CLAUDE.md` holds the current assignment, and
+`crates/aoa/tests/architecture_doc.rs` fails the workspace tests when the two
+disagree. What that test checks, and where it deliberately stops, is documented
+in its own module comment rather than duplicated here for the same reason.
 
 ## Consequences
 
@@ -35,22 +36,20 @@ incomplete until `CLAUDE.md` names it. The test parses the bullet block by
 anchoring on the prose above it, which means editing that sentence is a
 breaking change to the test and not merely a wording choice.
 
-Enforcement is deliberately membership only, not edge direction. Two
-pre-existing inversions would fail a layer-order check today: `aoa-bench` sits
-in inputs but is pulled into measurement (`aoa-ynqcn`), and `aoa-recommend`
-sits in decisions but depends on `aoa-migrate` in controlled changes
-(`aoa-4s25v`). Shipping the order check before those edges are settled would
-have required an exception list, which is a slower path to a weaker rule. Those
-two beads extend the test once their edges are resolved.
+Enforcement grew in scope rather than arriving whole, and the rule was not
+weakened to let it. Where a known inversion could not be fixed at the moment the
+check that catches it landed, it goes in an explicit, bead-tracked exception
+list — one named edge that a reader can go read the reason for, rather than a
+softened check that silently permits the whole class.
 
-Two layer placements that read as surprising are settled and recorded in
-`CLAUDE.md` rather than re-argued per reader: `aoa-corpus` is measurement, not
-inputs, because it mines revert history in order to join those outcomes onto
-`aoa-construct`'s classification; `aoa-falsify-build` sits with decisions
-because it depends on `aoa-falsify` for the shape it produces.
+Placements that read as surprising to a newcomer — why `aoa-corpus` is
+measurement rather than inputs, why `aoa-falsify-build` sits with decisions — are
+argued in `CLAUDE.md` at the point of assignment. Settling them beside the
+assignment is what stops them being re-argued per reader.
 
 ## Where this lives
 
-- `CLAUDE.md`, "Architecture Overview" — the layer assignment itself.
-- `crates/aoa/tests/architecture_doc.rs` — the enforcement, and the rationale
-  for its deliberately narrow scope.
+- `CLAUDE.md`, "Architecture Overview" — the layer assignment itself, and the
+  reasoning behind the placements that read as surprising.
+- `crates/aoa/tests/architecture_doc.rs` — the enforcement, and the current
+  scope of what it does and does not check.
