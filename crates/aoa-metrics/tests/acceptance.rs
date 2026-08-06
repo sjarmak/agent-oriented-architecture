@@ -199,6 +199,76 @@ fn retrieval_locality_scores_zero_when_a_retriever_ranked_nothing() {
     assert_eq!(json.get("unavailable"), None);
 }
 
+// Selection keys on PRESENCE of `results`, so an empty first batch IS the first
+// batch. A retriever that ran, ranked nothing, then refined and hit gold reports
+// the zero it measured first; the refinement is not lost, because
+// `tool_calls_to_first_relevant_artifact` carries it.
+#[test]
+fn retrieval_locality_lets_an_empty_first_batch_shadow_a_later_ranking() {
+    let input = MetricInput {
+        trace: Trace {
+            spans: vec![
+                span(
+                    SpanType::RetrievalSearch,
+                    1,
+                    serde_json::json!({ "results": [] }),
+                ),
+                span(
+                    SpanType::RetrievalSearch,
+                    2,
+                    serde_json::json!({ "results": ["OrderService"] }),
+                ),
+            ],
+        },
+        gold_set: set(&["OrderService"]),
+        ..base_input()
+    };
+
+    let retrieval =
+        compute_retrieval_locality(input.as_view()).expect("an empty ranking is well-formed");
+
+    assert!(retrieval.anchored_gold.contains("OrderService"));
+    // The seq-2 batch holds gold at rank 1; consulting it would give 1.0 / 1.0.
+    assert_eq!(retrieval.recall_at_k, Some(0.0));
+    assert_eq!(retrieval.mrr, Some(0.0));
+    assert_eq!(retrieval.unavailable, None);
+}
+
+// The mirror case, and why presence rather than truthiness is the right key: a
+// span that never carried `results` holds no batch to shadow with, so selection
+// walks past it to the span that did rank something.
+#[test]
+fn retrieval_locality_scores_the_first_span_that_carries_results_at_all() {
+    let input = MetricInput {
+        trace: Trace {
+            spans: vec![
+                span(
+                    SpanType::FileRead,
+                    1,
+                    serde_json::json!({ "path": "orders.rs" }),
+                ),
+                span(
+                    SpanType::RetrievalSearch,
+                    2,
+                    serde_json::json!({ "results": ["orders::Other", "OrderService"] }),
+                ),
+            ],
+        },
+        gold_set: set(&["OrderService"]),
+        ..base_input()
+    };
+
+    let retrieval =
+        compute_retrieval_locality(input.as_view()).expect("well-formed ranked results");
+
+    assert!(retrieval.anchored_gold.contains("OrderService"));
+    // Gold sits at rank 2 of the seq-2 batch: one hit within k=2 over a gold set
+    // of size 1, and MRR reads off exactly that rank.
+    assert_eq!(retrieval.recall_at_k, Some(1.0));
+    assert_eq!(retrieval.mrr, Some(0.5));
+    assert_eq!(retrieval.unavailable, None);
+}
+
 // A present-but-broken `results` is neither evidence nor a measurement, so it
 // fails loudly instead of degrading into either.
 #[test]
