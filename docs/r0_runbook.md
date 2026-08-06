@@ -28,6 +28,11 @@ run unchanged:
 export CODEPROBE_ROOT="${CODEPROBE_ROOT:-$HOME/projects/codeprobe}"
 ```
 
+Give it an absolute path: one of the blocks below `cd`s into it, after which a
+relative value would resolve somewhere else. Those blocks each re-assert the
+variable with `:?` so that skipping this step stops them, rather than letting
+`"$CODEPROBE_ROOT/runs/r0/tasks"` quietly become `/runs/r0/tasks`.
+
 ## The two deltas
 
 | Delta | Codeprobe arm | What is varied | Fixed | Held-out source |
@@ -151,6 +156,7 @@ amendment. A rerun that also includes the later `9e38d21` timeout change must
 name that choice explicitly; it must not silently follow codeprobe `main`.
 
 ```bash
+: "${CODEPROBE_ROOT:?export CODEPROBE_ROOT first (see above)}"
 cd "$CODEPROBE_ROOT"
 codeprobe experiment init runs --name r0   # creates runs/r0/experiment.json
 # add-config sets HARNESS knobs only (agent/model/mcp/tools/instruction/preamble).
@@ -366,6 +372,7 @@ only the first seed for each repo, then require a healthy fraction of candidate
 tasks to survive as measured identical pairs:
 
 ```bash
+: "${CODEPROBE_ROOT:?export CODEPROBE_ROOT first (see above)}"
 aoa eval experiment \
   --tasks "$CODEPROBE_ROOT/runs/r0/tasks" \
   --manifest manifest.seed-1.json \
@@ -383,6 +390,7 @@ manifest below. The floor is an operator-selected campaign budget guard, not a
 falsification threshold, and does not alter the R0 verdict.
 
 ```bash
+: "${CODEPROBE_ROOT:?export CODEPROBE_ROOT first (see above)}"
 scripts/r0_experiment.sh \
   --tasks    "$CODEPROBE_ROOT/runs/r0/tasks" \
   --manifest manifest.json \

@@ -237,13 +237,13 @@ cargo build --bin aoa
 
 The `aoa-bench` test `real_r0_campaign_matches_documented_exposure_and_held_out_provenance`
 asserts these same tallies against the campaign. It reads the run directory from
-`AOA_R0_CAMPAIGN_RUNS` and, when that is unset, prints a `SKIP` line and scans
-nothing — and `cargo test` captures that line unless you ask for it, so run the
-test as:
+`AOA_R0_CAMPAIGN_RUNS`, and it is `#[ignore]`d so that a run without that campaign
+reports `1 ignored` rather than a green `ok` that scanned nothing. To run it:
 
 ```bash
+: "${CODEPROBE_ROOT:?export CODEPROBE_ROOT first (see above)}"
 AOA_R0_CAMPAIGN_RUNS="$CODEPROBE_ROOT/runs/r0-campaign" \
-  cargo test -p aoa-bench --test exposure_scan -- --show-output
+  cargo test -p aoa-bench --test exposure_scan -- --ignored
 ```
 
 The per-repository trial counts, held-out pass/fail/errored/unscored tallies,

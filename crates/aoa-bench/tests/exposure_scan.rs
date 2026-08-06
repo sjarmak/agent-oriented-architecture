@@ -120,15 +120,25 @@ fn void_scored_trials_remain_exposed_and_report_their_provenance() {
     assert_eq!(provenance.unscored_trials, 0);
 }
 
+// The campaign is an input this repository consumes rather than ships: codeprobe
+// produces it, it weighs far more than a fixture, and it lives wherever the
+// operator ran it. Naming it by variable keeps that machine-specific location out
+// of the repository.
+//
+// Ignored by default because the input can never exist on a CI runner. The other
+// environment-dependent tests here skip via `eprintln!` (see aoa-migrate's node
+// and ruff guards), but those tools ARE installed in CI, so those tests really
+// run there. This one would not, and libtest captures a passing test's output —
+// so an unconditional version would print `ok` in CI having scanned nothing.
+// `1 ignored` in the default summary is the honest line. Run it with `--ignored`
+// and the variable set; see docs/r0-reserve-spendability.md.
 #[test]
+#[ignore = "scans the real R0 campaign; set AOA_R0_CAMPAIGN_RUNS and run with --ignored"]
 fn real_r0_campaign_matches_documented_exposure_and_held_out_provenance() {
     const HTTPIE_BASELINE: &str = "5b604c37c6c67e18e7c3e9aee6c88a8c22b98345";
-    // The campaign is an input this repository consumes rather than ships:
-    // codeprobe produces it, it weighs far more than a fixture, and it lives
-    // wherever the operator ran it. Naming it by variable keeps that
-    // machine-specific location out of the repository. Absence is announced
-    // rather than silent, and a variable that IS set has to name a real
-    // directory, so a typo fails instead of skipping.
+    // Still announced rather than silent when invoked with `--ignored` but no
+    // variable, and a variable that IS set has to name a real directory, so a
+    // typo fails instead of skipping.
     const RUNS_ENV: &str = "AOA_R0_CAMPAIGN_RUNS";
 
     let Some(runs_root) = std::env::var_os(RUNS_ENV).map(PathBuf::from) else {
