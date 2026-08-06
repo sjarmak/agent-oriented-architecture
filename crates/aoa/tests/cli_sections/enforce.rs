@@ -751,8 +751,11 @@ fn enforce_check_blocks_generated_symlink_alias_and_destination() {
 #[test]
 fn enforce_check_allows_write_target_outside_repository_ungated() {
     let outside = TempDir::new().unwrap();
-    std::fs::write(outside.path().join("notes.md"), "original\n").unwrap();
+    // Planted so the absolute spelling names an *existing* file, exercising the
+    // canonicalize-an-existing-component path rather than the absent-leaf one
+    // the outcome-hook test below covers.
     let absolute = outside.path().join("notes.md");
+    std::fs::write(&absolute, "original\n").unwrap();
 
     for (index, target) in ["../outside.rs", absolute.to_str().unwrap()]
         .iter()
