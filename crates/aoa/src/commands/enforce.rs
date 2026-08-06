@@ -52,14 +52,14 @@
 //! we control its format, so the gate reads exactly the spans we wrote — no
 //! dependency on the host's transcript format. It lands under the same ignored
 //! `.aoa/traces/` tree that `observe` already provisions. The store itself lives
-//! in [`aoa_enforce::live_log`], beside the gates that decide over it; this
-//! module resolves the trust root, dispatches, and renders.
+//! in [`aoa_enforce::live_log`], beside the gates that decide over it, and the
+//! trust root every write is judged against comes from
+//! [`resolve_repository_root`], beside the containment checks that measure
+//! against it. What is left here is the hook shape: read the payload, dispatch,
+//! render.
 
-use std::fmt;
-use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus};
 
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
@@ -75,7 +75,9 @@ use aoa_enforce::{
     TornTailRepair,
 };
 use aoa_policy::Policy;
-use aoa_trace::{normalize_lexically, resolve_canonicalizing, PathTrustError, SpanType};
+use aoa_trace::{
+    normalize_lexically, resolve_canonicalizing, resolve_repository_root, PathTrustError, SpanType,
+};
 
 use crate::cli::{EnforceArgs, EnforceCommand};
 use crate::commands::generated::generated_rules;
@@ -480,11 +482,11 @@ fn recorded_span_type(event: &HookEvent) -> Option<SpanType> {
 
 /// Resolve the repository trust root for the hook payload.
 ///
-/// The host normally supplies an absolute project `cwd`; an empty value falls
-/// back to the process directory. Canonicalization proves the directory exists
-/// and collapses aliases, then the nearest non-symlink `.git` marker pins writes
-/// and policy reads to a real repository root rather than an arbitrary payload
-/// path. A `.git` file is accepted for linked worktrees.
+/// Reading `event.cwd` is the only hook-shaped part of the answer, so it is the
+/// only part left here: the host normally supplies an absolute project path, and
+/// an empty value falls back to the process directory. Everything the root is
+/// *trusted* for belongs to [`resolve_repository_root`], beside the containment
+/// checks measured against it.
 fn resolve_base(event: &HookEvent) -> Result<PathBuf> {
     let supplied = if event.cwd.is_empty() {
         std::env::current_dir().context("failed to resolve current directory")?
@@ -495,252 +497,7 @@ fn resolve_base(event: &HookEvent) -> Result<PathBuf> {
         }
         path
     };
-    let canonical = supplied
-        .canonicalize()
-        .with_context(|| format!("failed to resolve hook cwd {}", supplied.display()))?;
-    if !canonical.is_dir() {
-        return Err(anyhow!(
-            "hook cwd is not a directory: {}",
-            canonical.display()
-        ));
-    }
-
-    let mut nearest_rejection = None;
-    for candidate in canonical.ancestors() {
-        let marker = candidate.join(".git");
-        match std::fs::symlink_metadata(&marker) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                return Err(anyhow!(
-                    "refusing repository root with symlinked marker at {}",
-                    marker.display()
-                ));
-            }
-            Ok(metadata) => match git_candidate_is_root(candidate, metadata.is_dir())? {
-                None => return Ok(candidate.to_path_buf()),
-                Some(rejection) => {
-                    nearest_rejection.get_or_insert((marker, rejection));
-                }
-            },
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => {
-                return Err(anyhow!(err))
-                    .with_context(|| format!("failed to inspect {}", marker.display()));
-            }
-        }
-    }
-    if let Some((marker, rejection)) = nearest_rejection {
-        return Err(anyhow!(
-            "Git repository validation failed for {}: {rejection}",
-            marker.display()
-        ));
-    }
-    Err(anyhow!(
-        "hook cwd {} is not inside a Git repository",
-        canonical.display()
-    ))
-}
-
-/// Ask Git to validate the marker and require it to identify this exact
-/// canonical directory as the worktree root.
-fn git_candidate_is_root(
-    candidate: &Path,
-    marker_is_dir: bool,
-) -> Result<Option<GitCandidateRejection>> {
-    git_candidate_is_root_with(candidate, marker_is_dir, &mut git_resolved_path)
-}
-
-fn git_candidate_is_root_with(
-    candidate: &Path,
-    marker_is_dir: bool,
-    resolve: &mut impl FnMut(&Path, &'static str) -> Result<GitPathResolution>,
-) -> Result<Option<GitCandidateRejection>> {
-    let reported = match resolve(candidate, "--show-toplevel")? {
-        Ok(path) => path,
-        Err(rejection) => {
-            return Ok(Some(GitCandidateRejection::Command(rejection)));
-        }
-    };
-    if reported != candidate {
-        return Ok(Some(GitCandidateRejection::RootMismatch {
-            expected: candidate.to_path_buf(),
-            reported,
-        }));
-    }
-    if marker_is_dir {
-        return Ok(None);
-    }
-
-    let git_dir = match resolve(candidate, "--git-dir")? {
-        Ok(path) => path,
-        Err(rejection) => {
-            return Ok(Some(GitCandidateRejection::Command(rejection)));
-        }
-    };
-    let common_dir = match resolve(candidate, "--git-common-dir")? {
-        Ok(path) => path,
-        Err(rejection) => {
-            return Ok(Some(GitCandidateRejection::Command(rejection)));
-        }
-    };
-    if git_dir.parent() != Some(common_dir.join("worktrees").as_path()) {
-        return Ok(Some(GitCandidateRejection::LinkedWorktreeLayout {
-            git_dir,
-            common_dir,
-        }));
-    }
-    if linked_worktree_points_back(candidate, &git_dir)? {
-        Ok(None)
-    } else {
-        Ok(Some(GitCandidateRejection::BacklinkMismatch {
-            candidate: candidate.to_path_buf(),
-            git_dir,
-        }))
-    }
-}
-
-type GitPathResolution = std::result::Result<PathBuf, GitCommandRejection>;
-
-#[derive(Debug)]
-struct GitCommandRejection {
-    field: &'static str,
-    status: ExitStatus,
-    stderr: String,
-}
-
-#[derive(Debug)]
-enum GitCandidateRejection {
-    Command(GitCommandRejection),
-    RootMismatch {
-        expected: PathBuf,
-        reported: PathBuf,
-    },
-    LinkedWorktreeLayout {
-        git_dir: PathBuf,
-        common_dir: PathBuf,
-    },
-    BacklinkMismatch {
-        candidate: PathBuf,
-        git_dir: PathBuf,
-    },
-}
-
-impl fmt::Display for GitCandidateRejection {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Command(rejection) => rejection.fmt(formatter),
-            Self::RootMismatch { expected, reported } => write!(
-                formatter,
-                "Git check --show-toplevel reported {} instead of candidate {}",
-                reported.display(),
-                expected.display()
-            ),
-            Self::LinkedWorktreeLayout {
-                git_dir,
-                common_dir,
-            } => write!(
-                formatter,
-                "Git linked-worktree layout is invalid: --git-dir reported {}, which is not directly under {}/worktrees from --git-common-dir",
-                git_dir.display(),
-                common_dir.display()
-            ),
-            Self::BacklinkMismatch { candidate, git_dir } => write!(
-                formatter,
-                "linked-worktree backlink at {}/gitdir does not point to {}/.git",
-                git_dir.display(),
-                candidate.display()
-            ),
-        }
-    }
-}
-
-impl fmt::Display for GitCommandRejection {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "Git check {} failed with status {}",
-            self.field, self.status
-        )?;
-        if !self.stderr.is_empty() {
-            write!(formatter, ": {}", self.stderr)
-        } else {
-            write!(formatter, " (no stderr)")
-        }
-    }
-}
-
-fn git_resolved_path(candidate: &Path, field: &'static str) -> Result<GitPathResolution> {
-    // Git's complete `rev-parse --local-env-vars` set, plus the two discovery
-    // controls it omits. Any one of these must describe the candidate itself,
-    // never ambient state inherited from the hook host.
-    const REPOSITORY_ENV: [&str; 17] = [
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_CONFIG",
-        "GIT_CONFIG_PARAMETERS",
-        "GIT_CONFIG_COUNT",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_IMPLICIT_WORK_TREE",
-        "GIT_GRAFT_FILE",
-        "GIT_INDEX_FILE",
-        "GIT_NO_REPLACE_OBJECTS",
-        "GIT_REPLACE_REF_BASE",
-        "GIT_PREFIX",
-        "GIT_SHALLOW_FILE",
-        "GIT_COMMON_DIR",
-        "GIT_CEILING_DIRECTORIES",
-        "GIT_DISCOVERY_ACROSS_FILESYSTEM",
-    ];
-    let mut command = Command::new("git");
-    for variable in REPOSITORY_ENV {
-        command.env_remove(variable);
-    }
-    let output = command
-        .arg("-C")
-        .arg(candidate)
-        .args(["rev-parse", "--path-format=absolute", field])
-        .output()
-        .context("failed to run git while validating the hook cwd")?;
-    if !output.status.success() {
-        return Ok(Err(GitCommandRejection {
-            field,
-            status: output.status,
-            stderr: String::from_utf8_lossy(&output.stderr)
-                .trim_end()
-                .to_owned(),
-        }));
-    }
-
-    let reported = std::str::from_utf8(&output.stdout)
-        .context("git returned a non-UTF-8 repository root")?
-        .trim_end();
-    let reported = Path::new(reported)
-        .canonicalize()
-        .with_context(|| format!("failed to resolve Git repository root {reported}"))?;
-    Ok(Ok(reported))
-}
-
-fn linked_worktree_points_back(candidate: &Path, git_dir: &Path) -> Result<bool> {
-    const MAX_BACKLINK_BYTES: u64 = 4096;
-    let mut raw = Vec::new();
-    File::open(git_dir.join("gitdir"))
-        .context("failed to open linked-worktree backlink")?
-        .take(MAX_BACKLINK_BYTES + 1)
-        .read_to_end(&mut raw)
-        .context("failed to read linked-worktree backlink")?;
-    if raw.len() as u64 > MAX_BACKLINK_BYTES {
-        return Ok(false);
-    }
-    let backlink = std::str::from_utf8(&raw)
-        .context("linked-worktree backlink is not UTF-8")?
-        .trim_end();
-    let backlink = Path::new(backlink);
-    let backlink = if backlink.is_absolute() {
-        backlink.to_path_buf()
-    } else {
-        git_dir.join(backlink)
-    };
-    Ok(backlink.canonicalize().ok() == candidate.join(".git").canonicalize().ok())
+    Ok(resolve_repository_root(&supplied)?)
 }
 
 /// Merge the enforcement hook entries into an existing `.claude/settings.json`
@@ -1012,6 +769,8 @@ fn add_hook(
 
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
+
     use super::*;
 
     fn event(tool: &str, command: Option<&str>) -> HookEvent {
@@ -1120,292 +879,45 @@ mod tests {
             .contains("repository root"));
     }
 
+    /// The adapter's own rule, and the only one it still owns: a payload path
+    /// that is not absolute would resolve against the process directory.
     #[test]
-    fn resolve_base_rejects_an_existing_non_repository_directory() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(dir.path().join(".git")).unwrap();
-        std::fs::write(dir.path().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    fn resolve_base_rejects_a_relative_hook_cwd() {
         let mut e = event("Write", None);
-        e.cwd = dir.path().to_string_lossy().into_owned();
+        e.cwd = "relative/project".to_string();
 
-        let err = resolve_base(&e).expect_err("an arbitrary directory is not a trust root");
-        let message = err.to_string();
-        assert!(message.contains("--show-toplevel"), "{message}");
-        assert!(message.contains("status"), "{message}");
-        assert!(message.contains("not a git repository"), "{message}");
-        assert!(!dir.path().join(".aoa").exists());
+        let err = resolve_base(&e).expect_err("a relative hook cwd names no trust root");
+        assert!(err.to_string().contains("must be absolute"), "{err}");
     }
 
     #[test]
-    fn git_candidate_reports_show_toplevel_failure() {
-        let (_fixture, candidate) = candidate_fixture();
-        let message = rejection_message(
-            &candidate,
-            true,
-            vec![(
-                "--show-toplevel",
-                rejected_git_path(
-                    "--show-toplevel",
-                    "fatal: detected dubious ownership in repository",
-                ),
-            )],
-        );
-        assert!(message.contains("--show-toplevel"), "{message}");
-        assert!(message.contains("dubious ownership"), "{message}");
-    }
-
-    #[test]
-    fn git_candidate_reports_mismatched_toplevel() {
-        let (_fixture, candidate) = candidate_fixture();
-        let other = candidate.join("other");
-        std::fs::create_dir(&other).unwrap();
-        let message = rejection_message(
-            &candidate,
-            true,
-            vec![("--show-toplevel", Ok(other.clone()))],
-        );
-        assert!(message.contains("--show-toplevel"), "{message}");
-        assert!(message.contains(&other.display().to_string()), "{message}");
-    }
-
-    #[test]
-    fn git_candidate_reports_git_dir_failure() {
-        let (_fixture, candidate) = candidate_fixture();
-        let message = rejection_message(
-            &candidate,
-            false,
-            vec![
-                ("--show-toplevel", Ok(candidate.clone())),
-                (
-                    "--git-dir",
-                    rejected_git_path("--git-dir", "fatal: corrupt config"),
-                ),
-            ],
-        );
-        assert!(message.contains("--git-dir"), "{message}");
-        assert!(message.contains("corrupt config"), "{message}");
-    }
-
-    #[test]
-    fn git_candidate_reports_common_dir_failure() {
-        let (_fixture, candidate) = candidate_fixture();
-        let git_dir = candidate.join("admin/worktrees/fixture");
-        let message = rejection_message(
-            &candidate,
-            false,
-            vec![
-                ("--show-toplevel", Ok(candidate.clone())),
-                ("--git-dir", Ok(git_dir.clone())),
-                (
-                    "--git-common-dir",
-                    rejected_git_path("--git-common-dir", "fatal: invalid common directory"),
-                ),
-            ],
-        );
-        assert!(message.contains("--git-common-dir"), "{message}");
-        assert!(message.contains("invalid common directory"), "{message}");
-    }
-
-    #[test]
-    fn git_candidate_reports_invalid_linked_worktree_layout() {
-        let (_fixture, candidate) = candidate_fixture();
-        let git_dir = candidate.join("admin/worktrees/fixture");
-        let common_dir = candidate.join("different-admin");
-        let message = rejection_message(
-            &candidate,
-            false,
-            vec![
-                ("--show-toplevel", Ok(candidate.clone())),
-                ("--git-dir", Ok(git_dir.clone())),
-                ("--git-common-dir", Ok(common_dir.clone())),
-            ],
-        );
-        assert!(message.contains("linked-worktree layout"), "{message}");
-        assert!(
-            message.contains(&git_dir.display().to_string()),
-            "{message}"
-        );
-        assert!(
-            message.contains(&common_dir.display().to_string()),
-            "{message}"
-        );
-    }
-
-    #[test]
-    fn git_candidate_reports_mismatched_linked_worktree_backlink() {
-        let (_fixture, candidate) = candidate_fixture();
-        let common_dir = candidate.join("admin");
-        let git_dir = common_dir.join("worktrees/fixture");
-        std::fs::create_dir_all(&git_dir).unwrap();
-        std::fs::write(candidate.join(".git"), "gitdir: ignored\n").unwrap();
-        std::fs::write(
-            git_dir.join("gitdir"),
-            candidate
-                .join("missing-marker")
-                .to_string_lossy()
-                .as_bytes(),
-        )
-        .unwrap();
-        let message = rejection_message(
-            &candidate,
-            false,
-            vec![
-                ("--show-toplevel", Ok(candidate.clone())),
-                ("--git-dir", Ok(git_dir.clone())),
-                ("--git-common-dir", Ok(common_dir)),
-            ],
-        );
-        assert!(message.contains("backlink"), "{message}");
-        assert!(
-            message.contains(&git_dir.display().to_string()),
-            "{message}"
-        );
-    }
-
-    fn candidate_fixture() -> (tempfile::TempDir, PathBuf) {
-        let fixture = tempfile::tempdir().unwrap();
-        let candidate = fixture.path().canonicalize().unwrap();
-        (fixture, candidate)
-    }
-
-    fn rejection_message(
-        candidate: &Path,
-        marker_is_dir: bool,
-        resolutions: Vec<(&'static str, GitPathResolution)>,
-    ) -> String {
-        let mut resolutions = resolutions.into_iter();
-        let mut resolve = |_: &Path, field| {
-            let (expected, resolution) = resolutions.next().expect("unexpected Git check");
-            assert_eq!(field, expected);
-            Ok(resolution)
-        };
-        git_candidate_is_root_with(candidate, marker_is_dir, &mut resolve)
-            .unwrap()
-            .expect("candidate must be rejected")
-            .to_string()
-    }
-
-    fn rejected_git_path(field: &'static str, stderr: &str) -> GitPathResolution {
-        let status = Command::new("git")
-            .arg("--definitely-not-a-real-option")
-            .output()
-            .unwrap()
-            .status;
-        Err(GitCommandRejection {
-            field,
-            status,
-            stderr: stderr.to_string(),
-        })
-    }
-
-    #[test]
-    fn resolve_base_accepts_a_linked_worktree_git_file() {
-        let fixture = tempfile::tempdir().unwrap();
-        let main = fixture.path().join("main");
-        let worktree = fixture.path().join("worktree");
-        init_git_repo(&main);
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(&main)
-            .args([
-                "-c",
-                "user.name=AOA Test",
-                "-c",
-                "user.email=aoa@example.invalid",
-                "commit",
-                "--quiet",
-                "--allow-empty",
-                "-m",
-                "fixture",
-            ])
-            .status()
-            .unwrap();
-        assert!(status.success(), "worktree fixture commit must succeed");
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(&main)
-            .args(["worktree", "add", "--quiet", "--detach"])
-            .arg(&worktree)
-            .status()
-            .unwrap();
-        assert!(status.success(), "linked worktree must initialize");
-        let mut e = event("Write", None);
-        e.cwd = worktree.to_string_lossy().into_owned();
-
-        assert_eq!(resolve_base(&e).unwrap(), worktree);
-    }
-
-    #[test]
-    fn resolve_base_accepts_relative_linked_worktree_metadata() {
-        let fixture = tempfile::tempdir().unwrap();
-        let main = fixture.path().join("main");
-        let worktree = fixture.path().join("worktree");
-        init_git_repo(&main);
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(&main)
-            .args([
-                "-c",
-                "user.name=AOA Test",
-                "-c",
-                "user.email=aoa@example.invalid",
-                "commit",
-                "--quiet",
-                "--allow-empty",
-                "-m",
-                "fixture",
-            ])
-            .status()
-            .unwrap();
-        assert!(status.success(), "worktree fixture commit must succeed");
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(&main)
-            .args(["worktree", "add", "--quiet", "--detach"])
-            .arg(&worktree)
-            .status()
-            .unwrap();
-        assert!(status.success(), "linked worktree must initialize");
-
-        let admin_dir = main.join(".git/worktrees/worktree");
-        std::fs::write(
-            worktree.join(".git"),
-            "gitdir: ../main/.git/worktrees/worktree\n",
-        )
-        .unwrap();
-        std::fs::write(admin_dir.join("gitdir"), "../../../../worktree/.git\n").unwrap();
-        assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(&worktree)
-                .args(["rev-parse", "--is-inside-work-tree"])
-                .output()
-                .unwrap()
-                .status
-                .success(),
-            "Git must accept the relative linked-worktree metadata fixture"
-        );
-
-        let mut e = event("Write", None);
-        e.cwd = worktree.to_string_lossy().into_owned();
-        assert_eq!(resolve_base(&e).unwrap(), worktree);
-    }
-
-    #[test]
-    fn resolve_base_ignores_a_nested_marker_redirecting_to_its_parent() {
+    fn resolve_base_resolves_the_hook_cwd_to_the_repository_root() {
         let repo = tempfile::tempdir().unwrap();
         init_git_repo(repo.path());
         let nested = repo.path().join("nested");
         std::fs::create_dir(&nested).unwrap();
-        std::fs::write(
-            nested.join(".git"),
-            format!("gitdir: {}\n", repo.path().join(".git").display()),
-        )
-        .unwrap();
         let mut e = event("Write", None);
         e.cwd = nested.to_string_lossy().into_owned();
 
-        assert_eq!(resolve_base(&e).unwrap(), repo.path());
+        assert_eq!(
+            resolve_base(&e).unwrap(),
+            repo.path().canonicalize().unwrap()
+        );
+    }
+
+    /// A refusal from the trust-root resolver has to reach the hook, not be
+    /// softened into a usable base along the way.
+    #[test]
+    fn resolve_base_surfaces_a_refused_trust_root() {
+        let outside = tempfile::tempdir().unwrap();
+        let mut e = event("Write", None);
+        e.cwd = outside.path().to_string_lossy().into_owned();
+
+        let err = resolve_base(&e).expect_err("a directory in no repository has no trust root");
+        assert!(
+            err.to_string().contains("not inside a Git repository"),
+            "{err}"
+        );
     }
 
     /// Re-merging an already-installed config must be byte-stable: every entry is

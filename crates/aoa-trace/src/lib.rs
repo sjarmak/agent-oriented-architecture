@@ -24,7 +24,8 @@ pub use model::{Span, Trace};
 pub use path_trust::dirfd;
 pub use path_trust::{
     is_symlink_nofollow, normalize_lexically, reject_symlink, resolve_canonicalizing,
-    safe_join_nofollow, validate_single_component, PathTrustError, UnsafePathComponent,
+    resolve_repository_root, safe_join_nofollow, validate_single_component, PathTrustError,
+    RepositoryRootError, UnsafePathComponent,
 };
 pub use report::TraceReport;
 pub use span_type::{SpanSource, SpanType};
