@@ -10,3 +10,16 @@ license.workspace = true
 aoa-trace = { path = "../aoa-trace" }
 globset = "0.4.16"
 serde_json = { workspace = true }
+anyhow = "1.0.98"
+
+# Descriptor-relative directory acquisition keeps the live log beneath the
+# repository trust root; O_NOFOLLOW / O_NONBLOCK also reject a planted symlink
+# or FIFO at the final component.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["fs"] }
+
+[dev-dependencies]
+tempfile = "3.10.1"
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2.186"

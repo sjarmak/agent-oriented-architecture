@@ -91,9 +91,7 @@ dependencies = [
  "aoa-trace",
  "assert_cmd",
  "clap",
- "libc",
  "predicates",
- "rustix",
  "serde",
  "serde_json",
  "sha2",
@@ -175,9 +173,13 @@ dependencies = [
 name = "aoa-enforce"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "aoa-trace",
  "globset",
+ "libc",
+ "rustix",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

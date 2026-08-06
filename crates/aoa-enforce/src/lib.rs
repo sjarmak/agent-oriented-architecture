@@ -14,11 +14,24 @@
 //! worth applying; it does not govern whether an operator may opt into their own
 //! gate. The two are decoupled by design, which is why this layer ships without
 //! waiting on an external-outcome corpus.
+//!
+//! ## Decisions and the log they read
+//!
+//! The gates below are pure functions over spans. [`live_log`] owns the durable
+//! store those spans come from — the append-only, crash-consistent live log,
+//! with the locking, sequencing and containment invariants that make a gate
+//! decision trustworthy. Keeping both here lets this crate state invariants
+//! about the log it semantically owns, and lets a second host (a daemon, an MCP
+//! server) reuse the store without shelling out to the CLI.
 
 use std::fmt;
 
 use aoa_trace::{Span, SpanSource, SpanType};
 use serde_json::{Map, Value};
+
+pub mod live_log;
+
+pub use live_log::{LiveLog, TornTailRepair};
 
 /// The outcome of consulting a policy on a pending action.
 #[derive(Debug, Clone, PartialEq, Eq)]
