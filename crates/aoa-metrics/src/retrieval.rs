@@ -62,10 +62,10 @@ pub fn compute_retrieval_locality(input: MetricInputRef<'_>) -> RetrievalLocalit
     // Kept as an `Option`: collapsing a missing batch into an empty one makes a
     // trace with broken retrieval instrumentation indistinguishable from a
     // retriever that ranked results and hit no gold.
-    let first_batch = spans
-        .iter()
-        .find(|s| !ranked_results(s).is_empty())
-        .map(|s| ranked_results(s));
+    let first_batch = spans.iter().find_map(|s| {
+        let results = ranked_results(s);
+        (!results.is_empty()).then_some(results)
+    });
 
     let k = input.k;
     let (recall_at_k, mrr, unavailable) = match (anchored.is_empty(), first_batch) {

@@ -133,10 +133,9 @@ fn retrieval_locality_is_unavailable_when_no_gold_symbol_anchors() {
 
 #[test]
 fn retrieval_locality_is_unavailable_when_no_span_carries_ranked_results() {
-    // A trace whose spans never carry a `results` list has no retrieval
-    // observation at all. That is broken instrumentation, and it must not read
-    // as the measured zero that
-    // `retrieval_locality_misses_when_only_raw_name_present` produces from a
+    // A trace whose spans never carry a `results` list holds no retrieval
+    // observation at all. That must not read as the measured zero
+    // `retrieval_locality_misses_when_only_raw_name_present` gets from a
     // retriever that did rank results, none of them gold.
     let input = MetricInput {
         trace: Trace {
