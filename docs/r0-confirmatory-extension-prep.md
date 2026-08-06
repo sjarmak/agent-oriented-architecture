@@ -15,6 +15,18 @@ of `0.0`. The run therefore exposed all 16 admitted sqlparse subjects and all
 12 admitted websockets subjects, even though it produced no valid outcome
 signal.
 
+> **Superseded in part (2026-08-06, `aoa-p0g5l`).** The clause "even though it
+> produced no valid outcome signal", and the "instrument-void trials" framing
+> below, are wrong and must not be relied on. Reading the payloads rather than
+> the top-level field shows 79 of the 80 trials carry `passed_artifact = true`
+> with a mean non-zero `score_artifact` of `0.9330`; AOA's own exposure gate
+> tallies `errored=0; unscored=0` on both repositories. The `0.0` is
+> `scoring_policy = min` collapsing a passing artifact leg against the
+> `aoa-oer4`-broken direct leg, not an absence of grading. The exposure verdicts
+> in this section are unaffected: both repositories remain `exposed`. See the
+> [R0 reserve spendability record](r0-reserve-spendability.md), which also
+> answers which repositories the extension may draw from.
+
 The zero-score distribution came from the container `TASK_REPO_ROOT` scoping
 fault tracked as `aoa-oer4`: the repository root was not propagated and staged
 for the direct scoring channel. The Codeprobe corrections are `d799a98` and
