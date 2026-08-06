@@ -11,11 +11,11 @@
 //! of `aoa-falsify`, never added to the list, and was the only crate in the
 //! workspace with no declared layer.
 //!
-//! Scope is deliberately membership, not edge direction. A layer-order check
-//! (no crate depending on a later layer) is worth having, but it surfaces two
-//! pre-existing inversions that belong to their own beads, so it is tracked
-//! separately rather than bolted on here where it would have to ship with an
-//! exception list longer than the rule.
+//! Scope is deliberately membership, not edge direction. A layer-order check is
+//! worth having, but it would have to ship with an exception list for two
+//! pre-existing inversions — `aoa-bench` into measurement (aoa-ynqcn) and
+//! `aoa-recommend` into controlled-changes (aoa-4s25v). Those beads extend this
+//! file once their edges are settled.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -44,10 +44,12 @@ fn workspace_root() -> PathBuf {
 /// The crate names CLAUDE.md's layer bullets assign a layer to, in document
 /// order and including any duplicate so the caller can report it.
 ///
-/// Panics rather than returning an empty set when the anchor or the bullets are
+/// Panics rather than returning an empty list when the anchor or the bullets are
 /// missing: a parser that quietly finds nothing would turn every assertion below
 /// into a vacuous pass, which is worse than having no test.
-fn documented_crates(claude_md: &str) -> Vec<String> {
+fn layer_list() -> Vec<String> {
+    let claude_md =
+        std::fs::read_to_string(workspace_root().join("CLAUDE.md")).expect("CLAUDE.md is readable");
     let (_, after_anchor) = claude_md
         .split_once(LIST_ANCHOR)
         .unwrap_or_else(|| panic!("CLAUDE.md no longer contains the anchor {LIST_ANCHOR:?}"));
@@ -94,16 +96,11 @@ fn backticked_crate_names(line: &str) -> Vec<String> {
         .collect()
 }
 
-/// The layer list as CLAUDE.md currently states it.
-fn layer_list() -> Vec<String> {
-    let claude_md =
-        std::fs::read_to_string(workspace_root().join("CLAUDE.md")).expect("CLAUDE.md is readable");
-    documented_crates(&claude_md)
-}
-
-/// Every directory under `crates/` that is a real crate (carries a Cargo.toml).
-fn workspace_crates(root: &Path) -> BTreeSet<String> {
-    let crates_dir = root.join("crates");
+/// Every library crate on disk: a directory under `crates/` carrying a
+/// Cargo.toml, minus the CLI composition root, which the bullets exclude by
+/// construction.
+fn library_crates() -> BTreeSet<String> {
+    let crates_dir = workspace_root().join("crates");
     let entries = std::fs::read_dir(&crates_dir)
         .unwrap_or_else(|e| panic!("reading {}: {e}", crates_dir.display()));
 
@@ -117,7 +114,9 @@ fn workspace_crates(root: &Path) -> BTreeSet<String> {
             .file_name()
             .into_string()
             .expect("crate directory name is UTF-8");
-        names.insert(name);
+        if name != CLI_CRATE {
+            names.insert(name);
+        }
     }
 
     assert!(
@@ -130,27 +129,20 @@ fn workspace_crates(root: &Path) -> BTreeSet<String> {
 
 #[test]
 fn every_library_crate_has_exactly_one_documented_layer() {
-    let documented = layer_list();
-    let existing = workspace_crates(&workspace_root());
+    let on_disk = library_crates();
+    let listed: BTreeSet<String> = layer_list().into_iter().collect();
 
-    let expected: BTreeSet<&str> = existing
-        .iter()
-        .map(String::as_str)
-        .filter(|name| *name != CLI_CRATE)
-        .collect();
-    let listed: BTreeSet<&str> = documented.iter().map(String::as_str).collect();
-
-    let undocumented: Vec<&&str> = expected.difference(&listed).collect();
+    let undocumented: Vec<&String> = on_disk.difference(&listed).collect();
     assert!(
         undocumented.is_empty(),
         "these crates exist but no CLAUDE.md layer claims them: {undocumented:?} — \
 a crate with no declared layer is where the next contributor puts code in the wrong place"
     );
 
-    let phantom: Vec<&&str> = listed.difference(&expected).collect();
+    let phantom: Vec<&String> = listed.difference(&on_disk).collect();
     assert!(
         phantom.is_empty(),
-        "CLAUDE.md assigns a layer to crates that do not exist under crates/: {phantom:?}"
+        "CLAUDE.md gives a layer to {phantom:?}, which is not a library crate under crates/"
     );
 }
 
