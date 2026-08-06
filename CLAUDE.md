@@ -111,7 +111,7 @@ reaches back the other way is the inversion aoa-4s25v removed.
 `crates/aoa/tests/architecture_doc.rs` enforces the direction against each
 crate's Cargo manifest: a dependency pointing at a later layer fails the
 workspace tests unless it is in that file's explicit, bead-tracked exception
-list, which is currently empty. Library crates must not depend on CLI concerns.
+list. Library crates must not depend on CLI concerns.
 Human and JSON output are dual registers of the same result, not separate
 implementations.
 

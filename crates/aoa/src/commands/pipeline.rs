@@ -106,9 +106,7 @@ pub(crate) fn readiness(repo: &Path) -> Result<Readiness> {
 /// The projection lives here because the composition root is the only place
 /// that legitimately sees both sides: `aoa-recommend` is a decisions crate and
 /// `aoa-migrate` is controlled changes, which comes after it in the layer order
-/// (aoa-4s25v). Carrying the same `fixes` slice into both this call and
-/// `Readiness.fixes` keeps the invariant that motivated the field — the
-/// rendered migration list and the join describe one registry, not two.
+/// (aoa-4s25v).
 fn available(fixes: &[Box<dyn CodeFix>]) -> Vec<AvailableFix> {
     fixes
         .iter()
