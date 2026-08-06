@@ -1533,10 +1533,8 @@ mod tests {
     fn upgrading_retires_every_superseded_hook_set() {
         // Drawn from the retirement list itself, so a shape added there without
         // being retired — or retired without being listed — fails here.
-        for (index, version) in (1u64..)
-            .enumerate()
-            .take(superseded_hook_commands("").len())
-        {
+        for index in 0..superseded_hook_commands("").len() {
+            let version = index as u64 + 1;
             let command = |verb: &str| superseded_hook_commands(verb)[index].clone();
             let installed = json!({
                 "aoa": { "enforce_hook_set_version": version },
