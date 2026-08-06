@@ -515,8 +515,13 @@ fn enforce_check_rejects_an_arbitrary_non_repository_cwd_without_writing() {
         .write_stdin(payload)
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("--show-toplevel"))
-        .stderr(predicate::str::contains("not a git repository"));
+        // A temp dir has no `.git` marker anywhere above it, so the walk ends
+        // with nothing to hand Git and the rejection says exactly that. The
+        // `--show-toplevel` probe wording belongs to the case where a marker
+        // *does* exist and Git rejects it — the two tests below, and the
+        // `git_candidate_reports_*` unit tests. Asserting it here described a
+        // path this payload never takes.
+        .stderr(predicate::str::contains("is not inside a Git repository"));
     assert!(
         !dir.path().join(".aoa").exists(),
         "a rejected payload must not create telemetry outside a repository"
