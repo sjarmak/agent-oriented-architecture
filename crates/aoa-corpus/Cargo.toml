@@ -8,7 +8,10 @@ license.workspace = true
 
 [dependencies]
 # One-directional: the corpus joins mined outcomes onto the construct-validity
-# report; aoa-construct knows nothing about corpora.
+# report; aoa-construct knows nothing about corpora. Both crates are measurement
+# (see CLAUDE.md), so this is a peer edge within one layer, not a climb out of
+# capture — see the layer note in src/lib.rs for why the crate is classified
+# that way despite mining git history.
 aoa-construct = { path = "../aoa-construct" }
 serde = { workspace = true }
 thiserror = { workspace = true }

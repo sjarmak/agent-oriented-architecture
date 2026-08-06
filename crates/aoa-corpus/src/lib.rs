@@ -6,10 +6,24 @@
 //! and correlates either against a metric with an exact Spearman permutation
 //! test. The joined result is a [`CorpusReport`].
 //!
-//! Nothing here is on the gating path today — with no corpus available every
-//! candidate stays advisory — so this crate is a CLI-side concern. It depends on
-//! `aoa-construct` for the report it fills in, and deliberately not on `aoa-gap`:
-//! mining reverts has nothing to do with computing a held-out gap.
+//! **Layer: measurement.** Mining reverts and scoring a rubric look like
+//! capture, but neither is produced for its own sake: both exist to feed the
+//! join, and the join is this crate's one reason to change. So it sits above
+//! `aoa-construct` — it depends on that crate for the report it fills in, and
+//! `aoa-construct` knows nothing about corpora. The edge is one-way on purpose;
+//! reversing it would put revert mining and the Factory rubric underneath
+//! `aoa-audit` and `aoa-recommend`, which consume `aoa-construct` as a leaf and
+//! have no use for either.
+//!
+//! It deliberately does not depend on `aoa-gap`: mining reverts has nothing to
+//! do with computing a held-out gap.
+//!
+//! Offline, not CLI-side. Nothing here clones, shells git, or reaches the
+//! network — a live corpus is assembled by the app-layer driver in
+//! `aoa::commands::corpus`, which injects a real [`GitRunner`] into the
+//! otherwise-offline miner. The apparatus itself is a library concern; only the
+//! subprocess half is the binary's. Nothing here is on the gating path today:
+//! with no corpus available every candidate stays advisory.
 
 mod checkbox_baseline;
 mod correlation;

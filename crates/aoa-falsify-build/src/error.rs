@@ -6,6 +6,15 @@ use thiserror::Error;
 /// callers must never need to walk a source chain to recover the useful text.
 /// The message is therefore flattened once at the public boundary and carries
 /// no `#[source]`.
+///
+/// This type is also where the crate's `anyhow` dependency stops. The workspace
+/// convention is thiserror for libraries, and that is what callers see: no
+/// public item in this crate names an `anyhow` type. Internally the builder
+/// threads ad-hoc string context through several assembly stages, which is what
+/// `anyhow` is for and what a typed enum would only reimplement; [`from_anyhow`]
+/// is `pub(crate)` and converts at the single boundary.
+///
+/// [`from_anyhow`]: FalsifyBuildError::from_anyhow
 #[derive(Debug, Error)]
 #[error("{message}")]
 pub struct FalsifyBuildError {

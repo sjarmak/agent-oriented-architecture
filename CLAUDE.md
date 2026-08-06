@@ -72,12 +72,26 @@ separate `codeprobe` project. The `aoa` crate is the CLI composition root; the
 remaining crates are narrow libraries:
 
 - Capture and inputs: `aoa-trace`, `aoa-codeprobe-shim`,
-  `aoa-observe-shim`, `aoa-bench`, `aoa-corpus`.
+  `aoa-observe-shim`, `aoa-bench`.
 - Measurement: `aoa-metrics`, `aoa-scip-graph`, `aoa-budget`, `aoa-lint`,
-  `aoa-gap`, `aoa-construct`.
-- Decisions and reporting: `aoa-audit`, `aoa-recommend`, `aoa-falsify`.
+  `aoa-gap`, `aoa-construct`, `aoa-corpus`.
+- Decisions and reporting: `aoa-audit`, `aoa-recommend`, `aoa-falsify`,
+  `aoa-falsify-build`.
 - Controlled changes and enforcement: `aoa-policy`, `aoa-enforce`,
   `aoa-migrate`.
+
+Every library crate gets exactly one layer here, and that assignment is the
+answer to "where does this new code go". `crates/aoa/tests/architecture_doc.rs`
+holds the list to it: a crate added under `crates/` with no layer, or a layer
+naming a crate that no longer exists, fails the workspace tests.
+
+`aoa-corpus` is a measurement crate, not an input one. It mines revert history
+and scores the Factory checkbox rubric, but it does so to join those outcomes
+onto `aoa-construct`'s classification — that join is its reason to change, and
+it is why the crate depends on `aoa-construct` rather than the reverse.
+`aoa-falsify-build` is the assembly crate that joins mined inputs and
+measurements into the evidence `aoa-falsify` scores; it sits with decisions
+because it depends on `aoa-falsify` for the shape it produces.
 
 The intended dependency direction is inputs → measurement → decisions → CLI.
 Library crates must not depend on CLI concerns. Human and JSON output are dual
