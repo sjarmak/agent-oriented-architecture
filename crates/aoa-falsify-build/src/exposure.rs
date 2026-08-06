@@ -17,12 +17,6 @@ use crate::evidence::MAX_EVIDENCE_BYTES;
 /// default abbreviation length.
 const MIN_BASELINE_ABBREV: usize = 7;
 
-/// Quote a ledger-supplied revision so a display-hostile value cannot reshape
-/// the diagnostic it appears in.
-fn diagnostic(value: &str) -> String {
-    format!(r#""{}""#, value.escape_default())
-}
-
 /// Derive `repo_id`'s exposure status from the persisted ledger at `scan_path`.
 ///
 /// Every failure is an error rather than a degraded value: an absent, stale, or
@@ -83,11 +77,13 @@ pub(crate) fn resolve_exposure(
     // against the wrong one.
     let baseline = entry.baseline_commit.to_ascii_lowercase();
     if baseline.len() < MIN_BASELINE_ABBREV || !baseline.bytes().all(|b| b.is_ascii_hexdigit()) {
+        // Quoted and escaped: a display-hostile value must not reshape the
+        // diagnostic it appears in.
         bail!(
-            "repo {repo_id}: exposure ledger {} records baseline commit {}, which cannot \
+            "repo {repo_id}: exposure ledger {} records baseline commit \"{}\", which cannot \
              identify a revision: at least {MIN_BASELINE_ABBREV} hex characters are required",
             scan_path.display(),
-            diagnostic(&entry.baseline_commit)
+            entry.baseline_commit.escape_default()
         );
     }
     if !repo_commit.hex.starts_with(&baseline) {
