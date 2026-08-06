@@ -209,29 +209,19 @@ fn declared_dependencies(crate_name: &str) -> BTreeSet<String> {
         .join("crates")
         .join(crate_name)
         .join("Cargo.toml");
-    let manifest = std::fs::read_to_string(&manifest_path)
-        .unwrap_or_else(|e| panic!("reading {}: {e}", manifest_path.display()));
+    let manifest: toml::Table = std::fs::read_to_string(&manifest_path)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", manifest_path.display()))
+        .parse()
+        .unwrap_or_else(|e| panic!("parsing {}: {e}", manifest_path.display()));
 
-    let mut deps = BTreeSet::new();
-    let mut in_dependencies = false;
-    for line in manifest.lines() {
-        let line = line.trim();
-        if line.starts_with('[') {
-            in_dependencies = line == "[dependencies]";
-            continue;
-        }
-        if !in_dependencies || line.starts_with('#') {
-            continue;
-        }
-        let Some((name, _)) = line.split_once('=') else {
-            continue;
-        };
-        let name = name.trim();
-        if name.starts_with("aoa-") {
-            deps.insert(name.to_string());
-        }
-    }
-    deps
+    manifest
+        .get("dependencies")
+        .and_then(|deps| deps.as_table())
+        .into_iter()
+        .flat_map(|deps| deps.keys())
+        .filter(|name| name.starts_with("aoa-"))
+        .cloned()
+        .collect()
 }
 
 /// Edges that point at a later layer and are known, tracked, and not this
