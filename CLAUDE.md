@@ -103,11 +103,17 @@ was (aoa-ynqcn). Nothing that makes a judgment belongs here, and it must never
 acquire an internal dependency; there is nothing below it to depend on.
 
 The intended dependency direction is domain → inputs → measurement → decisions
-→ CLI, and `crates/aoa/tests/architecture_doc.rs` enforces it against each
+→ controlled changes and enforcement → CLI: the bullets above are in that
+order, and every layer the list names appears in it. Controlled changes sit
+after decisions because a fix is applied to a finding somebody else decided to
+raise — `aoa-migrate` reads `aoa-audit`'s findings, and a decisions crate that
+reaches back the other way is the inversion aoa-4s25v removed.
+`crates/aoa/tests/architecture_doc.rs` enforces the direction against each
 crate's Cargo manifest: a dependency pointing at a later layer fails the
 workspace tests unless it is in that file's explicit, bead-tracked exception
-list. Library crates must not depend on CLI concerns. Human and JSON output are
-dual registers of the same result, not separate implementations.
+list, which is currently empty. Library crates must not depend on CLI concerns.
+Human and JSON output are dual registers of the same result, not separate
+implementations.
 
 ## Decision records
 

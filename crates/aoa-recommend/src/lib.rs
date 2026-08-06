@@ -9,7 +9,7 @@
 //! - **(b)** the R9c construct-validity determination
 //!   ([`aoa_construct::ConstructValidityReport`]) — whether each metric may *gate* a
 //!   decision (`Gating`) or is `Advisory` only;
-//! - **(c)** the migration registry ([`aoa_migrate::all_fixes`]) — which fixes
+//! - **(c)** the migration registry, as [`AvailableFix`] rows — which fixes
 //!   exist and under what eligibility precondition.
 //!
 //! ## The anti-Goodhart discipline, made executable
@@ -39,7 +39,22 @@ use serde::{Deserialize, Serialize};
 
 use aoa_audit::{AuditReport, FindingKind, MeasuredCost, PunchItem, Tier};
 use aoa_construct::{ConstructValidityReport, InsufficientDataNote, MetricMode, MetricName};
-use aoa_migrate::CodeFix;
+
+/// One registered migration, reduced to the two facts the join reads: which fix
+/// it is, and the precondition under which applying it is construct-valid.
+///
+/// `recommend` takes these rows rather than `aoa-migrate`'s `CodeFix` trait
+/// objects because a decisions crate must not depend on controlled changes —
+/// the layer order runs decisions before controlled changes, so the edge
+/// pointed the wrong way (aoa-4s25v). The composition root owns the registry
+/// and projects it onto this shape; nothing here plans or applies a change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AvailableFix {
+    /// The fix's stable machine id, as recorded in the migration manifest.
+    pub id: String,
+    /// That fix's R0 eligibility precondition, surfaced to the operator.
+    pub eligibility_note: String,
+}
 
 /// Whether AOA recommends acting on a finding now, or merely surfaces it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,7 +132,7 @@ pub struct RecommendationReport {
 pub fn recommend(
     audit: &AuditReport,
     determination: &ConstructValidityReport,
-    fixes: &[Box<dyn CodeFix>],
+    fixes: &[AvailableFix],
 ) -> RecommendationReport {
     let items: Vec<FindingRecommendation> = audit
         .items
@@ -141,16 +156,16 @@ pub fn recommend(
 fn recommend_one(
     item: &PunchItem,
     determination: &ConstructValidityReport,
-    fixes: &[Box<dyn CodeFix>],
+    fixes: &[AvailableFix],
 ) -> FindingRecommendation {
     let (metric_name, fix_name) = join(item.kind);
 
     // Resolve the named fix against the *live* registry: a campaign may pass a
     // subset of fixes, and a named-but-absent fix is treated as no fix (so the
     // recommendation reflects what can actually be applied, not the join table).
-    let fix = fix_name.and_then(|id| fixes.iter().find(|f| f.id() == id));
-    let fix_id = fix.map(|f| f.id().to_string());
-    let fix_eligibility = fix.map(|f| f.eligibility_note().to_string());
+    let fix = fix_name.and_then(|id| fixes.iter().find(|f| f.id == id));
+    let fix_id = fix.map(|f| f.id.clone());
+    let fix_eligibility = fix.map(|f| f.eligibility_note.clone());
 
     let metric_mode = metric_name.and_then(|name| mode_for(determination, name.as_str()));
 
@@ -222,7 +237,7 @@ fn mode_for(determination: &ConstructValidityReport, metric: &str) -> Option<Met
 /// only the metric's *mode*, so the `HigherIsBetter`/overflow direction mismatch
 /// is irrelevant. `UnusedImportProxy` joins the Rust `dead-imports` fix; the
 /// audit's unused-import proxy is Rust-only, so the `dead-imports-python` /
-/// `dead-imports-typescript` adapters in [`aoa_migrate::all_fixes`] correspond to
+/// `dead-imports-typescript` adapters in `aoa-migrate`'s registry correspond to
 /// no audit finding and intentionally appear in no join row. `MissingPlane`,
 /// `VerificationReachability`, and `InvariantDiscoverability` join neither a
 /// metric nor a fix: all three are pure reachability/presence facts with no
@@ -353,6 +368,23 @@ mod tests {
     };
     use aoa_migrate::all_fixes;
 
+    /// The real migration registry, projected onto the rows `recommend` reads.
+    ///
+    /// `aoa-migrate` is a dev-dependency for exactly this: `join`'s fix column
+    /// names ids in that registry, so `every_joined_fix_exists` has to read the
+    /// real one, and a dev-dependency never enters a consumer's build graph —
+    /// it cannot carry the production edge into controlled changes that
+    /// aoa-4s25v removed.
+    fn registry() -> Vec<AvailableFix> {
+        all_fixes()
+            .iter()
+            .map(|f| AvailableFix {
+                id: f.id().to_string(),
+                eligibility_note: f.eligibility_note().to_string(),
+            })
+            .collect()
+    }
+
     fn item(kind: FindingKind, title: &str, tier: Tier, value: u64, unit: &str) -> PunchItem {
         PunchItem {
             title: title.to_string(),
@@ -415,11 +447,7 @@ mod tests {
     #[test]
     fn all_advisory_determination_yields_no_actionable_now() {
         let audit = AuditReport::new(vec![nav_item()]);
-        let report = recommend(
-            &audit,
-            &aoa_construct::current_determination(),
-            &all_fixes(),
-        );
+        let report = recommend(&audit, &aoa_construct::current_determination(), &registry());
 
         assert_eq!(report.actionable_now, 0);
         assert_eq!(report.advisory_only, 1);
@@ -441,7 +469,7 @@ mod tests {
         let audit = AuditReport::new(vec![nav_item()]);
         let determination = determination_gating(MetricName::NavigabilityAnchorAbsence);
 
-        let report = recommend(&audit, &determination, &all_fixes());
+        let report = recommend(&audit, &determination, &registry());
 
         assert_eq!(report.actionable_now, 1);
         let rec = &report.items[0];
@@ -458,7 +486,7 @@ mod tests {
         // tells the operator what to run. (Untested by the all-advisory path.)
         let audit = AuditReport::new(vec![nav_item()]);
         let determination = determination_gating(MetricName::NavigabilityAnchorAbsence);
-        let rendered = recommend(&audit, &determination, &all_fixes()).render_human();
+        let rendered = recommend(&audit, &determination, &registry()).render_human();
         assert!(rendered.contains("actionable-now"));
         assert!(
             rendered.contains("aoa migrate --fix navigability-anchor"),
@@ -477,7 +505,7 @@ mod tests {
         let audit = AuditReport::new(vec![nav_item()]);
         let empty = build_report("partial corpus", &[], &GatingThresholds::default());
 
-        let rec = &recommend(&audit, &empty, &all_fixes()).items[0];
+        let rec = &recommend(&audit, &empty, &registry()).items[0];
         assert_eq!(rec.metric.as_deref(), Some("navigability_anchor_absence"));
         assert_eq!(
             rec.metric_mode, None,
@@ -503,7 +531,7 @@ mod tests {
         )]);
         let determination = determination_gating(MetricName::ModuleSizeOutliers);
 
-        let rec = &recommend(&audit, &determination, &all_fixes()).items[0];
+        let rec = &recommend(&audit, &determination, &registry()).items[0];
         assert_eq!(rec.metric_mode, Some(MetricMode::Gating));
         assert_eq!(rec.actionability, Actionability::AdvisoryOnly);
         assert_eq!(rec.advisory_reason, Some(AdvisoryReason::NoFixAvailable));
@@ -524,12 +552,7 @@ mod tests {
         plane.plane = Some(aoa_audit::EnforcementPlane::RuntimeHook);
         let audit = AuditReport::new(vec![plane]);
 
-        let rec = &recommend(
-            &audit,
-            &aoa_construct::current_determination(),
-            &all_fixes(),
-        )
-        .items[0];
+        let rec = &recommend(&audit, &aoa_construct::current_determination(), &registry()).items[0];
         assert_eq!(rec.metric, None);
         assert_eq!(rec.metric_mode, None);
         assert_eq!(rec.fix_id, None);
@@ -551,12 +574,7 @@ mod tests {
         );
         let audit = AuditReport::new(vec![finding]);
 
-        let rec = &recommend(
-            &audit,
-            &aoa_construct::current_determination(),
-            &all_fixes(),
-        )
-        .items[0];
+        let rec = &recommend(&audit, &aoa_construct::current_determination(), &registry()).items[0];
         assert_eq!(rec.metric, None);
         assert_eq!(rec.metric_mode, None);
         assert_eq!(rec.fix_id, None);
@@ -578,12 +596,7 @@ mod tests {
         );
         let audit = AuditReport::new(vec![finding]);
 
-        let rec = &recommend(
-            &audit,
-            &aoa_construct::current_determination(),
-            &all_fixes(),
-        )
-        .items[0];
+        let rec = &recommend(&audit, &aoa_construct::current_determination(), &registry()).items[0];
         assert_eq!(rec.metric, None);
         assert_eq!(rec.metric_mode, None);
         assert_eq!(rec.fix_id, None);
@@ -615,12 +628,8 @@ mod tests {
         ];
         for (kind, metric, unit) in cases {
             let audit = AuditReport::new(vec![item(kind, "probe", Tier::Tier3, 1, unit)]);
-            let rec = &recommend(
-                &audit,
-                &aoa_construct::current_determination(),
-                &all_fixes(),
-            )
-            .items[0];
+            let rec =
+                &recommend(&audit, &aoa_construct::current_determination(), &registry()).items[0];
             assert_eq!(rec.metric.as_deref(), Some(metric), "{kind:?}");
             assert_eq!(rec.metric_mode, Some(MetricMode::Advisory), "{kind:?}");
             assert_eq!(rec.fix_id, None, "{kind:?} has no migration");
@@ -662,7 +671,7 @@ mod tests {
             &aoa_construct::BehavioralSignal::from_observations(0),
         );
 
-        let report = recommend(&audit, &determination, &all_fixes());
+        let report = recommend(&audit, &determination, &registry());
         let rec = &report.items[0];
         assert_eq!(rec.metric.as_deref(), Some("mutation_surface"));
         assert_eq!(
@@ -692,7 +701,7 @@ mod tests {
                 aoa_construct::MIN_HELD_OUT_OBSERVATIONS,
             ),
         );
-        let report = recommend(&audit, &determination, &all_fixes());
+        let report = recommend(&audit, &determination, &registry());
         assert!(report.insufficient_data.is_none());
         assert!(!report.render_human().contains("InsufficientData"));
     }
@@ -700,11 +709,7 @@ mod tests {
     #[test]
     fn report_round_trips_through_json() {
         let audit = AuditReport::new(vec![nav_item()]);
-        let report = recommend(
-            &audit,
-            &aoa_construct::current_determination(),
-            &all_fixes(),
-        );
+        let report = recommend(&audit, &aoa_construct::current_determination(), &registry());
         let json = serde_json::to_string(&report).expect("serialize");
         let parsed: RecommendationReport = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed, report);
@@ -713,12 +718,8 @@ mod tests {
     #[test]
     fn render_human_names_findings_and_the_gap_footer() {
         let audit = AuditReport::new(vec![nav_item()]);
-        let rendered = recommend(
-            &audit,
-            &aoa_construct::current_determination(),
-            &all_fixes(),
-        )
-        .render_human();
+        let rendered =
+            recommend(&audit, &aoa_construct::current_determination(), &registry()).render_human();
         assert!(rendered.contains("AOA recommendations"));
         assert!(rendered.contains("navigability anchor"));
         assert!(rendered.contains("advisory-only"));
@@ -732,12 +733,11 @@ mod tests {
 
     #[test]
     fn every_joined_fix_exists() {
-        let registry = all_fixes();
-        let ids: Vec<&str> = registry.iter().map(|f| f.id()).collect();
+        let registry = registry();
         for kind in FindingKind::ALL {
             if let (_, Some(fix_id)) = join(*kind) {
                 assert!(
-                    ids.contains(&fix_id),
+                    registry.iter().any(|f| f.id == fix_id),
                     "{kind:?} joins fix '{fix_id}' absent from all_fixes()"
                 );
             }

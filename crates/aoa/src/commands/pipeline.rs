@@ -25,7 +25,7 @@ use anyhow::{Context, Result};
 use aoa_audit::AuditReport;
 use aoa_construct::ConstructValidityReport;
 use aoa_migrate::CodeFix;
-use aoa_recommend::RecommendationReport;
+use aoa_recommend::{AvailableFix, RecommendationReport};
 
 /// The audit configuration measured from the repo itself: the defaults plus a
 /// best-effort symbol graph indexed from the repo's source. A repo the indexer
@@ -92,11 +92,29 @@ pub(crate) fn readiness(repo: &Path) -> Result<Readiness> {
     let audit = audited(repo, None)?;
     let determination = audit.determination();
     let fixes = aoa_migrate::all_fixes();
-    let recommendations = aoa_recommend::recommend(&audit, &determination, &fixes);
+    let recommendations = aoa_recommend::recommend(&audit, &determination, &available(&fixes));
     Ok(Readiness {
         audit,
         determination,
         fixes,
         recommendations,
     })
+}
+
+/// Project the migration registry onto the rows `aoa-recommend` joins against.
+///
+/// The projection lives here because the composition root is the only place
+/// that legitimately sees both sides: `aoa-recommend` is a decisions crate and
+/// `aoa-migrate` is controlled changes, which comes after it in the layer order
+/// (aoa-4s25v). Carrying the same `fixes` slice into both this call and
+/// `Readiness.fixes` keeps the invariant that motivated the field — the
+/// rendered migration list and the join describe one registry, not two.
+fn available(fixes: &[Box<dyn CodeFix>]) -> Vec<AvailableFix> {
+    fixes
+        .iter()
+        .map(|f| AvailableFix {
+            id: f.id().to_string(),
+            eligibility_note: f.eligibility_note().to_string(),
+        })
+        .collect()
 }

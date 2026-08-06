@@ -15,8 +15,10 @@
 //! aoa-ynqcn, which split `aoa-domain` out of `aoa-gap` and removed the first of
 //! the two inversions this file used to describe — `aoa-bench` no longer reaches
 //! into measurement to name a held-out subject. The second, `aoa-recommend` into
-//! controlled-changes, is still open as aoa-4s25v and is the sole entry in
-//! `LAYER_EXCEPTIONS`.
+//! controlled changes, is gone with aoa-4s25v: `recommend` now takes the
+//! migration registry as owned rows the composition root projects for it. So
+//! `LAYER_EXCEPTIONS` is empty, which is the state it is meant to be in — an
+//! entry is a licence for a tracked edge to stay wrong, not a place to park one.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -228,12 +230,7 @@ fn declared_dependencies(crate_name: &str) -> BTreeSet<String> {
 /// file's to fix. An entry is a licence to stay wrong while a bead is open, so
 /// each one names that bead — and [`layer_exceptions_are_all_still_live`]
 /// deletes the licence the moment the edge goes away.
-const LAYER_EXCEPTIONS: &[(&str, &str, &str)] = &[(
-    "aoa-recommend",
-    "aoa-migrate",
-    "aoa-4s25v: a decisions crate reaches into controlled-changes to describe \
-the migration it recommends",
-)];
+const LAYER_EXCEPTIONS: &[(&str, &str, &str)] = &[];
 
 #[test]
 fn no_crate_depends_on_a_later_layer() {
@@ -261,9 +258,9 @@ fn no_crate_depends_on_a_later_layer() {
     assert!(
         inversions.is_empty(),
         "these dependencies point at a later CLAUDE.md layer: {inversions:?} — \
-the documented direction is domain -> inputs -> measurement -> decisions -> CLI, \
-so either the edge is wrong or the layer assignment is. Add to LAYER_EXCEPTIONS \
-only with a bead id and a reason"
+the documented direction is domain -> inputs -> measurement -> decisions -> \
+controlled changes and enforcement -> CLI, so either the edge is wrong or the \
+layer assignment is. Add to LAYER_EXCEPTIONS only with a bead id and a reason"
     );
 }
 

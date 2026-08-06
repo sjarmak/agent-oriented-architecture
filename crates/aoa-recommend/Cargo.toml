@@ -9,8 +9,13 @@ license.workspace = true
 [dependencies]
 aoa-audit = { path = "../aoa-audit" }
 aoa-construct = { path = "../aoa-construct" }
-aoa-migrate = { path = "../aoa-migrate" }
 serde = { workspace = true }
 
 [dev-dependencies]
+# Tests only (aoa-4s25v). `recommend` is a decisions crate and controlled
+# changes come after it in the layer order, so it takes the registry as
+# `AvailableFix` rows instead of `CodeFix` trait objects. A dev-dependency
+# enters no consumer's build graph, which is what lets the join's drift guard
+# read the real registry without restoring the inverted edge.
+aoa-migrate = { path = "../aoa-migrate" }
 serde_json = { workspace = true }
