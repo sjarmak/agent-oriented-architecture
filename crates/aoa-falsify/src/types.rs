@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use aoa_gap::{ExposureStatus, HeldOutProvenance};
+use aoa_domain::{ExposureStatus, HeldOutProvenance};
 use aoa_trace::Confidence;
 
 use crate::convention::{ConventionFamily, ScoringConvention};

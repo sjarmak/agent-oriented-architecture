@@ -1,7 +1,7 @@
 use std::fmt::Write as _;
 
 use anyhow::{Context, Result};
-use aoa_gap::ExposureStatus;
+use aoa_domain::ExposureStatus;
 
 use crate::cli::ExposureScanArgs;
 use crate::output::{print_human, print_json};

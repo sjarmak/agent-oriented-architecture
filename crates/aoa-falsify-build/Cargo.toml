@@ -16,8 +16,8 @@ license.workspace = true
 anyhow = "1.0.98"
 aoa-bench = { path = "../aoa-bench" }
 aoa-codeprobe-shim = { path = "../aoa-codeprobe-shim" }
+aoa-domain = { path = "../aoa-domain" }
 aoa-falsify = { path = "../aoa-falsify" }
-aoa-gap = { path = "../aoa-gap" }
 aoa-metrics = { path = "../aoa-metrics" }
 aoa-scip-graph = { path = "../aoa-scip-graph" }
 serde = { workspace = true }

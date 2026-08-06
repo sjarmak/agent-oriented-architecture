@@ -7,8 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-aoa-gap = { path = "../aoa-gap" }
-aoa-metrics = { path = "../aoa-metrics" }
+aoa-domain = { path = "../aoa-domain" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_jcs = { workspace = true }
@@ -17,4 +16,11 @@ thiserror = { workspace = true }
 toml = { version = "1.1.2", default-features = false, features = ["parse", "serde"] }
 
 [dev-dependencies]
+# Dev-only on purpose. `loader_test.rs` asserts the seam this crate exists to
+# serve: a task loaded with no held-out leg drives `compute_gap` to
+# `Unavailable`, and an external one to `Available`. That is a real property of
+# the loader, provable only by running the gate. A dev-dependency does not enter
+# any consumer's build graph, so it does not reintroduce the inputs -> measurement
+# edge this crate just shed (aoa-ynqcn) — a normal dependency would.
+aoa-gap = { path = "../aoa-gap" }
 tempfile = "3.10.1"

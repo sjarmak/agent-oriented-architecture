@@ -3,7 +3,7 @@ use aoa_bench::{
     CalibrationEvidenceV1, CalibrationMethod, ExclusionReasonV1, GitHashAlgorithm, GitObjectId,
     MeasurementObservationV1, MeasurementStateV1, MetricValueV1, Sha256Digest,
 };
-use aoa_gap::HeldOutProvenance;
+use aoa_domain::HeldOutProvenance;
 
 fn digest(byte: char) -> Sha256Digest {
     Sha256Digest::parse(&byte.to_string().repeat(64)).expect("valid digest")

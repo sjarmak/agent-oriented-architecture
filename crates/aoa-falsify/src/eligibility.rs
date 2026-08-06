@@ -1,4 +1,4 @@
-use aoa_gap::HeldOutProvenance;
+use aoa_domain::HeldOutProvenance;
 use aoa_trace::Confidence;
 
 use crate::types::Eligibility;

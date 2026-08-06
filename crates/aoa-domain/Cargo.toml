@@ -1,0 +1,13 @@
+[package]
+name = "aoa-domain"
+description = "Held-out subject identity, suite provenance, and run outcomes: the vocabulary every AOA layer names a subject with"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Deliberately dependency-free apart from serde. This crate sits below the
+# input layer, so anything it depended on would sit below it too — and there is
+# nothing below it. A dependency added here is a design change, not a detail.
+[dependencies]
+serde = { workspace = true }

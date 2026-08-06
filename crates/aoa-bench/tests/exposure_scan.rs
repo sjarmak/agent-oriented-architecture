@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use aoa_bench::scan_exposure;
-use aoa_gap::ExposureStatus;
+use aoa_domain::ExposureStatus;
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -151,7 +151,7 @@ fn real_r0_campaign_matches_documented_exposure_and_held_out_provenance() {
     ]
     .into_iter()
     .map(
-        |(question_family, oracle_target_symbol)| aoa_gap::SubjectKey {
+        |(question_family, oracle_target_symbol)| aoa_domain::SubjectKey {
             repo_id: "httpie".to_string(),
             baseline_commit: HTTPIE_BASELINE.to_string(),
             oracle_target_symbol: oracle_target_symbol.to_string(),

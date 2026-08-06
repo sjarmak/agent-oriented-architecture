@@ -455,7 +455,7 @@ mod tests {
 
     #[test]
     fn a_null_commit_does_not_grant_external_provenance() {
-        use aoa_gap::HeldOutProvenance;
+        use aoa_domain::HeldOutProvenance;
 
         let dir = std::env::temp_dir().join(format!("aoa-bench-null-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
@@ -531,7 +531,7 @@ mod tests {
     /// marshmallow task (`comprehension-dependency_analysis-006-20a7339c`).
     #[test]
     fn comprehension_consensus_task_classifies_native_composed() {
-        use aoa_gap::HeldOutProvenance;
+        use aoa_domain::HeldOutProvenance;
 
         let dir = std::env::temp_dir().join(format!("aoa-bench-compr-{}", std::process::id()));
         fs::create_dir_all(dir.join("tests")).unwrap();

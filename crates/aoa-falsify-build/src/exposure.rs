@@ -9,7 +9,7 @@ use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result as AnyResult};
 use aoa_bench::{ExposureScan, GitObjectId};
-use aoa_gap::ExposureStatus;
+use aoa_domain::ExposureStatus;
 
 use crate::evidence::MAX_EVIDENCE_BYTES;
 
@@ -112,7 +112,7 @@ mod tests {
     use std::path::Path;
 
     use aoa_bench::{GitHashAlgorithm, GitObjectId};
-    use aoa_gap::ExposureStatus;
+    use aoa_domain::ExposureStatus;
 
     use super::resolve_exposure;
 

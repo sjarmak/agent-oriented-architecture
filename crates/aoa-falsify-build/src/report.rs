@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 
-use aoa_gap::{ExposureStatus, HeldOutProvenance};
+use aoa_domain::{ExposureStatus, HeldOutProvenance};
 use aoa_metrics::Confidence;
 
 use crate::manifest::TaskShape;

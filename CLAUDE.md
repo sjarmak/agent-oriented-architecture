@@ -71,6 +71,7 @@ AOA is a Rust workspace that consumes traces and outcomes produced by the
 separate `codeprobe` project. The `aoa` crate is the CLI composition root; the
 remaining crates are narrow libraries:
 
+- Domain kernel: `aoa-domain`.
 - Capture and inputs: `aoa-trace`, `aoa-codeprobe-shim`,
   `aoa-observe-shim`, `aoa-bench`.
 - Measurement: `aoa-metrics`, `aoa-scip-graph`, `aoa-budget`, `aoa-lint`,
@@ -93,9 +94,20 @@ it is why the crate depends on `aoa-construct` rather than the reverse.
 measurements into the evidence `aoa-falsify` scores; it sits with decisions
 because it depends on `aoa-falsify` for the shape it produces.
 
-The intended dependency direction is inputs → measurement → decisions → CLI.
-Library crates must not depend on CLI concerns. Human and JSON output are dual
-registers of the same result, not separate implementations.
+`aoa-domain` is the bottom of the stack and holds only the vocabulary every
+other layer needs to name a held-out subject: `SubjectKey`, `ExposureStatus`,
+`HeldOutProvenance`, `RunResult`. It exists so that mining a task does not
+require depending on the gate that scores it — while that vocabulary lived in
+`aoa-gap`, `aoa-bench` had to reach up into measurement to say what a subject
+was (aoa-ynqcn). Nothing that makes a judgment belongs here, and it must never
+acquire an internal dependency; there is nothing below it to depend on.
+
+The intended dependency direction is domain → inputs → measurement → decisions
+→ CLI, and `crates/aoa/tests/architecture_doc.rs` enforces it against each
+crate's Cargo manifest: a dependency pointing at a later layer fails the
+workspace tests unless it is in that file's explicit, bead-tracked exception
+list. Library crates must not depend on CLI concerns. Human and JSON output are
+dual registers of the same result, not separate implementations.
 
 ## Conventions & Patterns
 

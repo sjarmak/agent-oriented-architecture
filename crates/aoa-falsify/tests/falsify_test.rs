@@ -1,4 +1,4 @@
-use aoa_gap::{ExposureStatus, HeldOutProvenance};
+use aoa_domain::{ExposureStatus, HeldOutProvenance};
 use aoa_trace::Confidence;
 
 use aoa_falsify::{

@@ -5,9 +5,9 @@
 
 use std::path::PathBuf;
 
-use aoa_bench::{load_task, BenchError, CodeprobeTask};
-use aoa_gap::{compute_gap, GapOutcome, HeldOutProvenance};
-use aoa_metrics::MetricError;
+use aoa_bench::{load_task, BenchError, CodeprobeTask, EditLocalityError};
+use aoa_domain::HeldOutProvenance;
+use aoa_gap::{compute_gap, GapOutcome};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -179,7 +179,7 @@ fn fewer_than_two_accepted_solutions_surfaces_insufficient_never_fabricated() {
     assert!(task.accepted_solutions.len() < 2);
     let err = task.edit_locality_anchors().unwrap_err();
     match err {
-        MetricError::InsufficientAcceptedSolutions(n) => {
+        EditLocalityError::InsufficientAcceptedSolutions(n) => {
             assert_eq!(n, task.accepted_solutions.len())
         }
         other => panic!("expected InsufficientAcceptedSolutions, got {other:?}"),

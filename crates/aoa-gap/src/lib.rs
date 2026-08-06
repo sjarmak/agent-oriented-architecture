@@ -15,20 +15,20 @@
 //! All logic here is deterministic mechanism: rates are arithmetic means of
 //! per-task booleans and labels are boolean predicates over rate/gap deltas.
 //!
+//! The vocabulary this gate reasons over — `SubjectKey`, `ExposureStatus`,
+//! `HeldOutProvenance`, `RunResult` — belongs to `aoa-domain` and is deliberately
+//! *not* re-exported here. Naming a held-out subject must not require depending
+//! on the gate that scores it; a convenience re-export would restore exactly the
+//! coupling the split removed, and would give one type two import paths.
+//!
 //! Construct validity (R9c) lives in `aoa-construct`, and the external-outcome
 //! corpus that could promote a metric to `gating` lives in `aoa-corpus`. Neither
 //! is needed to compute or gate on a gap, so neither is a dependency here.
 
 mod compare;
 mod error;
-mod exposure;
 mod gap;
-mod provenance;
-mod run;
 
 pub use compare::{compare, CompareOutcome, CompareWarning, Label};
 pub use error::GapError;
-pub use exposure::{ExposureStatus, SubjectKey};
 pub use gap::{compute_gap, GapOutcome};
-pub use provenance::HeldOutProvenance;
-pub use run::{CanaryItem, RunResult, TaskOutcome};

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use aoa_gap::{ExposureStatus, SubjectKey};
+use aoa_domain::{ExposureStatus, SubjectKey};
 use serde::{Deserialize, Serialize};
 
 use crate::codeprobe_run::TrialScoring;

@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use aoa_gap::{ExposureStatus, SubjectKey};
+use aoa_domain::{ExposureStatus, SubjectKey};
 
 fn subject(name: &str) -> SubjectKey {
     SubjectKey {

@@ -4,7 +4,7 @@
 //! Where `eval run` (aoa-2lw) emits per-task process metrics from a single run,
 //! this gate operates at the RUN level across many tasks and is the live-data
 //! composition of `aoa_gap`'s already-tested R0b checks: it aggregates each run
-//! into an `aoa_gap::RunResult` (held-out provenance + per-task outcomes +
+//! into an `aoa_domain::RunResult` (held-out provenance + per-task outcomes +
 //! injected canaries) and hands the pair to `aoa_gap::compare`, which rejects a
 //! synthesized held-out suite, refuses to label on an absent gap, and trips when
 //! the held-out rate rises without visible movement while a known canary flips.
@@ -34,10 +34,8 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use aoa_bench::{aggregate_provenance, discover_tasks, load_task, TrialScoring};
-use aoa_gap::{
-    compare, CanaryItem, CompareOutcome, CompareWarning, GapError, HeldOutProvenance, Label,
-    RunResult, TaskOutcome,
-};
+use aoa_domain::{CanaryItem, HeldOutProvenance, RunResult, TaskOutcome};
+use aoa_gap::{compare, CompareOutcome, CompareWarning, GapError, Label};
 
 use crate::cli::R0bArgs;
 use crate::commands::fsutil::load_json_capped;
@@ -77,7 +75,7 @@ fn load_canary_manifest(path: &Path) -> Result<BTreeMap<String, bool>> {
     Ok(map)
 }
 
-/// Aggregate one codeprobe run directory into a run-level `aoa_gap::RunResult`.
+/// Aggregate one codeprobe run directory into a run-level `aoa_domain::RunResult`.
 fn aggregate_run(
     run_dir: &Path,
     task_ids: &[String],

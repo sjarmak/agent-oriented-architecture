@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use aoa_gap::HeldOutProvenance;
+use aoa_domain::HeldOutProvenance;
 
 use crate::oracle::OracleChainFacts;
 use crate::provenance::classify_provenance;

@@ -30,7 +30,8 @@
 //! independent held-out leg classifies as `None`, which drives `compute_gap` to
 //! `Unavailable` (gap:unavailable) rather than fabricating a held-out suite.
 //! When fewer than two distinct accepted solutions were mined, edit-locality
-//! anchors surface `aoa-metrics`' `InsufficientAcceptedSolutions`, not an invented one.
+//! anchors surface [`EditLocalityError::InsufficientAcceptedSolutions`] carrying
+//! the count that fell short, never an invented anchor pair.
 
 mod bridge;
 mod codeprobe_run;
@@ -42,7 +43,7 @@ mod oracle;
 mod provenance;
 mod task;
 
-pub use bridge::EditLocalityAnchors;
+pub use bridge::{EditLocalityAnchors, EditLocalityError};
 pub use codeprobe_run::{
     aggregate_provenance, discover_tasks, discover_tasks_isolating_names, leg_pass, scoring_path,
     transcript_path, DualLegs, TrialScoring,

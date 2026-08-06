@@ -1,7 +1,5 @@
-use aoa_gap::{
-    compare, compute_gap, CanaryItem, GapError, GapOutcome, HeldOutProvenance, Label, RunResult,
-    TaskOutcome,
-};
+use aoa_domain::{CanaryItem, HeldOutProvenance, RunResult, TaskOutcome};
+use aoa_gap::{compare, compute_gap, GapError, GapOutcome, Label};
 
 fn task(visible: bool, held_out: bool) -> TaskOutcome {
     TaskOutcome {

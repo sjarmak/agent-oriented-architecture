@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use aoa_gap::RunResult;
+use aoa_domain::RunResult;
 use aoa_trace::TraceReport;
 
 use crate::cli::{EvalArgs, EvalCommand, ExposureCommand};

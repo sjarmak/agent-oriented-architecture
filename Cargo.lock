@@ -78,6 +78,7 @@ dependencies = [
  "aoa-codeprobe-shim",
  "aoa-construct",
  "aoa-corpus",
+ "aoa-domain",
  "aoa-enforce",
  "aoa-falsify",
  "aoa-falsify-build",
@@ -119,8 +120,8 @@ dependencies = [
 name = "aoa-bench"
 version = "0.1.0"
 dependencies = [
+ "aoa-domain",
  "aoa-gap",
- "aoa-metrics",
  "serde",
  "serde_jcs",
  "serde_json",
@@ -170,6 +171,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "aoa-domain"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "aoa-enforce"
 version = "0.1.0"
 dependencies = [
@@ -186,7 +194,7 @@ dependencies = [
 name = "aoa-falsify"
 version = "0.1.0"
 dependencies = [
- "aoa-gap",
+ "aoa-domain",
  "aoa-trace",
  "serde",
  "serde_json",
@@ -200,8 +208,8 @@ dependencies = [
  "anyhow",
  "aoa-bench",
  "aoa-codeprobe-shim",
+ "aoa-domain",
  "aoa-falsify",
- "aoa-gap",
  "aoa-metrics",
  "aoa-scip-graph",
  "serde",
@@ -214,6 +222,7 @@ dependencies = [
 name = "aoa-gap"
 version = "0.1.0"
 dependencies = [
+ "aoa-domain",
  "serde",
  "thiserror",
 ]

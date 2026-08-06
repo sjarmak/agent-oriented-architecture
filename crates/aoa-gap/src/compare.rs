@@ -1,8 +1,8 @@
+use aoa_domain::RunResult;
 use serde::{Deserialize, Serialize};
 
 use crate::error::GapError;
 use crate::gap::{compute_gap, GapOutcome};
-use crate::run::RunResult;
 
 /// Whether a migration earns the `good` label.
 ///
@@ -135,8 +135,7 @@ pub fn compare(baseline: &RunResult, migrated: &RunResult) -> Result<CompareOutc
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provenance::HeldOutProvenance;
-    use crate::run::{CanaryItem, TaskOutcome};
+    use aoa_domain::{CanaryItem, HeldOutProvenance, TaskOutcome};
 
     /// Build a `NativeComposed` run from per-task `(visible, held_out)` pairs and
     /// optional canaries. `NativeComposed` keeps `compute_gap` in the `Available`

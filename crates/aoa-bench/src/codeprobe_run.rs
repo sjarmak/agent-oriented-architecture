@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
-use aoa_gap::HeldOutProvenance;
+use aoa_domain::HeldOutProvenance;
 use serde::Deserialize;
 
 use crate::error::BenchError;

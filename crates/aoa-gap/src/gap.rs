@@ -1,8 +1,7 @@
+use aoa_domain::{HeldOutProvenance, RunResult};
 use serde::{Deserialize, Serialize};
 
 use crate::error::GapError;
-use crate::provenance::HeldOutProvenance;
-use crate::run::RunResult;
 
 /// The visible-vs-held-out gap for a single run.
 ///
