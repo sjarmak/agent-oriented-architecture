@@ -112,9 +112,10 @@ with two arms and `K=3`. Models, conventions, `min_holdout=7`,
 
 Preparation used the existing scripts under `bin/` in the `r0-campaign` run
 directory that codeprobe produced. Migration was completed before the current
-corpus was mined and used mechanical source-only transforms. That ordering preserved operator blindness when this preparation
-was written, but the subsequent halted run described in the 2026-08-05
-correction exposed every admitted sqlparse and websockets subject.
+corpus was mined and used mechanical source-only transforms. That ordering
+preserved operator blindness when this preparation was written, but the
+subsequent halted run described in the 2026-08-05 correction exposed every
+admitted sqlparse and websockets subject.
 For HTTPie, the migrated diff contains no answer-derived change, but operator
 blindness is unverified because seven equivalent July task outcomes predated
 the migration and no timestamped access or operator-session audit log exists.

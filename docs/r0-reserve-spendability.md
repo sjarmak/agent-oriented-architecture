@@ -225,15 +225,25 @@ when the resulting numbers improve, and especially then."
 
 ## Reproducing this record
 
-The campaign lives in the codeprobe checkout, a separate project; `CODEPROBE_ROOT`
-below defaults to `~/projects/codeprobe`, so export it first if your clone sits
-elsewhere.
+`CODEPROBE_ROOT` defaults to `~/projects/codeprobe`; export a different value
+first if your codeprobe clone is elsewhere.
 
 ```bash
 export CODEPROBE_ROOT="${CODEPROBE_ROOT:-$HOME/projects/codeprobe}"
 cargo build --bin aoa
 ./target/debug/aoa eval exposure scan \
   --runs "$CODEPROBE_ROOT/runs/r0-campaign"
+```
+
+The `aoa-bench` test `real_r0_campaign_matches_documented_exposure_and_held_out_provenance`
+asserts these same tallies against the campaign. It reads the run directory from
+`AOA_R0_CAMPAIGN_RUNS` and, when that is unset, prints a `SKIP` line and scans
+nothing — and `cargo test` captures that line unless you ask for it, so run the
+test as:
+
+```bash
+AOA_R0_CAMPAIGN_RUNS="$CODEPROBE_ROOT/runs/r0-campaign" \
+  cargo test -p aoa-bench --test exposure_scan -- --show-output
 ```
 
 The per-repository trial counts, held-out pass/fail/errored/unscored tallies,

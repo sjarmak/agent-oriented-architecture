@@ -19,18 +19,14 @@ by AOA into the falsification gate. The gate's verdict —
 
 ## Before you run: where codeprobe lives
 
-Every command below reaches into the codeprobe checkout, which is a separate
-project rather than a directory of this repository. Point `CODEPROBE_ROOT` at
-your clone once and the command blocks run unchanged:
+Codeprobe is a separate project, not a directory of this repository. The
+commands below that read its run output resolve it through `CODEPROBE_ROOT`;
+export it once (the default assumes `~/projects/codeprobe`) and those blocks
+run unchanged:
 
 ```bash
 export CODEPROBE_ROOT="${CODEPROBE_ROOT:-$HOME/projects/codeprobe}"
 ```
-
-The default assumes `~/projects/codeprobe`; export a different value before the
-first command if your clone is elsewhere. `$CODEPROBE_ROOT/runs` is where
-codeprobe writes campaign output, so the run directories the later steps read
-(`$CODEPROBE_ROOT/runs/r0`, and its `tasks/` and `reports/`) follow from it.
 
 ## The two deltas
 
