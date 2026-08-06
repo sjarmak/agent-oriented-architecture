@@ -121,10 +121,10 @@ pub fn missing_planes(repo: &Path) -> Vec<EnforcementPlane> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hook_set::{hook_command, MAX_SETTINGS_BYTES};
+    use crate::hook_set::{hook_command, MAX_SETTINGS_BYTES, SETTINGS_REL};
 
     fn settings(repo: &Path, body: &str) {
-        let path = repo.join(crate::hook_set::SETTINGS_REL);
+        let path = repo.join(SETTINGS_REL);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, body).unwrap();
     }
