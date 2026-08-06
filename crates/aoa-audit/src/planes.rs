@@ -2,6 +2,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
+use crate::hook_set::{read_settings, ENFORCE_HOOK_SET, ENFORCE_WRAPPER_REL};
 use crate::tier::EnforcementPlane;
 
 /// The candidate paths probed for each enforcement plane. A plane is present if
@@ -28,39 +29,26 @@ fn present(repo: &Path, plane: EnforcementPlane) -> bool {
     }
 }
 
-const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
-
-/// Whether Claude settings contain both AOA runtime enforcement hooks.
+/// Whether Claude settings contain every AOA runtime enforcement hook.
 ///
 /// Malformed, oversized, non-regular, and incomplete files are treated as a
 /// missing plane. The audit reports the resulting Tier-1 finding rather than
 /// failing its whole read-only pass on optional host configuration.
 ///
+/// The event/verb set is [`ENFORCE_HOOK_SET`], the same declaration the installer
+/// writes from, so a hook added or moved on the writing side cannot leave this
+/// check looking for the previous shape.
+///
 /// Shared with [`crate::liveness`], which asks the follow-up question this one
-/// cannot answer: an installed hook set is not a running one.
+/// cannot answer: an installed hook set is not a running one. [`crate::hook_set`]
+/// asks the other one: an installed hook set is not necessarily *this binary's*.
 pub(crate) fn runtime_hook_present(repo: &Path) -> bool {
-    let path = repo.join(".claude/settings.json");
-    match std::fs::symlink_metadata(&path) {
-        Ok(metadata) if metadata.file_type().is_file() && metadata.len() <= MAX_SETTINGS_BYTES => {}
-        _ => return false,
-    }
-    let raw = match std::fs::read_to_string(path) {
-        Ok(raw) => raw,
-        Err(_) => return false,
+    let Ok(Some(settings)) = read_settings(repo) else {
+        return false;
     };
-    let settings: Value = match serde_json::from_str(&raw) {
-        Ok(settings) => settings,
-        Err(_) => return false,
-    };
-    [
-        ("PostToolUse", "record"),
-        ("PreToolUse", "check"),
-        ("PostToolUse", "commit"),
-        ("PostToolUseFailure", "fail"),
-        ("PermissionDenied", "deny"),
-    ]
-    .into_iter()
-    .all(|(event, verb)| has_enforce_hook(&settings, event, verb))
+    ENFORCE_HOOK_SET
+        .into_iter()
+        .all(|(event, verb)| has_enforce_hook(&settings, event, verb))
 }
 
 /// Does `event` carry a hook running AOA's enforcement for `verb`?
@@ -84,16 +72,14 @@ fn has_enforce_hook(settings: &Value, event: &str, verb: &str) -> bool {
         .any(|command| is_enforce_command(command, verb))
 }
 
-/// The repo-relative wrapper path `aoa observe --enforce` writes into every hook
-/// command it installs.
+/// Whether `command` runs AOA's enforcement entrypoint for `verb`.
 ///
-/// The whole path is matched, never an `aoa-enforce` suffix. A command that
-/// merely ends in those characters — `xaoa-enforce record`,
-/// `./tools/my-aoa-enforce record` — belongs to somebody else, and reporting the
-/// runtime plane present because of it is the exact failure class AOA ships to
-/// detect.
-const ENFORCE_WRAPPER_REL: &str = ".claude/hooks/aoa-enforce";
-
+/// The wrapper path comes from [`ENFORCE_WRAPPER_REL`] — the same constant the
+/// installer writes into every command — and the whole path is matched, never an
+/// `aoa-enforce` suffix. A command that merely ends in those characters
+/// (`xaoa-enforce record`, `./tools/my-aoa-enforce record`) belongs to somebody
+/// else, and reporting the runtime plane present because of it is the exact
+/// failure class AOA ships to detect.
 fn is_enforce_command(command: &str, verb: &str) -> bool {
     // Shell punctuation around a word is quoting, not part of it: the installed
     // command wraps its script in single quotes and its paths in double quotes.
@@ -135,10 +121,12 @@ pub fn missing_planes(repo: &Path) -> Vec<EnforcementPlane> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hook_set::{hook_command, MAX_SETTINGS_BYTES};
 
     fn settings(repo: &Path, body: &str) {
-        std::fs::create_dir_all(repo.join(".claude")).unwrap();
-        std::fs::write(repo.join(".claude/settings.json"), body).unwrap();
+        let path = repo.join(crate::hook_set::SETTINGS_REL);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
     }
 
     #[test]
@@ -193,43 +181,36 @@ mod tests {
         assert!(runtime_hook_present(repo.path()));
     }
 
-    /// The installed command guards its own resolution, so the wrapper path is
-    /// no longer the command's first word. The plane check reads the shape the
-    /// installer actually writes today.
+    /// The reader must accept the command the writer actually composes, built
+    /// here through the same constructor rather than transcribed. A transcribed
+    /// fixture is a third copy of the contract and drifts like the second one
+    /// did: the shape this test used to hand-spell had already diverged from
+    /// [`hook_command`] in both its message and its exit code, so it would have
+    /// gone on passing against a command no installer writes.
     #[test]
-    fn runtime_plane_accepts_the_guarded_wrapper_form() {
+    fn the_plane_check_accepts_the_command_the_installer_composes() {
         let repo = tempfile::tempdir().unwrap();
-        let guarded = |verb: &str| {
-            format!(
-                r#"{{"command":"sh -c 'h=\"${{CLAUDE_PROJECT_DIR:-}}\"/.claude/hooks/aoa-enforce; [ -x \"$h\" ] || {{ echo \"aoa-enforce: ENFORCEMENT UNAVAILABLE\" >&2; exit 2; }}; exec \"$h\" {verb} \"$@\"' aoa-enforce-hook"}}"#
-            )
-        };
+        let mut hooks: serde_json::Map<String, Value> = serde_json::Map::new();
+        for (event, verb) in ENFORCE_HOOK_SET {
+            hooks
+                .entry(event)
+                .or_insert_with(|| serde_json::json!([]))
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({"hooks":[{"command": hook_command(verb)}]}));
+        }
         settings(
             repo.path(),
-            &format!(
-                r#"{{"hooks":{{
-                    "PostToolUse":[{{"hooks":[{}, {}]}}],
-                    "PreToolUse":[{{"hooks":[{}]}}],
-                    "PostToolUseFailure":[{{"hooks":[{}]}}],
-                    "PermissionDenied":[{{"hooks":[{}]}}]
-                }}}}"#,
-                guarded("record"),
-                guarded("commit"),
-                guarded("check"),
-                guarded("fail"),
-                guarded("deny"),
-            ),
+            &serde_json::json!({ "hooks": hooks }).to_string(),
         );
         assert!(runtime_hook_present(repo.path()));
 
         // One verb's command must not satisfy another's, or a settings file
         // holding five copies of the same hook would read as the full set.
         assert!(!has_enforce_hook(
-            &serde_json::from_str::<Value>(&format!(
-                r#"{{"hooks":{{"PreToolUse":[{{"hooks":[{}]}}]}}}}"#,
-                guarded("record")
-            ))
-            .unwrap(),
+            &serde_json::json!({"hooks":{"PreToolUse":[{"hooks":[
+                {"command": hook_command("record")}
+            ]}]}}),
             "PreToolUse",
             "check"
         ));

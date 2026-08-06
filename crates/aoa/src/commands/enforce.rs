@@ -65,6 +65,10 @@ use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
+use aoa_audit::{
+    hook_command, hook_set_defect, AOA_SETTINGS_KEY, BLOCK_EXIT_CODE, ENFORCE_HOOK_SET,
+    ENFORCE_HOOK_SET_VERSION, ENFORCE_WRAPPER_REL, HOOK_VERSION_KEY, SETTINGS_REL,
+};
 use aoa_codeprobe_shim::bash_runs_tests;
 use aoa_enforce::{
     blocked_span, generated_artifact_gate, reproduction_gate, BlockReason, Decision, LiveLog,
@@ -81,67 +85,9 @@ use crate::output::eprint_human;
 /// mutation and must be preceded by a reproduction (`test.run`) span.
 const MUTATION_TOOLS: [&str; 4] = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
 
-/// Bumped whenever [`hook_command`] changes shape, so a repo carrying the old
-/// spelling reports as behind and re-running the installer retires it.
-const ENFORCE_HOOK_SET_VERSION: u64 = 3;
-const AOA_SETTINGS_KEY: &str = "aoa";
-const HOOK_VERSION_KEY: &str = "enforce_hook_set_version";
-
-/// The wrapper every installed hook runs, relative to the repository root.
-const ENFORCE_WRAPPER_REL: &str = ".claude/hooks/aoa-enforce";
-
 /// The wrapper's contents, held here so the installer and the drift test read
 /// one source rather than two copies that can disagree.
 const ENFORCE_WRAPPER_SCRIPT: &str = include_str!("enforce_hook.sh");
-
-/// The command Claude Code runs for one enforce `verb`.
-///
-/// Hooks run under `/bin/sh` with the host's environment, so the earlier bare
-/// `aoa enforce <verb>` form enforced only where the binary happened to be on
-/// that environment's PATH. Where it was not, the hooks failed non-blocking and
-/// the plane was inert while still reading as installed — the exact
-/// silently-degraded guard AOA exists to detect. The command names a repo-local
-/// wrapper that resolves the binary itself and is loud when it cannot.
-///
-/// Finding that wrapper is the one step the wrapper cannot do for itself, so it
-/// is guarded here. `CLAUDE_PROJECT_DIR` is the host's repo root; an unset value
-/// used to fall back to `.`, which resolved by whatever cwd the host happened to
-/// use and exited 127 everywhere else. The host reads 127 as a non-blocking
-/// warning, so the write proceeded — the same silently-degraded guard, keyed on
-/// cwd instead of PATH. The command now tests the wrapper for executability
-/// first and exits with the verb's own unavailable code when it is not there,
-/// which also covers a deleted or non-executable wrapper. `"$@"` forwards the
-/// operator's extra arguments when the command is run by hand.
-fn hook_command(verb: &str) -> String {
-    let unavailable = unavailable_exit_code(verb);
-    format!(
-        "sh -c 'h=\"${{CLAUDE_PROJECT_DIR:-}}\"/{ENFORCE_WRAPPER_REL}; \
-         [ -x \"$h\" ] || {{ \
-         echo \"aoa-enforce: ENFORCEMENT UNAVAILABLE — no executable hook at $h; \
-         is CLAUDE_PROJECT_DIR set? This hook did NOT enforce.\" >&2; \
-         exit {unavailable}; }}; \
-         exec \"$h\" {verb} \"$@\"' aoa-enforce-hook"
-    )
-}
-
-/// The exit code a hook uses when enforcement could not run at all.
-///
-/// `check` is the only blocking hook, so unavailable enforcement must deny
-/// rather than fall open. The advisory hooks cannot block; they exit non-zero so
-/// the host surfaces the failure instead of recording a span never written. The
-/// installed wrapper makes the same split for a missing binary, and the two must
-/// agree or the guard's exit code would depend on which step failed.
-fn unavailable_exit_code(verb: &str) -> i32 {
-    if verb == "check" {
-        BLOCK_EXIT_CODE
-    } else {
-        1
-    }
-}
-
-/// The exit code Claude Code reads as "deny this tool call"; every other
-/// non-zero exit is only a non-blocking warning.
-const BLOCK_EXIT_CODE: i32 = 2;
 
 /// The Claude Code matcher selecting exactly [`MUTATION_TOOLS`]. Derived from
 /// that list rather than spelled out again, so adding a guarded tool cannot
@@ -833,21 +779,18 @@ pub(crate) fn merge_enforce_hooks(mut settings: Value) -> Result<Value> {
 
     let matcher = mutation_tool_matcher();
     retire_legacy_hooks(hooks);
-    // Every command runs the repo-local wrapper, never a bare `aoa`: see
-    // `hook_command`. Keep the spelling there, in the generator, so
-    // repositories cannot make the decision independently.
-    add_hook(hooks, "PostToolUse", "Bash", &hook_command("record"))?;
-    add_hook(hooks, "PreToolUse", &matcher, &hook_command("check"))?;
-    // One hook per write outcome, each with its own command string. The distinct
-    // commands are still required even though `add_hook` now keys on matcher as
-    // well: the host runs every group whose matcher fits, so two entries sharing
-    // a command would run it twice per tool call and double every span it emits.
-    for (event, verb) in [
-        ("PostToolUse", "commit"),
-        ("PostToolUseFailure", "fail"),
-        ("PermissionDenied", "deny"),
-    ] {
-        add_hook(hooks, event, &matcher, &hook_command(verb))?;
+    // The event/verb set and the command spelling both come from `aoa-audit`,
+    // which is also what reads them back: a hook this installer writes cannot be
+    // one the plane check does not recognise. `record` observes Bash test runs;
+    // every other verb observes the mutation tools.
+    //
+    // Every verb keeps its own command string. Distinct commands are still
+    // required even though `add_hook` keys on matcher as well: the host runs
+    // every group whose matcher fits, so two entries sharing a command would run
+    // it twice per tool call and double every span it emits.
+    for (event, verb) in ENFORCE_HOOK_SET {
+        let scope = if verb == "record" { "Bash" } else { &matcher };
+        add_hook(hooks, event, scope, &hook_command(verb))?;
     }
     let aoa = object.entry(AOA_SETTINGS_KEY).or_insert_with(|| json!({}));
     let Some(aoa) = aoa.as_object_mut() else {
@@ -862,9 +805,6 @@ pub(crate) fn merge_enforce_hooks(mut settings: Value) -> Result<Value> {
     );
     Ok(settings)
 }
-
-/// The verbs this installer registers a hook for.
-const ENFORCE_VERBS: [&str; 5] = ["record", "check", "commit", "fail", "deny"];
 
 /// Every command string this installer has written for `verb` and since
 /// superseded.
@@ -894,9 +834,9 @@ fn superseded_hook_commands(verb: &str) -> [String; 2] {
 /// operator added is left alone. Groups emptied by the removal go with them, so
 /// a re-run stays byte-stable.
 fn retire_legacy_hooks(hooks: &mut Map<String, Value>) {
-    let legacy: Vec<String> = ENFORCE_VERBS
+    let legacy: Vec<String> = ENFORCE_HOOK_SET
         .iter()
-        .flat_map(|verb| superseded_hook_commands(verb))
+        .flat_map(|(_, verb)| superseded_hook_commands(verb))
         .collect();
     for groups in hooks.values_mut() {
         let Some(groups) = groups.as_array_mut() else {
@@ -921,87 +861,14 @@ fn retire_legacy_hooks(hooks: &mut Map<String, Value>) {
     hooks.retain(|_, groups| groups.as_array().is_none_or(|groups| !groups.is_empty()));
 }
 
-pub(crate) fn enforce_hook_warning(repo: &Path) -> Option<String> {
-    let path = repo.join(".claude").join("settings.json");
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(raw) => raw,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
-        Err(err) => {
-            return Some(format!(
-                "{} has an unreadable enforce hook stamp ({err}); rerun `aoa observe --enforce`",
-                path.display()
-            ))
-        }
-    };
-    let settings: Value = match serde_json::from_str(&raw) {
-        Ok(settings) => settings,
-        Err(_) => {
-            return Some(format!(
-                "{} has a malformed enforce hook stamp; repair the JSON and rerun `aoa observe --enforce`",
-                path.display()
-            ))
-        }
-    };
-    let Some(version) = settings
-        .get(AOA_SETTINGS_KEY)
-        .and_then(Value::as_object)
-        .and_then(|aoa| aoa.get(HOOK_VERSION_KEY))
-    else {
-        return Some(format!(
-            "{} is missing the enforce hook stamp (current version {ENFORCE_HOOK_SET_VERSION}); rerun `aoa observe --enforce`",
-            path.display()
-        ));
-    };
-    let Some(version) = version.as_u64() else {
-        return Some(format!(
-            "{} has a malformed enforce hook stamp; rerun `aoa observe --enforce`",
-            path.display()
-        ));
-    };
-    match version.cmp(&ENFORCE_HOOK_SET_VERSION) {
-        std::cmp::Ordering::Less => Some(format!(
-            "{} enforce hooks are behind (installed {version}, current {ENFORCE_HOOK_SET_VERSION}); rerun `aoa observe --enforce`",
-            path.display()
-        )),
-        std::cmp::Ordering::Greater => Some(format!(
-            "{} enforce hooks are ahead of this binary (installed {version}, current {ENFORCE_HOOK_SET_VERSION}); upgrade AOA before reinstalling",
-            path.display()
-        )),
-        std::cmp::Ordering::Equal => missing_wrapper_warning(repo),
-    }
-}
-
-/// Report a current stamp whose wrapper is absent or not executable.
+/// Render the defect in `repo`'s installed hook set, if it has one.
 ///
-/// A stamp says which hook set was installed; it cannot say whether the file
-/// those hooks run still exists. Without this check a deleted wrapper leaves
-/// the settings looking current while every hook fails, which is the same
-/// installed-but-inert reading the wrapper was introduced to end.
-fn missing_wrapper_warning(repo: &Path) -> Option<String> {
-    let wrapper = repo.join(ENFORCE_WRAPPER_REL);
-    let Ok(metadata) = std::fs::symlink_metadata(&wrapper) else {
-        return Some(format!(
-            "{} is missing; the installed enforce hooks have nothing to run — rerun `aoa observe --enforce`",
-            wrapper.display()
-        ));
-    };
-    if !metadata.file_type().is_file() {
-        return Some(format!(
-            "{} is not a regular file; enforce hooks cannot run — rerun `aoa observe --enforce`",
-            wrapper.display()
-        ));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o111 == 0 {
-            return Some(format!(
-                "{} is not executable; enforce hooks cannot run — rerun `aoa observe --enforce`",
-                wrapper.display()
-            ));
-        }
-    }
-    None
+/// The judgment is [`aoa_audit::hook_set_defect`]'s: it belongs beside the plane
+/// check, in the crate that owns the enforcement-plane question, rather than in a
+/// `pub(crate)` helper of this binary where no library consumer could reach it.
+/// What is left here is the rendering both output registers share.
+pub(crate) fn enforce_hook_warning(repo: &Path) -> Option<String> {
+    hook_set_defect(repo).map(|defect| defect.render_line(repo))
 }
 
 /// Name a JSON value's type for an error message.
@@ -1021,7 +888,7 @@ fn json_kind(value: &Value) -> &'static str {
 /// merged, and rewritten, so a re-run that changes nothing is byte-stable.
 /// Shared by `observe --enforce` and `policy compile`.
 pub(crate) fn install_enforce_hooks(repo: &Path) -> Result<PathBuf> {
-    let settings_path = repo.join(".claude").join("settings.json");
+    let settings_path = repo.join(SETTINGS_REL);
 
     let existing = match std::fs::read_to_string(&settings_path) {
         Ok(raw) => serde_json::from_str::<Value>(&raw)
@@ -1580,6 +1447,30 @@ mod tests {
         }
     }
 
+    /// The installer and the audit are two sides of one contract, and they have
+    /// drifted before: the installer moved to a repo-local wrapper, the plane
+    /// check did not know, and a correctly-installed repository audited as
+    /// MISSING its runtime hook. Nothing short of running a real install through
+    /// the real reader catches that — both sides pass their own tests while
+    /// disagreeing about what an install looks like.
+    #[test]
+    fn a_real_install_satisfies_the_audit_that_reads_it_back() {
+        let repo = tempfile::tempdir().unwrap();
+        install_enforce_hooks(repo.path()).expect("install into a fresh repo");
+
+        assert_ne!(
+            aoa_audit::enforcement_liveness(repo.path(), None),
+            aoa_audit::EnforcementLiveness::NotInstalled,
+            "the audit must recognise the hook set this installer just wrote; \
+             reading a real install as not-installed is the drift this contract exists to stop"
+        );
+        assert_eq!(
+            aoa_audit::hook_set_defect(repo.path()),
+            None,
+            "a fresh install must be stamped for the current hook set, with a runnable wrapper"
+        );
+    }
+
     /// Every write outcome the host can report has somewhere to be recorded.
     /// Without the full set, an outcome silently goes unobserved and its writes
     /// look like abandoned attempts.
@@ -1633,7 +1524,7 @@ mod tests {
                 merge_enforce_hooks(installed).expect("upgrade from an earlier hook set");
 
             let rendered = serde_json::to_string(&upgraded).unwrap();
-            for verb in ENFORCE_VERBS {
+            for (_, verb) in ENFORCE_HOOK_SET {
                 assert!(
                     !rendered.contains(&serde_json::to_string(&command(verb)).unwrap()),
                     "no hook-set-{version} command may survive the upgrade: {rendered}"
