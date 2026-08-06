@@ -58,18 +58,26 @@ pub(crate) fn resolve_exposure(
         )
     })?;
 
-    let entry = scan
-        .repos
-        .iter()
-        .find(|entry| entry.repo_id == repo_id)
-        .ok_or_else(|| {
-            anyhow!(
-                "repo {repo_id}: exposure ledger {} has no exposure entry for it; \
-                 re-run `aoa eval exposure scan --out` against the runs root that \
-                 holds this repo's trials",
-                scan_path.display()
-            )
-        })?;
+    // Exactly one entry, not the first match: `scan_exposure` rejects duplicate
+    // repos, so two entries mean a ledger that was assembled by some other means
+    // and it is no longer clear which verdict describes this repo. Resolving that
+    // silently would be the same "a word decides" failure in a new place.
+    let mut matching = scan.repos.iter().filter(|entry| entry.repo_id == repo_id);
+    let entry = matching.next().ok_or_else(|| {
+        anyhow!(
+            "repo {repo_id}: exposure ledger {} has no exposure entry for it; \
+             re-run `aoa eval exposure scan --out` against the runs root that \
+             holds this repo's trials",
+            scan_path.display()
+        )
+    })?;
+    if matching.next().is_some() {
+        bail!(
+            "repo {repo_id}: exposure ledger {} carries more than one entry for it, \
+             so no single measured verdict describes this repo",
+            scan_path.display()
+        );
+    }
     // codeprobe records `prep.json`'s `baseline_sha`, conventionally abbreviated,
     // while the manifest pins a full object id — so this is prefix identification,
     // not string equality. The length floor is what keeps it an identity check: a
@@ -166,6 +174,30 @@ mod tests {
         assert!(
             error.contains("has no exposure entry for it"),
             "got: {error}"
+        );
+    }
+
+    #[test]
+    fn a_ledger_carrying_two_entries_for_one_repo_is_ambiguous_not_first_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("exposure.json");
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"repos":[
+                {{"repo_id":"sample/repo","baseline_commit":"{HEX}","total_subjects":2,
+                 "status":"unexposed","provenance":null}},
+                {{"repo_id":"sample/repo","baseline_commit":"{HEX}","total_subjects":2,
+                 "status":"exposed","provenance":null}}]}}"#
+            ),
+        )
+        .unwrap();
+
+        let error = resolve_exposure(&path, "sample/repo", &commit(HEX)).unwrap_err();
+
+        assert!(
+            format!("{error:#}").contains("more than one entry"),
+            "got: {error:#}"
         );
     }
 
