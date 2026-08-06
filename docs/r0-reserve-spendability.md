@@ -39,9 +39,8 @@ her the run "produced nothing" and that "there is no result in there to leak";
 it was retitled and re-published against the real fact after a read-only
 verifier enumerated all 80 payloads. Her ruling answers the corrected question.
 
-All 80 `scoring.json` payloads under
-`/home/ds/projects/codeprobe/runs/r0-campaign/{sqlparse,websockets}` were
-enumerated directly for this record:
+All 80 `scoring.json` payloads under `{sqlparse,websockets}` in the
+`r0-campaign` run directory were enumerated directly for this record:
 
 | | sqlparse | websockets | combined |
 | --- | ---: | ---: | ---: |
@@ -226,14 +225,19 @@ when the resulting numbers improve, and especially then."
 
 ## Reproducing this record
 
+The campaign lives in the codeprobe checkout, a separate project; `CODEPROBE_ROOT`
+below defaults to `~/projects/codeprobe`, so export it first if your clone sits
+elsewhere.
+
 ```bash
+export CODEPROBE_ROOT="${CODEPROBE_ROOT:-$HOME/projects/codeprobe}"
 cargo build --bin aoa
 ./target/debug/aoa eval exposure scan \
-  --runs /home/ds/projects/codeprobe/runs/r0-campaign
+  --runs "$CODEPROBE_ROOT/runs/r0-campaign"
 ```
 
 The per-repository trial counts, held-out pass/fail/errored/unscored tallies,
 causing run paths, and mtime ranges in this record are that command's output.
 The `score_artifact` distribution and the `$10.348696` spend come from reading
-the 80 `scoring.json` payloads under
-`/home/ds/projects/codeprobe/runs/r0-campaign/{sqlparse,websockets}` directly.
+the 80 `scoring.json` payloads under `{sqlparse,websockets}` in that same
+`r0-campaign` run directory.

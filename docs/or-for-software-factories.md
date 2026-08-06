@@ -4,7 +4,7 @@ Applying operations research to Gas City, gascity-packs, and the AOA toolkit.
 
 **Status:** #research (per `architecture/spec.c4` tag vocabulary) · **Date:** 2026-07-10
 **Companion evidence base:** `scix_experiments/docs/or_optimization_survey_2026-07.md` — a six-agent survey of the SciX/ADS corpus (LP/MIP, network optimization, stochastic and dynamic programming, NLP/duality, modeling languages, metaheuristics), bibcode-anchored. All bibcodes below resolve at ADS.
-**Codebase ground truth:** file references are to `/home/ds/gascity` (Go core), `/home/ds/gascity-packs`, and this repo's `crates/`, as of 2026-07-10.
+**Codebase ground truth:** file references are repo-relative, to the `gascity` Go core, `gascity-packs`, and this repo's `crates/`, as of 2026-07-10.
 
 ---
 
