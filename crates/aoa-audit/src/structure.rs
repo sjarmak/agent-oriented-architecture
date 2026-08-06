@@ -280,6 +280,124 @@ const WRITE_BOUNDARY_SURFACES: &[&[&str]] = &[
     &[".aoa/write-policy.toml"],
 ];
 
+/// One code-structure probe, named once and rendered into both registers.
+///
+/// The audit publishes each probe twice — as a punch item for a human punch list
+/// and as a count for the external-outcome corpus — and CLAUDE.md requires those
+/// to be dual registers of one result, not two implementations. A `Probe` is that
+/// one result: [`structure_items`] and [`structure_measurements`] both map over
+/// [`PROBES`], so a probe cannot be added to one register and forgotten in the
+/// other (the old failure mode, which read downstream as "no data" rather than as
+/// a bug).
+struct Probe {
+    /// The finding this probe reports under, in both registers.
+    kind: FindingKind,
+    /// The corpus count, or `None` for a punch-list-only probe — one that backs
+    /// no external-outcome gating candidate and so is deliberately absent from
+    /// [`structure_measurements`]. Structural, not prose: the omission is the
+    /// probe's own declaration.
+    measure: Option<MeasureFn>,
+    /// The punch item, absent when the probe abstains (a clean repo, or one it
+    /// cannot assess).
+    item: ItemFn,
+}
+
+/// A probe's corpus register: the repo and the module-size multiplier in, one
+/// [`StructureMeasure`] out.
+type MeasureFn = fn(&Path, f64) -> Result<StructureMeasure, AuditError>;
+
+/// A probe's punch-list register: the same inputs plus the subtree partition that
+/// scopes path-carrying findings.
+type ItemFn = fn(&Path, f64, &SubtreePartition) -> Result<Option<PunchItem>, AuditError>;
+
+/// Every code-structure probe, in punch-list order. The single list both public
+/// entry points read; see [`Probe`].
+const PROBES: &[Probe] = &[
+    Probe {
+        kind: FindingKind::NavigabilityAnchor,
+        measure: Some(|repo, _k| {
+            Ok(StructureMeasure::Measured(
+                navigability_sites(repo)?.len() as u64
+            ))
+        }),
+        item: |repo, _k, partition| navigability_anchor_item(repo, partition),
+    },
+    Probe {
+        kind: FindingKind::ModuleSizeOutlier,
+        measure: Some(|repo, k| {
+            Ok(
+                module_size_outliers(repo, k)?.map_or(StructureMeasure::Unmeasurable, |outliers| {
+                    StructureMeasure::Measured(outliers.len() as u64)
+                }),
+            )
+        }),
+        item: module_size_outlier_item,
+    },
+    Probe {
+        kind: FindingKind::UnusedImportProxy,
+        measure: Some(|repo, _k| unused_import_measure(repo)),
+        item: |repo, _k, partition| unused_import_proxy_item(repo, partition),
+    },
+    Probe {
+        kind: FindingKind::VerificationReachability,
+        measure: None,
+        item: |repo, _k, partition| verification_reachability_item(repo, partition),
+    },
+    Probe {
+        kind: FindingKind::InvariantDiscoverability,
+        measure: None,
+        item: |repo, _k, partition| invariant_discoverability_item(repo, partition),
+    },
+    Probe {
+        kind: FindingKind::BuildDeterminism,
+        measure: Some(|repo, _k| {
+            Ok(StructureMeasure::Measured(absence_count(
+                repo,
+                BUILD_DETERMINISM_MARKERS,
+            )))
+        }),
+        item: |repo, _k, _partition| Ok(build_determinism_item(repo)),
+    },
+    Probe {
+        kind: FindingKind::DevEnvironmentDeclaration,
+        measure: Some(|repo, _k| {
+            Ok(StructureMeasure::Measured(absence_count(
+                repo,
+                DEV_ENVIRONMENT_MARKERS,
+            )))
+        }),
+        item: |repo, _k, _partition| Ok(dev_environment_item(repo)),
+    },
+    Probe {
+        kind: FindingKind::TaskDiscoverySurface,
+        measure: Some(|repo, _k| {
+            Ok(StructureMeasure::Measured(absence_count(
+                repo,
+                TASK_DISCOVERY_SURFACES,
+            )))
+        }),
+        item: |repo, _k, _partition| Ok(task_discovery_item(repo)),
+    },
+    Probe {
+        kind: FindingKind::GeneratedArtifactProtection,
+        measure: Some(|repo, _k| {
+            Ok(StructureMeasure::Measured(u64::from(
+                !declares_linguist_generated(repo)?,
+            )))
+        }),
+        item: |repo, _k, _partition| generated_artifact_protection_item(repo),
+    },
+    Probe {
+        kind: FindingKind::WriteSafetyZone,
+        measure: Some(|repo, _k| {
+            Ok(StructureMeasure::Measured(write_boundary_absent_count(
+                repo,
+            )))
+        }),
+        item: |repo, _k, _partition| Ok(write_safety_zone_item(repo)),
+    },
+];
+
 /// Run the code-structure audit family over `repo`, returning measured-fact
 /// punch items (each born [`Tier::Tier3`]). `size_outlier_k` is the caller's
 /// documented multiplier for the module-size measure; `partition` scopes
@@ -290,35 +408,10 @@ pub(crate) fn structure_items(
     partition: &SubtreePartition,
 ) -> Result<Vec<PunchItem>, AuditError> {
     let mut items = Vec::new();
-    if let Some(item) = navigability_anchor_item(repo, partition)? {
-        items.push(item);
-    }
-    if let Some(item) = module_size_outlier_item(repo, size_outlier_k, partition)? {
-        items.push(item);
-    }
-    if let Some(item) = unused_import_proxy_item(repo, partition)? {
-        items.push(item);
-    }
-    if let Some(item) = verification_reachability_item(repo, partition)? {
-        items.push(item);
-    }
-    if let Some(item) = invariant_discoverability_item(repo, partition)? {
-        items.push(item);
-    }
-    if let Some(item) = build_determinism_item(repo) {
-        items.push(item);
-    }
-    if let Some(item) = dev_environment_item(repo) {
-        items.push(item);
-    }
-    if let Some(item) = task_discovery_item(repo) {
-        items.push(item);
-    }
-    if let Some(item) = generated_artifact_protection_item(repo)? {
-        items.push(item);
-    }
-    if let Some(item) = write_safety_zone_item(repo) {
-        items.push(item);
+    for probe in PROBES {
+        if let Some(item) = (probe.item)(repo, size_outlier_k, partition)? {
+            items.push(item);
+        }
     }
     Ok(items)
 }
@@ -344,46 +437,18 @@ pub enum StructureMeasure {
 /// of the same probes [`structure_items`] renders as a punch list (see
 /// [`StructureMeasure`]). `size_outlier_k` is the audit's module-size multiplier.
 ///
-/// Only the measures that back an external-outcome gating candidate are reported;
-/// `verification_reachability` and `invariant_discoverability` are punch-list-only
-/// (no corpus metric) and are deliberately omitted.
+/// Only the measures that back an external-outcome gating candidate are reported:
+/// a punch-list-only probe declares itself by carrying no [`Probe::measure`].
 pub fn structure_measurements(
     repo: &Path,
     size_outlier_k: f64,
 ) -> Result<BTreeMap<FindingKind, StructureMeasure>, AuditError> {
-    use StructureMeasure::{Measured, Unmeasurable};
-
     let mut m = BTreeMap::new();
-    m.insert(
-        FindingKind::BuildDeterminism,
-        Measured(absence_count(repo, BUILD_DETERMINISM_MARKERS)),
-    );
-    m.insert(
-        FindingKind::DevEnvironmentDeclaration,
-        Measured(absence_count(repo, DEV_ENVIRONMENT_MARKERS)),
-    );
-    m.insert(
-        FindingKind::TaskDiscoverySurface,
-        Measured(absence_count(repo, TASK_DISCOVERY_SURFACES)),
-    );
-    m.insert(
-        FindingKind::GeneratedArtifactProtection,
-        Measured(u64::from(!declares_linguist_generated(repo)?)),
-    );
-    m.insert(
-        FindingKind::WriteSafetyZone,
-        Measured(write_boundary_absent_count(repo)),
-    );
-    m.insert(
-        FindingKind::NavigabilityAnchor,
-        Measured(navigability_sites(repo)?.len() as u64),
-    );
-    m.insert(
-        FindingKind::ModuleSizeOutlier,
-        module_size_outliers(repo, size_outlier_k)?
-            .map_or(Unmeasurable, |outliers| Measured(outliers.len() as u64)),
-    );
-    m.insert(FindingKind::UnusedImportProxy, unused_import_measure(repo)?);
+    for probe in PROBES {
+        if let Some(measure) = probe.measure {
+            m.insert(probe.kind, measure(repo, size_outlier_k)?);
+        }
+    }
     Ok(m)
 }
 
@@ -1499,6 +1564,7 @@ fn io_err(path: &Path, source: std::io::Error) -> AuditError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
     use std::fs;
 
     fn tmp(name: &str) -> PathBuf {
@@ -1519,6 +1585,53 @@ mod tests {
             fs::create_dir(&nested).unwrap();
             nested
         })
+    }
+
+    /// Both registers are rendered from the one [`PROBES`] list, so a probe can
+    /// never be named twice or reported under a kind it does not own.
+    #[test]
+    fn every_probe_owns_exactly_one_finding_kind() {
+        let kinds: BTreeSet<FindingKind> = PROBES.iter().map(|p| p.kind).collect();
+        assert_eq!(kinds.len(), PROBES.len(), "duplicate probe kind in PROBES");
+    }
+
+    /// The corpus register reports exactly the measure-bearing probes — nothing a
+    /// probe did not declare, and nothing silently dropped (the old two-list
+    /// failure mode, which read downstream as "no data" rather than as a bug).
+    #[test]
+    fn structure_measurements_reports_every_measure_bearing_probe() {
+        let dir = tmp("measure-register");
+        fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
+        let reported: BTreeSet<FindingKind> = structure_measurements(&dir, 4.0)
+            .unwrap()
+            .into_keys()
+            .collect();
+        let declared: BTreeSet<FindingKind> = PROBES
+            .iter()
+            .filter(|p| p.measure.is_some())
+            .map(|p| p.kind)
+            .collect();
+        assert_eq!(reported, declared);
+        // The punch-list-only probes stay out of the corpus view.
+        assert!(!reported.contains(&FindingKind::VerificationReachability));
+        assert!(!reported.contains(&FindingKind::InvariantDiscoverability));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Every punch item a probe emits is attributed to that probe's own kind, so
+    /// the punch list and the corpus counts cannot disagree about which finding a
+    /// probe reports.
+    #[test]
+    fn each_probe_emits_items_under_its_own_kind() {
+        let dir = tmp("item-register");
+        fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
+        let partition = implicit(&dir);
+        for probe in PROBES {
+            if let Some(item) = (probe.item)(&dir, 4.0, &partition).unwrap() {
+                assert_eq!(item.kind, probe.kind);
+            }
+        }
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
