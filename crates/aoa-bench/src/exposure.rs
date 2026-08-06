@@ -5,6 +5,7 @@ use std::time::UNIX_EPOCH;
 use aoa_gap::{ExposureStatus, SubjectKey};
 use serde::{Deserialize, Serialize};
 
+use crate::codeprobe_run::TrialScoring;
 use crate::error::BenchError;
 use crate::loader::{read_capped, MAX_CODEPROBE_JSON_BYTES};
 
@@ -48,9 +49,24 @@ pub struct ExposureProvenance {
     pub mtime_range: ExposureMtimeRange,
     /// Number of distinct trial directories contributing to the verdict.
     pub trial_count: usize,
-    /// Top-level `scoring.json` score values and their occurrence counts.
-    pub score_distribution: BTreeMap<String, usize>,
-    /// Trials with exposure evidence but no numeric top-level score.
+    /// Contributing trials whose held-out outcome was a pass.
+    ///
+    /// Held-out means what [`TrialScoring::held_out_outcome`] means: a
+    /// `dual_composite` trial contributes its independent artifact leg, never
+    /// its top-level composite, which a failed direct leg can lower.
+    pub held_out_passed: usize,
+    /// Contributing trials whose held-out outcome was a fail.
+    pub held_out_failed: usize,
+    /// Trials whose `scoring.json` persisted a scorer error — top level or on
+    /// either dual leg — so the held-out outcome is unknown rather than absent.
+    ///
+    /// Its own count, not folded into `unscored_trials`: a scorer that crashed
+    /// is evidence the subject was spent *and* that the ledger cannot say how
+    /// the trial went. It does not abort the scan — exposure asks whether a
+    /// subject was touched, and a run whose scorer failed touched it.
+    pub errored_trials: usize,
+    /// Trials with exposure evidence but no held-out signal at all — no
+    /// `scoring.json`, or one carrying neither a `passed` flag nor a score.
     pub unscored_trials: usize,
 }
 
@@ -73,6 +89,11 @@ impl RepoExposure {
     }
 }
 
+/// Codeprobe writes `prep.json` and `mine.json`, and adds keys to them over
+/// time. Being declared subsets of a producer-owned shape rather than
+/// operator-authored input, both must tolerate unknown fields:
+/// `deny_unknown_fields` would reject files this scanner has no quarrel with.
+/// The same rationale [`TrialScoring`] records at its own declaration.
 #[derive(Debug, Deserialize)]
 struct PrepManifest {
     repo: String,
@@ -98,18 +119,15 @@ struct ProvenanceAccumulator {
     earliest_unix_ms: Option<u64>,
     latest_unix_ms: Option<u64>,
     trial_count: usize,
-    score_distribution: BTreeMap<String, usize>,
+    held_out_passed: usize,
+    held_out_failed: usize,
+    errored_trials: usize,
     unscored_trials: usize,
 }
 
 struct ExposureEvidence {
     spent_subjects: BTreeSet<SubjectKey>,
     provenance_by_repo: BTreeMap<String, ExposureProvenance>,
-}
-
-#[derive(Deserialize)]
-struct ExposureScoring {
-    score: Option<serde_json::Number>,
 }
 
 /// Scan every codeprobe trial under `runs_root`, including quarantine trees,
@@ -330,15 +348,15 @@ fn record_trial_provenance(
         .iter()
         .map(|path| modified_unix_ms(path))
         .collect::<Result<Vec<_>, _>>()?;
-    let score = read_exposure_score(&trial_dir.join("scoring.json"))?;
     let run_path = trial_dir
         .parent()
         .expect("a discovered trial directory always has a parent")
         .to_path_buf();
+    let held_out = read_held_out_outcome(&run_path, trial_dir)?;
     provenance
         .entry(repo_id.to_string())
         .or_default()
-        .record(run_path, &mtimes, score);
+        .record(run_path, &mtimes, held_out);
     Ok(())
 }
 
@@ -356,24 +374,70 @@ fn modified_unix_ms(path: &Path) -> Result<u64, BenchError> {
         .map_err(|_| BenchError::ExposureMtimeOverflow(path.to_path_buf()))
 }
 
-fn read_exposure_score(path: &Path) -> Result<Option<String>, BenchError> {
-    if !is_regular_file(path) {
-        return Ok(None);
+/// The ledger's held-out verdict for one trial, read through the crate's one
+/// `scoring.json` declaration rather than a private copy of it.
+///
+/// A trial that persisted no `scoring.json` still counts as evidence of
+/// exposure — the agent ran against the subject either way — so its absence
+/// degrades to `Absent`.
+///
+/// A persisted scorer error is a third thing. [`TrialScoring::held_out_outcome`]
+/// raises on one, which is right for a gate deciding a result but wrong here:
+/// exposure asks whether a subject was spent, and a trial whose scorer crashed
+/// spent it — aborting the whole scan on one bad trial answers a weaker
+/// question than the one asked. So both persisted-error variants are caught and
+/// tallied rather than propagated. They are matched off the owner's error type
+/// rather than pre-checked field by field, because a `dual_composite` file can
+/// carry a leg error (`error_artifact`) with no top-level `error` at all, and a
+/// pre-check that only read the top level would still abort the scan on it.
+fn read_held_out_outcome(run_dir: &Path, trial_dir: &Path) -> Result<HeldOutTally, BenchError> {
+    if !is_regular_file(&trial_dir.join("scoring.json")) {
+        return Ok(HeldOutTally::Absent);
     }
-    let scoring: ExposureScoring = read_json(path)?;
-    Ok(scoring.score.map(|score| score.to_string()))
+    let name = trial_dir
+        .file_name()
+        .expect("a discovered trial directory always has a file name");
+    // Reject a non-UTF-8 trial name rather than lossily rendering it: the id is
+    // rejoined onto `run_dir` to locate the file, and `to_string_lossy` is not
+    // injective, so two distinct dirents could collapse onto one trial's
+    // `scoring.json`. Same rule, and the same reason, as `discover_tasks`.
+    let task_id = name.to_str().ok_or_else(|| BenchError::TrialNameNotUtf8 {
+        run_dir: run_dir.to_path_buf(),
+        name: name.to_os_string(),
+    })?;
+    match TrialScoring::load(run_dir, task_id)?.held_out_outcome() {
+        Ok(Some(true)) => Ok(HeldOutTally::Passed),
+        Ok(Some(false)) => Ok(HeldOutTally::Failed),
+        Ok(None) => Ok(HeldOutTally::Absent),
+        Err(BenchError::ScoringErrored { .. } | BenchError::ScoringLegErrored { .. }) => {
+            Ok(HeldOutTally::Errored)
+        }
+        Err(other) => Err(other),
+    }
+}
+
+/// How one trial's held-out outcome lands in the provenance report.
+enum HeldOutTally {
+    Passed,
+    Failed,
+    /// `scoring.json` persisted a scorer error, top-level or per-leg: the
+    /// outcome is unknown rather than absent.
+    Errored,
+    /// No `scoring.json`, or one carrying no pass signal at all.
+    Absent,
 }
 
 impl ProvenanceAccumulator {
-    fn record(&mut self, run_path: PathBuf, mtimes: &[u64], score: Option<String>) {
+    fn record(&mut self, run_path: PathBuf, mtimes: &[u64], held_out: HeldOutTally) {
         self.causing_run_paths.insert(run_path);
         self.earliest_unix_ms = mtimes.iter().copied().chain(self.earliest_unix_ms).min();
         self.latest_unix_ms = mtimes.iter().copied().chain(self.latest_unix_ms).max();
         self.trial_count += 1;
-        if let Some(score) = score {
-            *self.score_distribution.entry(score).or_default() += 1;
-        } else {
-            self.unscored_trials += 1;
+        match held_out {
+            HeldOutTally::Passed => self.held_out_passed += 1,
+            HeldOutTally::Failed => self.held_out_failed += 1,
+            HeldOutTally::Errored => self.errored_trials += 1,
+            HeldOutTally::Absent => self.unscored_trials += 1,
         }
     }
 
@@ -391,7 +455,9 @@ impl ProvenanceAccumulator {
                 latest_unix_ms,
             },
             trial_count: self.trial_count,
-            score_distribution: self.score_distribution,
+            held_out_passed: self.held_out_passed,
+            held_out_failed: self.held_out_failed,
+            errored_trials: self.errored_trials,
             unscored_trials: self.unscored_trials,
         })
     }

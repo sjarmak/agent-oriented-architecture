@@ -73,7 +73,9 @@ fn exposure_scan_json_reports_subject_keyed_partial_status() {
     assert_eq!(provenance["trial_count"], 1);
     assert!(provenance["mtime_range"]["earliest_unix_ms"].is_u64());
     assert!(provenance["mtime_range"]["latest_unix_ms"].is_u64());
-    assert_eq!(provenance["score_distribution"]["0.0"], 1);
+    assert_eq!(provenance["held_out_passed"], 0);
+    assert_eq!(provenance["held_out_failed"], 1);
+    assert_eq!(provenance["errored_trials"], 0);
     assert_eq!(provenance["unscored_trials"], 0);
 }
 
@@ -127,7 +129,7 @@ fn exposure_scan_human_output_explains_the_causing_run_and_scores() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("sqlparse @ f80af6a4: exposed (1/1)"));
     assert!(stdout.contains(&format!("run: {}", run.display())));
-    assert!(stdout.contains("scores: 0.0=1; unscored=0"));
+    assert!(stdout.contains("held-out passed=0 failed=1; errored=0; unscored=0"));
     assert!(stdout.contains("mtime (unix ms):"));
 }
 

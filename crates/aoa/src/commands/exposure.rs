@@ -47,17 +47,13 @@ pub fn scan(args: &ExposureScanArgs) -> Result<i32> {
                     "    mtime (unix ms): {}..={}",
                     provenance.mtime_range.earliest_unix_ms, provenance.mtime_range.latest_unix_ms,
                 );
-                let scores = provenance
-                    .score_distribution
-                    .iter()
-                    .map(|(score, count)| format!("{score}={count}"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
                 let _ = writeln!(
                     out,
-                    "    trials: {}; scores: {}; unscored={}",
+                    "    trials: {}; held-out passed={} failed={}; errored={}; unscored={}",
                     provenance.trial_count,
-                    if scores.is_empty() { "none" } else { &scores },
+                    provenance.held_out_passed,
+                    provenance.held_out_failed,
+                    provenance.errored_trials,
                     provenance.unscored_trials,
                 );
             }

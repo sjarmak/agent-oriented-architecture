@@ -115,12 +115,13 @@ fn void_scored_trials_remain_exposed_and_report_their_provenance() {
     );
     assert_eq!(provenance.trial_count, 2);
     assert!(provenance.mtime_range.earliest_unix_ms <= provenance.mtime_range.latest_unix_ms);
-    assert_eq!(provenance.score_distribution.get("0.0"), Some(&2));
+    assert_eq!(provenance.held_out_passed, 0);
+    assert_eq!(provenance.held_out_failed, 2);
     assert_eq!(provenance.unscored_trials, 0);
 }
 
 #[test]
-fn real_r0_campaign_matches_documented_exposure_and_void_score_provenance() {
+fn real_r0_campaign_matches_documented_exposure_and_held_out_provenance() {
     const RUNS_ROOT: &str = "/home/ds/projects/codeprobe/runs/r0-campaign";
     const HTTPIE_BASELINE: &str = "5b604c37c6c67e18e7c3e9aee6c88a8c22b98345";
 
@@ -161,8 +162,12 @@ fn real_r0_campaign_matches_documented_exposure_and_void_score_provenance() {
 
     assert_eq!(subjects, &expected);
 
-    for (repo_id, expected_trials, expected_run_paths) in
-        [("sqlparse", 56, 4), ("websockets", 24, 2)]
+    // Every one of these trials reports a top-level score of 0.0 while its
+    // independent artifact leg passed — the composite was lowered by the
+    // gameable direct leg. The ledger reports the held-out leg, so these read
+    // as passes, not as the "0.0" the old private scoring copy counted.
+    for (repo_id, expected_trials, expected_run_paths, expected_passed) in
+        [("sqlparse", 56, 4, 56), ("websockets", 24, 2, 23)]
     {
         let repo = scan
             .repos
@@ -173,10 +178,12 @@ fn real_r0_campaign_matches_documented_exposure_and_void_score_provenance() {
         let provenance = repo.provenance.as_ref().unwrap();
         assert_eq!(provenance.trial_count, expected_trials);
         assert_eq!(provenance.causing_run_paths.len(), expected_run_paths);
+        assert_eq!(provenance.held_out_passed, expected_passed);
         assert_eq!(
-            provenance.score_distribution.get("0.0"),
-            Some(&expected_trials)
+            provenance.held_out_failed,
+            expected_trials - expected_passed
         );
+        assert_eq!(provenance.errored_trials, 0);
         assert_eq!(provenance.unscored_trials, 0);
     }
 }
@@ -277,4 +284,68 @@ fn scanner_does_not_follow_symlinked_quarantine_directories() {
     let scan = scan_exposure(&runs).unwrap();
 
     assert_eq!(scan.repos[0].status, ExposureStatus::Unexposed);
+}
+
+#[test]
+fn dual_composite_trial_is_counted_by_its_held_out_leg_not_its_composite() {
+    let (_temp, runs) = campaign_fixture(2, 2);
+    // The shape the private ExposureScoring copy got wrong: the artifact
+    // (held-out) leg passed, and only the gameable direct leg failed, so the
+    // top-level composite was lowered to 0.0. The ledger tracks held-out.
+    for index in 0..2 {
+        write(
+            &runs.join(format!("quarantine/old-{index}/scoring.json")),
+            r#"{"score":0.0,"passed":false,"scorer_family":"dual_composite",
+                "passed_direct":false,"passed_artifact":true,
+                "score_direct":0.0,"score_artifact":1.0}"#,
+        );
+    }
+
+    let scan = scan_exposure(&runs).unwrap();
+    let provenance = scan.repos[0].provenance.as_ref().unwrap();
+
+    assert_eq!(provenance.trial_count, 2);
+    assert_eq!(provenance.held_out_passed, 2);
+    assert_eq!(provenance.held_out_failed, 0);
+    assert_eq!(provenance.unscored_trials, 0);
+}
+
+#[test]
+fn persisted_scorer_error_is_its_own_category_not_folded_into_unscored() {
+    let (_temp, runs) = campaign_fixture(2, 2);
+    write(
+        &runs.join("quarantine/old-0/scoring.json"),
+        r#"{"error":"scorer crashed on malformed answer.json"}"#,
+    );
+
+    let scan = scan_exposure(&runs).unwrap();
+    let provenance = scan.repos[0].provenance.as_ref().unwrap();
+
+    assert_eq!(scan.repos[0].status, ExposureStatus::Exposed);
+    assert_eq!(provenance.trial_count, 2);
+    assert_eq!(provenance.errored_trials, 1);
+    assert_eq!(provenance.unscored_trials, 1);
+    assert_eq!(provenance.held_out_passed, 0);
+    assert_eq!(provenance.held_out_failed, 0);
+}
+
+#[test]
+fn dual_leg_error_without_a_top_level_error_is_tallied_not_fatal() {
+    let (_temp, runs) = campaign_fixture(2, 2);
+    // A dual_composite scorer records a failed held-out leg in `error_artifact`
+    // and leaves the top-level `error` null, so a check that read only the top
+    // level would let held_out_outcome() raise and abort the whole scan.
+    write(
+        &runs.join("quarantine/old-0/scoring.json"),
+        r#"{"score":0.0,"error":null,"scorer_family":"dual_composite",
+            "passed_direct":true,"score_direct":1.0,
+            "error_artifact":"answer.json not found"}"#,
+    );
+
+    let scan = scan_exposure(&runs).unwrap();
+    let provenance = scan.repos[0].provenance.as_ref().unwrap();
+
+    assert_eq!(scan.repos[0].status, ExposureStatus::Exposed);
+    assert_eq!(provenance.errored_trials, 1);
+    assert_eq!(provenance.unscored_trials, 1);
 }
