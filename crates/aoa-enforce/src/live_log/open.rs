@@ -223,14 +223,17 @@ pub(super) fn create_traces_dir(path: &Path) -> Result<()> {
     std::fs::create_dir_all(path).with_context(|| format!("failed to create {}", path.display()))
 }
 
-#[cfg(test)]
+// Every test here plants something only a Unix host can plant — a symlink, a
+// FIFO, a mode bit — so the whole group is gated rather than each test. Gating
+// them individually would leave the imports behind on a non-unix host, where
+// they are then unused and fail the crate's `-D warnings` build.
+#[cfg(all(test, unix))]
 mod tests {
     use super::super::{append_span, read_spans};
     use aoa_trace::SpanType;
     use serde_json::Map;
     use std::time::Duration;
 
-    #[cfg(unix)]
     #[test]
     fn append_creates_private_trace_directories() {
         use std::os::unix::fs::PermissionsExt;
@@ -253,7 +256,6 @@ mod tests {
 
     /// A symlink already sitting at the log path must not be followed.
     /// Reproduced before the fix: the appended span landed in the victim file.
-    #[cfg(unix)]
     #[test]
     fn a_planted_symlink_is_refused_and_the_victim_is_untouched() {
         let dir = tempfile::tempdir().unwrap();
@@ -279,7 +281,6 @@ mod tests {
         read_spans(&log).unwrap_err();
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_planted_fifo_is_refused_instead_of_hanging() {
         use std::ffi::CString;
