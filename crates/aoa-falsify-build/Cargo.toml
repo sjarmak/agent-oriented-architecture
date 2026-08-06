@@ -8,7 +8,7 @@ license.workspace = true
 
 [dependencies]
 # The one library in the workspace taking anyhow, and only inside its own walls:
-# the evidence builder threads ~40 distinct string contexts through build/
+# the evidence builder threads ~30 distinct string contexts through build/
 # evidence/exposure/manifest/answer, and every one is flattened into the typed
 # FalsifyBuildError before it crosses the crate boundary (see src/error.rs). No
 # public item names an anyhow type, so the workspace thiserror convention holds

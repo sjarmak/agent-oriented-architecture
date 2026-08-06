@@ -11,10 +11,9 @@ use thiserror::Error;
 /// convention is thiserror for libraries, and that is what callers see: no
 /// public item in this crate names an `anyhow` type. Internally the builder
 /// threads ad-hoc string context through several assembly stages, which is what
-/// `anyhow` is for and what a typed enum would only reimplement; [`from_anyhow`]
-/// is `pub(crate)` and converts at the single boundary.
-///
-/// [`from_anyhow`]: FalsifyBuildError::from_anyhow
+/// `anyhow` is for and what a typed enum would only reimplement. `from_anyhow`
+/// is `pub(crate)` and converts at the single boundary — deliberately not
+/// linked here, since a private item does not render in the public docs.
 #[derive(Debug, Error)]
 #[error("{message}")]
 pub struct FalsifyBuildError {
