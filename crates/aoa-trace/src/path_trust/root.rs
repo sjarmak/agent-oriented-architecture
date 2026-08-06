@@ -6,11 +6,8 @@
 //! the containment checks for free would otherwise have to re-derive the anchor
 //! they are relative to, and an anchor derived two ways is two answers.
 //!
-//! The walk refuses more than it accepts, in this order: the candidate must be
-//! absolute (never resolved against ambient process state), it must canonicalize
-//! to a real directory, the nearest `.git` marker must not be a symlink, and Git
-//! itself must confirm the directory holding that marker *is* the worktree root
-//! rather than merely sitting inside one.
+//! [`resolve_repository_root`] states the checks it makes and in what order.
+//! Every one of them refuses; none of them widens what counts as a root.
 
 use std::fmt;
 use std::fs::File;
@@ -360,10 +357,9 @@ fn linked_worktree_points_back(
     } else {
         git_dir.join(backlink)
     };
-    // Compare resolved paths, and treat either side failing to resolve as a
-    // mismatch. Comparing the `Option`s directly reads as equal when *both*
-    // sides are unresolvable, which accepts a backlink that points nowhere as
-    // pointing back — the one shape here that fails open.
+    // Either side failing to resolve is a mismatch. Comparing the two
+    // `canonicalize().ok()` values instead reads as equal when *both* fail,
+    // accepting a backlink that points nowhere as pointing back.
     let (Ok(resolved_backlink), Ok(marker)) = (
         backlink.canonicalize(),
         candidate.join(".git").canonicalize(),
