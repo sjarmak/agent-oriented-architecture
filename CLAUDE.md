@@ -109,6 +109,21 @@ workspace tests unless it is in that file's explicit, bead-tracked exception
 list. Library crates must not depend on CLI concerns. Human and JSON output are
 dual registers of the same result, not separate implementations.
 
+## Decision records
+
+Standing decisions live in `docs/adr/`, indexed by
+[docs/adr/README.md](docs/adr/README.md). Scan that index before proposing work:
+a proposal that re-opens a recorded decision has to say which record it overturns
+and why, and one that duplicates a record is already built. Citing the scan is
+what the reinvention gate asks for, so the path has to keep resolving —
+`crates/aoa/tests/decision_records.rs` fails the workspace tests if it stops, if
+a record is added without an index row, or if the index links a file that does
+not exist.
+
+Three records exist so far, and each one documents something this file already
+states: the layer assignment in "Architecture Overview", and the wire-format and
+held-out-provenance conventions in "Conventions & Patterns".
+
 ## Conventions & Patterns
 
 - Fail loudly on malformed or oversized measurement artifacts; missing optional
