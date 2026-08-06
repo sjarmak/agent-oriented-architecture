@@ -89,7 +89,7 @@ pub struct TornTailRepair {
 /// handle because the advisory lock is per open-file-description and must be
 /// held across exactly one read-modify-write. A long-lived handle would either
 /// hold the lock across unrelated work or need re-locking anyway.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct LiveLog {
     path: PathBuf,
 }
