@@ -16,6 +16,7 @@ duplicates one is already built.
 | [0003](0003-held-out-provenance.md) | Held-out provenance is load-bearing evidence: an unprovable held-out claim demotes the repository rather than the standard | Accepted |
 | [0004](0004-environment-dependent-test-skips.md) | A test skips on a precondition CI can satisfy; it is ignored on one CI can never satisfy | Accepted |
 | [0005](0005-enforcement-liveness-in-a-checkout.md) | A checkout with no telemetry is unobserved, not silent: the audit gates only on measurements it holds | Accepted |
+| [0006](0006-architecture-model-conformance.md) | `architecture/model.c4` is a maintained contract: every arrow is a real dependency, and every dependency between library crates is an arrow | Accepted |
 
 ## What belongs here
 

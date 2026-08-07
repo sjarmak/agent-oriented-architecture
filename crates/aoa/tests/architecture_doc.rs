@@ -19,12 +19,16 @@
 //! migration registry as owned rows the composition root projects for it. So
 //! `LAYER_EXCEPTIONS` is empty, which is the state it is meant to be in — an
 //! entry is a licence for a tracked edge to stay wrong, not a place to park one.
-
-use std::collections::{BTreeMap, BTreeSet};
+//!
+//! Scope is membership and direction, and nothing else. `architecture_model.rs`
+//! holds the published `architecture/model.c4` to the same crates, and the two
+//! are not variants: a crate can sit in the right layer here and still be drawn
+//! there with an edge it does not have.
 
 mod common;
 
-use common::{read, workspace_root};
+use common::{declared_dependencies, library_crates, read, CLI_CRATE};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The prose immediately above the layer bullets. The list is anchored to it
 /// rather than to a heading so that reordering sections cannot silently point
@@ -32,11 +36,6 @@ use common::{read, workspace_root};
 /// line: the surrounding sentence is hard-wrapped, so a longer anchor would
 /// span a newline and never match.
 const LIST_ANCHOR: &str = "remaining crates are narrow libraries:";
-
-/// The composition root, named in the anchor prose rather than in the bullets
-/// ("the *remaining* crates"). It is the one crate legitimately absent from the
-/// layer list.
-const CLI_CRATE: &str = "aoa";
 
 /// The crate names each layer bullet claims, one inner `Vec` per bullet, in
 /// document order. Bullet order *is* layer order: the list runs bottom-up, so a
@@ -114,37 +113,6 @@ fn backticked_crate_names(line: &str) -> Vec<String> {
         .collect()
 }
 
-/// Every library crate on disk: a directory under `crates/` carrying a
-/// Cargo.toml, minus the CLI composition root, which the bullets exclude by
-/// construction.
-fn library_crates() -> BTreeSet<String> {
-    let crates_dir = workspace_root().join("crates");
-    let entries = std::fs::read_dir(&crates_dir)
-        .unwrap_or_else(|e| panic!("reading {}: {e}", crates_dir.display()));
-
-    let mut names = BTreeSet::new();
-    for entry in entries {
-        let entry = entry.expect("reading a crates/ entry");
-        if !entry.path().join("Cargo.toml").is_file() {
-            continue;
-        }
-        let name = entry
-            .file_name()
-            .into_string()
-            .expect("crate directory name is UTF-8");
-        if name != CLI_CRATE {
-            names.insert(name);
-        }
-    }
-
-    assert!(
-        !names.is_empty(),
-        "found no crates under {}",
-        crates_dir.display()
-    );
-    names
-}
-
 #[test]
 fn every_library_crate_has_exactly_one_documented_layer() {
     let on_disk = library_crates();
@@ -189,34 +157,6 @@ fn the_cli_crate_is_not_given_a_library_layer() {
         "the bullets describe `the remaining crates` — the {CLI_CRATE} composition root \
 must stay out of them"
     );
-}
-
-/// The internal (`aoa-*`, path-dependency) crates one manifest names under
-/// `[dependencies]`.
-///
-/// `[dev-dependencies]` is deliberately excluded. A dev-dependency does not
-/// enter any consumer's build graph, so it cannot invert the layering for
-/// anyone downstream — `aoa-bench` keeps `aoa-gap` there precisely so its
-/// loader-to-gate integration test can run without the crate carrying a
-/// production edge into measurement.
-fn declared_dependencies(crate_name: &str) -> BTreeSet<String> {
-    let manifest_path = workspace_root()
-        .join("crates")
-        .join(crate_name)
-        .join("Cargo.toml");
-    let manifest: toml::Table = std::fs::read_to_string(&manifest_path)
-        .unwrap_or_else(|e| panic!("reading {}: {e}", manifest_path.display()))
-        .parse()
-        .unwrap_or_else(|e| panic!("parsing {}: {e}", manifest_path.display()));
-
-    manifest
-        .get("dependencies")
-        .and_then(|deps| deps.as_table())
-        .into_iter()
-        .flat_map(|deps| deps.keys())
-        .filter(|name| name.starts_with("aoa-"))
-        .cloned()
-        .collect()
 }
 
 /// Edges that point at a later layer and are known, tracked, and not this

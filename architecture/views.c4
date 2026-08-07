@@ -1,6 +1,20 @@
 // Views over the aoa model. Evolving (#evolving) elements are colored amber
 // and risk-tagged (#risk) elements are called out explicitly, so "what's
 // trusted vs what's still earning trust" is readable at a glance.
+//
+// The dynamic views below are walkthroughs of what happens during a run, not
+// claims about the build graph, and they are deliberately NOT held to
+// model.c4's rule that an arrow between two crates is a production dependency
+// (aoa-enzj8, docs/adr/0006-architecture-model-conformance.md). A step may
+// cross crates that the CLI joins — `operator -> falsify` and `audit ->
+// operator` are steps here too, and no manifest will ever back them.
+//
+// What a step does owe is that it happens. When aoa-4s25v moved the migration
+// registry behind the composition root, migrateFlow kept describing a hand-off
+// from recommend to migrate that no longer occurs at run time either; that step
+// is now routed through the CLI, which is what actually performs it.
+// crates/aoa/tests/architecture_model.rs checks the one property it can check
+// mechanically: every endpoint names an element model.c4 declares.
 
 views {
 
@@ -110,7 +124,8 @@ views {
     title 'Walkthrough — a gated migration'
     description 'migrate stays dry-run by default; --apply only runs once the operator, informed by falsify, decides to trust it on this repo.'
 
-    aoa.measure.recommend -> aoa.migrate.migrator 'per-finding: is a migration available'
+    aoa.cli -> aoa.migrate.migrator 'reads the fix registry'
+    aoa.cli -> aoa.measure.recommend 'projects it onto the findings, per-finding: is a migration available'
     aoa.gates.enforce -> repoUnderTest 'confirms the failure reproduces before any mutation'
     operator -> aoa.migrate.migrator 'aoa migrate --apply'
     aoa.migrate.migrator -> repoUnderTest 'reversible, one-commit-per-fix change'

@@ -115,6 +115,17 @@ list. Library crates must not depend on CLI concerns.
 Human and JSON output are dual registers of the same result, not separate
 implementations.
 
+`architecture/model.c4` draws the same system and is published as a website. It
+is a maintained contract, not a snapshot: every arrow between two crates is a
+real production dependency, and every production dependency between two library
+crates is an arrow, so adding a crate or changing an edge means editing the
+model. `crates/aoa/tests/architecture_model.rs` fails the workspace tests
+otherwise, and
+[docs/adr/0006-architecture-model-conformance.md](docs/adr/0006-architecture-model-conformance.md)
+records the rule and what it deliberately leaves unenforced. The model's
+containers group by concern and do not mirror the layers above — the layer list
+here is the one that decides where new code goes.
+
 ## Decision records
 
 Standing decisions live in `docs/adr/`, indexed by

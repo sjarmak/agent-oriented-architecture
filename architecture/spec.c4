@@ -66,4 +66,13 @@ specification {
   tag risk {
     color #dc2626
   }
+
+  // Carried by a relationship that is deliberately NOT a code dependency — a
+  // decision or a gate rather than a call. Every other arrow between two crates
+  // in model.c4 has to be a real production dependency, so this tag is the one
+  // exemption and each use is registered with a reason in
+  // crates/aoa/tests/architecture_model.rs.
+  tag conceptual {
+    color #64748b
+  }
 }
