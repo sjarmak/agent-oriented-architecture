@@ -7,19 +7,7 @@
 use std::fs::File;
 use std::path::Path;
 
-use anyhow::{anyhow, Context, Result};
-
-/// Whether an [`open_log`] failure was "the log does not exist yet", which is the
-/// ordinary state before the first span is written. Checked through the error
-/// chain because `open_log` attaches context to the underlying [`std::io::Error`].
-/// Every other failure — a symlink, a FIFO, a permission problem — stays an error.
-pub(super) fn is_not_found(err: &anyhow::Error) -> bool {
-    err.chain().any(|cause| {
-        cause
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
-    })
-}
+use super::error::{IoAction, LiveLogError, LogPathComponent, Result};
 
 /// How the live log is opened. The two modes the hook needs; see [`open_log`]
 /// for why the choice is an enum rather than a caller-supplied builder.
@@ -79,9 +67,8 @@ mod unix_log {
         .union(Mode::ROTH)
         .union(Mode::WOTH);
 
-    fn io_error(path: &Path, action: &str, source: Errno) -> anyhow::Error {
-        let source: std::io::Error = source.into();
-        anyhow!(source).context(format!("failed to {action} {}", path.display()))
+    fn io_error(path: &Path, action: IoAction, source: Errno) -> LiveLogError {
+        LiveLogError::io(path, action, source.into())
     }
 
     fn is_symlink_at(parent: impl AsFd, name: &OsStr) -> bool {
@@ -95,11 +82,13 @@ mod unix_log {
         name: &OsStr,
         path: &Path,
         source: Errno,
-    ) -> anyhow::Error {
+    ) -> LiveLogError {
         if source == Errno::LOOP || is_symlink_at(parent, name) {
-            anyhow!("refusing to follow symlink at {}", path.display())
+            LiveLogError::SymlinkRefused {
+                path: path.to_path_buf(),
+            }
         } else {
-            io_error(path, "open", source)
+            io_error(path, IoAction::Open, source)
         }
     }
 
@@ -116,10 +105,10 @@ mod unix_log {
     fn open_or_create_dir_at(parent: impl AsFd, name: &OsStr, path: &Path) -> Result<OwnedFd> {
         match open_dir_at(&parent, name, path) {
             Ok(fd) => Ok(fd),
-            Err(err) if is_not_found(&err) => {
+            Err(err) if err.is_not_found() => {
                 match fs::mkdirat(parent.as_fd(), name, DIR_MODE) {
                     Ok(()) | Err(Errno::EXIST) => {}
-                    Err(source) => return Err(io_error(path, "create", source)),
+                    Err(source) => return Err(io_error(path, IoAction::Create, source)),
                 }
                 open_dir_at(parent, name, path)
             }
@@ -128,18 +117,28 @@ mod unix_log {
     }
 
     fn log_parts(log: &Path) -> Result<(&Path, &Path, &Path, &OsStr)> {
-        let traces_dir = log
-            .parent()
-            .ok_or_else(|| anyhow!("span log has no traces directory: {}", log.display()))?;
+        let traces_dir = log.parent().ok_or_else(|| LiveLogError::MalformedLogPath {
+            component: LogPathComponent::TracesDir,
+            path: log.to_path_buf(),
+        })?;
         let aoa_dir = traces_dir
             .parent()
-            .ok_or_else(|| anyhow!("span log has no .aoa directory: {}", log.display()))?;
+            .ok_or_else(|| LiveLogError::MalformedLogPath {
+                component: LogPathComponent::AoaDir,
+                path: log.to_path_buf(),
+            })?;
         let repo = aoa_dir
             .parent()
-            .ok_or_else(|| anyhow!("span log has no repository root: {}", log.display()))?;
+            .ok_or_else(|| LiveLogError::MalformedLogPath {
+                component: LogPathComponent::RepoRoot,
+                path: log.to_path_buf(),
+            })?;
         let name = log
             .file_name()
-            .ok_or_else(|| anyhow!("span log has no file name: {}", log.display()))?;
+            .ok_or_else(|| LiveLogError::MalformedLogPath {
+                component: LogPathComponent::FileName,
+                path: log.to_path_buf(),
+            })?;
         Ok((repo, aoa_dir, traces_dir, name))
     }
 
@@ -152,7 +151,7 @@ mod unix_log {
         // The caller-selected repository is the trust root. Every component
         // below it is acquired relative to a stable descriptor.
         let repo_fd = fs::open(repo, OFlags::RDONLY | OFlags::DIRECTORY, Mode::empty())
-            .map_err(|source| io_error(repo, "open", source))?;
+            .map_err(|source| io_error(repo, IoAction::Open, source))?;
         let aoa_fd = match access {
             LogAccess::Read => open_dir_at(&repo_fd, OsStr::new(".aoa"), aoa_dir)?,
             LogAccess::AppendCreate => {
@@ -180,13 +179,13 @@ mod unix_log {
         let file = File::from(fd);
         let file_type = file
             .metadata()
-            .with_context(|| format!("failed to stat {}", log.display()))?
+            .map_err(|err| LiveLogError::io(log, IoAction::Stat, err))?
             .file_type();
         if !file_type.is_file() {
-            return Err(anyhow!(
-                "refusing to use {}: the span log must be a regular file, found {file_type:?}",
-                log.display()
-            ));
+            return Err(LiveLogError::NotRegularFile {
+                path: log.to_path_buf(),
+                file_type,
+            });
         }
         Ok(file)
     }
@@ -201,16 +200,16 @@ pub(super) fn open_log(log: &Path, access: LogAccess) -> Result<File> {
     };
     let file = options
         .open(log)
-        .with_context(|| format!("failed to open {}", log.display()))?;
+        .map_err(|err| LiveLogError::io(log, IoAction::Open, err))?;
     let file_type = file
         .metadata()
-        .with_context(|| format!("failed to stat {}", log.display()))?
+        .map_err(|err| LiveLogError::io(log, IoAction::Stat, err))?
         .file_type();
     if !file_type.is_file() {
-        return Err(anyhow!(
-            "refusing to use {}: the span log must be a regular file, found {file_type:?}",
-            log.display()
-        ));
+        return Err(LiveLogError::NotRegularFile {
+            path: log.to_path_buf(),
+            file_type,
+        });
     }
     Ok(file)
 }
@@ -220,7 +219,7 @@ pub(super) fn create_traces_dir(path: &Path) -> Result<()> {
     // Unix mode bits have no portable Windows equivalent. Keep the platform's
     // inherited ACL here; the final log target is still opened atomically and
     // must be a regular file.
-    std::fs::create_dir_all(path).with_context(|| format!("failed to create {}", path.display()))
+    std::fs::create_dir_all(path).map_err(|err| LiveLogError::io(path, IoAction::Create, err))
 }
 
 // Every test here plants something only a Unix host can plant — a symlink, a
@@ -229,7 +228,7 @@ pub(super) fn create_traces_dir(path: &Path) -> Result<()> {
 // they are then unused and fail the crate's `-D warnings` build.
 #[cfg(all(test, unix))]
 mod tests {
-    use super::super::{append_span, read_spans};
+    use super::super::{append_span, read_spans, LiveLogError};
     use aoa_trace::SpanType;
     use serde_json::Map;
     use std::time::Duration;
@@ -270,8 +269,8 @@ mod tests {
 
         let err = append_span(&log, SpanType::TestRun, Map::new()).unwrap_err();
         assert!(
-            !format!("{err:#}").is_empty(),
-            "the refusal must carry a diagnosable message"
+            matches!(err, LiveLogError::SymlinkRefused { ref path } if *path == log),
+            "the refusal must name the plant it refused, got: {err:?}"
         );
         assert_eq!(
             std::fs::read_to_string(&victim).unwrap(),
@@ -294,11 +293,15 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         let target = log.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(append_span(&target, SpanType::TestRun, Map::new()).is_err());
+            let _ = tx.send(append_span(&target, SpanType::TestRun, Map::new()));
         });
-        let refused = rx
+        let outcome = rx
             .recv_timeout(Duration::from_secs(5))
             .expect("the open must return rather than block on the FIFO");
-        assert!(refused, "a FIFO at the log path must be an error");
+        let err = outcome.expect_err("a FIFO at the log path must be an error");
+        assert!(
+            matches!(err, LiveLogError::NotRegularFile { ref path, .. } if *path == log),
+            "must refuse the FIFO as a non-regular file, got: {err:?}"
+        );
     }
 }

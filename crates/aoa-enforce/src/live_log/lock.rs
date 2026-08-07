@@ -8,7 +8,7 @@ use std::fs::{File, TryLockError};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context, Result};
+use super::error::{IoAction, LiveLogError, Result};
 
 /// How long a hook waits for the span log's lock before failing. Generous
 /// against real contention (the lock spans one read and one append) and short
@@ -62,14 +62,13 @@ fn lock_bounded(
                 std::thread::sleep(LOCK_RETRY_INTERVAL);
             }
             Err(TryLockError::WouldBlock) => {
-                return Err(anyhow!(
-                    "timed out after {timeout:?} waiting for the span log lock on {}; \
-                     another aoa hook is holding it and may be wedged",
-                    log.display()
-                ))
+                return Err(LiveLogError::LockTimeout {
+                    timeout,
+                    path: log.to_path_buf(),
+                })
             }
             Err(TryLockError::Error(err)) => {
-                return Err(err).with_context(|| format!("failed to lock {}", log.display()))
+                return Err(LiveLogError::io(log, IoAction::Lock, err))
             }
         }
     }

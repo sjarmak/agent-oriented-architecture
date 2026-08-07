@@ -159,4 +159,12 @@ not exist.
   stops matching the record, and on CI dropping an install the printed-notice
   sites depend on. It reaches the two idioms spelled as the record spells them,
   not a test that returns early announcing nothing.
+- `anyhow` is the CLI's error type and only the CLI's. Every library crate
+  states a `thiserror` enum, including for errors it never means a caller to
+  match on — a `Result` alias hides the type but does not make it private, and
+  a library that reaches for `anyhow` internally ends up returning it. The last
+  two exceptions were retired by aoa-o3ww7 (`aoa-falsify-build`) and aoa-wp6g7
+  (`aoa-enforce`); `crates/aoa-falsify-build/src/error.rs` and
+  `crates/aoa-enforce/src/live_log/error.rs` are the worked examples, each
+  recording which contexts it merged into one variant and why.
 - Preserve unrelated user changes and use `bd` for every unit of tracked work.

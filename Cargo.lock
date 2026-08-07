@@ -182,13 +182,13 @@ dependencies = [
 name = "aoa-enforce"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "aoa-trace",
  "globset",
  "libc",
  "rustix",
  "serde_json",
  "tempfile",
+ "thiserror",
 ]
 
 [[package]]

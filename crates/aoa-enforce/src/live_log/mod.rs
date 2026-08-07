@@ -24,7 +24,9 @@
 //! One invariant per submodule: `open` holds containment, `lock` holds bounded
 //! waiting, `seq` holds monotonicity and torn-tail repair. This file keeps the
 //! [`LiveLog`] facade and the append/read orchestration that composes all three
-//! — the all-or-nothing rollback lives with the write it guards.
+//! — the all-or-nothing rollback lives with the write it guards. `error` states
+//! the [`LiveLogError`] vocabulary all four report through, so a caller can act
+//! on *which* invariant was broken without matching on message text.
 //!
 //! ## Trust root
 //!
@@ -35,6 +37,7 @@
 //! this module's. The session id needs no such care — it is coerced to a single
 //! safe filename component here.
 
+mod error;
 mod lock;
 mod open;
 mod seq;
@@ -46,13 +49,14 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
 use serde_json::{Map, Value};
 
 use aoa_trace::{validate_single_component, Span, SpanSource, SpanType};
 
+pub use error::{IoAction, LiveLogError, LogPathComponent, Result};
+
 use lock::{lock_exclusive_bounded, lock_shared_bounded, LOCK_TIMEOUT};
-use open::{is_not_found, open_log, LogAccess};
+use open::{open_log, LogAccess};
 use seq::{next_seq, parse_span_line, repair_torn_tail, MAX_SEQ_TAIL_BYTES};
 
 /// A torn final line that an append discarded before writing, with the number of
@@ -188,7 +192,7 @@ fn read_spans(log: &Path) -> Result<Vec<Span>> {
 fn read_spans_within(log: &Path, lock_timeout: Duration) -> Result<Vec<Span>> {
     let mut file = match open_log(log, LogAccess::Read) {
         Ok(file) => file,
-        Err(err) if is_not_found(&err) => return Ok(Vec::new()),
+        Err(err) if err.is_not_found() => return Ok(Vec::new()),
         Err(err) => return Err(err),
     };
     lock_shared_bounded(&file, log, lock_timeout)?;
@@ -204,7 +208,7 @@ fn read_spans_within(log: &Path, lock_timeout: Duration) -> Result<Vec<Span>> {
 fn read_spans_from(file: &mut File, log: &Path) -> Result<Vec<Span>> {
     let mut raw = String::new();
     file.read_to_string(&mut raw)
-        .with_context(|| format!("failed to read {}", log.display()))?;
+        .map_err(|err| LiveLogError::io(log, IoAction::Read, err))?;
     raw.lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| parse_span_line(line.as_bytes(), log))
@@ -301,10 +305,11 @@ fn append_span_within(
 
     let end = file
         .metadata()
-        .with_context(|| format!("failed to stat {}", log.display()))?
+        .map_err(|err| LiveLogError::io(log, IoAction::Stat, err))?
         .len();
     let span = build(next_seq(&mut file, log, MAX_SEQ_TAIL_BYTES)?);
-    let mut line = serde_json::to_string(&span).context("failed to serialize span")?;
+    let mut line =
+        serde_json::to_string(&span).map_err(|source| LiveLogError::SerializeSpan { source })?;
     line.push('\n');
 
     // Never write a line this log cannot read back. `next_seq` resolves the last
@@ -314,13 +319,11 @@ fn append_span_within(
     // takes the write target straight from its hook payload, which nothing
     // bounds.
     if line.len() as u64 > MAX_SEQ_TAIL_BYTES {
-        return Err(anyhow!(
-            "refusing to append a {}-byte span line to {}: it exceeds the \
-             {MAX_SEQ_TAIL_BYTES}-byte tail read, so no later append could \
-             derive its sequence number",
-            line.len(),
-            log.display()
-        ));
+        return Err(LiveLogError::SpanLineTooLong {
+            bytes: line.len() as u64,
+            path: log.to_path_buf(),
+            max_tail: MAX_SEQ_TAIL_BYTES,
+        });
     }
 
     // A failed `write_all` may still have written a prefix — `ENOSPC` mid-line
@@ -330,7 +333,7 @@ fn append_span_within(
     // held; the append is all-or-nothing from any other writer's view.
     if let Err(err) = file.write_all(line.as_bytes()) {
         let _ = file.set_len(end);
-        return Err(anyhow!(err)).with_context(|| format!("failed to append to {}", log.display()));
+        return Err(LiveLogError::io(log, IoAction::Append, err));
     }
     Ok(repair)
 }
@@ -594,6 +597,68 @@ mod tests {
                 discarded_bytes: fragment.len() as u64
             })
         );
+    }
+
+    /// A caller can act on *which* invariant broke, without parsing prose.
+    ///
+    /// The module reported through `anyhow` until aoa-wp6g7, so the only way to
+    /// tell "the log does not exist yet" from "a symlink is squatting the path"
+    /// was a downcast or a substring match. Both are silent to a reworded
+    /// message. The three shapes below are the ones a host branches on — refuse
+    /// the write, wait and retry, fail the session — so each must arrive as a
+    /// distinct variant carrying the numbers the host would otherwise re-derive.
+    #[test]
+    fn failures_arrive_as_matchable_variants() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Oversized span line: refused before writing, and it says by how much.
+        let mut attributes = Map::new();
+        attributes.insert(
+            "path".to_string(),
+            Value::String("p".repeat(MAX_SEQ_TAIL_BYTES as usize + 1)),
+        );
+        let log = log_path(&dir, "live-variant-huge.jsonl");
+        match append_span(&log, SpanType::WriteCommitted, attributes).unwrap_err() {
+            LiveLogError::SpanLineTooLong {
+                bytes,
+                path,
+                max_tail,
+            } => {
+                assert_eq!(path, log);
+                assert_eq!(max_tail, MAX_SEQ_TAIL_BYTES);
+                assert!(bytes > max_tail, "must report the line's real length");
+            }
+            other => panic!("expected SpanLineTooLong, got {other:?}"),
+        }
+
+        // A held lock: transient contention, distinguishable from corruption.
+        let contended = log_path(&dir, "live-variant-locked.jsonl");
+        let holder = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&contended)
+            .unwrap();
+        holder.lock().unwrap();
+        let timeout = Duration::from_millis(50);
+        match read_spans_within(&contended, timeout).unwrap_err() {
+            LiveLogError::LockTimeout {
+                timeout: waited, ..
+            } => assert_eq!(waited, timeout),
+            other => panic!("expected LockTimeout, got {other:?}"),
+        }
+        drop(holder);
+
+        // A corrupt line: names the file, and carries the parse failure.
+        let corrupt = seed_log(&dir, "not json at all\n");
+        match read_spans(&corrupt).unwrap_err() {
+            LiveLogError::CorruptSpanLine { path, .. } => assert_eq!(path, corrupt),
+            other => panic!("expected CorruptSpanLine, got {other:?}"),
+        }
+
+        // And the ordinary pre-first-span state is still not an error at all.
+        assert!(read_spans(&dir.path().join("nope.jsonl"))
+            .unwrap()
+            .is_empty());
     }
 
     /// The common case reports nothing, so a host has no repair to render on an

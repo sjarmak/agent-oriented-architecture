@@ -10,7 +10,7 @@ license.workspace = true
 aoa-trace = { path = "../aoa-trace" }
 globset = "0.4.16"
 serde_json = { workspace = true }
-anyhow = "1.0.98"
+thiserror = { workspace = true }
 
 # Descriptor-relative directory acquisition keeps the live log beneath the
 # repository trust root; O_NOFOLLOW / O_NONBLOCK also reject a planted symlink

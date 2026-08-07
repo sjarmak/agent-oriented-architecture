@@ -9,7 +9,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
-use anyhow::{anyhow, Context, Result};
+use super::error::{IoAction, LiveLogError, Result};
 
 use aoa_trace::Span;
 
@@ -40,7 +40,7 @@ pub(super) const MAX_SEQ_TAIL_BYTES: u64 = 16 * 1024 * 1024;
 pub(super) fn repair_torn_tail(file: &mut File, log: &Path) -> Result<Option<u64>> {
     let len = file
         .metadata()
-        .with_context(|| format!("failed to stat {}", log.display()))?
+        .map_err(|err| LiveLogError::io(log, IoAction::Stat, err))?
         .len();
     if len == 0 || read_at(file, log, len - 1, 1)? == b"\n" {
         return Ok(None);
@@ -53,12 +53,12 @@ pub(super) fn repair_torn_tail(file: &mut File, log: &Path) -> Result<Option<u64
         if let Some(index) = buf.iter().rposition(|byte| *byte == b'\n') {
             let retained = start + index as u64 + 1;
             file.set_len(retained)
-                .with_context(|| format!("failed to repair torn tail in {}", log.display()))?;
+                .map_err(|err| LiveLogError::io(log, IoAction::RepairTornTail, err))?;
             return Ok(Some(len - retained));
         }
         if start == 0 {
             file.set_len(0)
-                .with_context(|| format!("failed to repair torn tail in {}", log.display()))?;
+                .map_err(|err| LiveLogError::io(log, IoAction::RepairTornTail, err))?;
             return Ok(Some(len));
         }
         end = start;
@@ -93,7 +93,7 @@ pub(super) fn repair_torn_tail(file: &mut File, log: &Path) -> Result<Option<u64
 pub(super) fn next_seq(file: &mut File, log: &Path, max_tail: u64) -> Result<u64> {
     let len = file
         .metadata()
-        .with_context(|| format!("failed to stat {}", log.display()))?
+        .map_err(|err| LiveLogError::io(log, IoAction::Stat, err))?
         .len();
     if len == 0 {
         return Ok(0);
@@ -115,11 +115,9 @@ pub(super) fn next_seq(file: &mut File, log: &Path, max_tail: u64) -> Result<u64
         // partial line. Checked before trimming, so a trailing space still
         // reads as torn.
         if buf.last() != Some(&b'\n') {
-            return Err(anyhow!(
-                "{} has no trailing newline, so its last line is a torn write; \
-                 appending would splice this span onto it",
-                log.display()
-            ));
+            return Err(LiveLogError::TornTail {
+                path: log.to_path_buf(),
+            });
         }
         // Trimming the end collapses the final newline and any blank lines
         // after it, so whatever follows the last remaining newline is a
@@ -140,10 +138,10 @@ pub(super) fn next_seq(file: &mut File, log: &Path, max_tail: u64) -> Result<u64
             None => {
                 let grown = (window * 2).min(max_window);
                 if grown <= window {
-                    return Err(anyhow!(
-                        "the last line of {} exceeds the {max_tail}-byte tail read",
-                        log.display()
-                    ));
+                    return Err(LiveLogError::TailLineTooLong {
+                        path: log.to_path_buf(),
+                        max_tail,
+                    });
                 }
                 window = grown;
             }
@@ -156,10 +154,10 @@ pub(super) fn next_seq(file: &mut File, log: &Path, max_tail: u64) -> Result<u64
 /// not a clamp, so a log shorter than one window would fail there.
 fn read_at(file: &mut File, log: &Path, offset: u64, len: u64) -> Result<Vec<u8>> {
     file.seek(SeekFrom::Start(offset))
-        .with_context(|| format!("failed to seek {}", log.display()))?;
+        .map_err(|err| LiveLogError::io(log, IoAction::Seek, err))?;
     let mut buf = vec![0u8; len as usize];
     file.read_exact(&mut buf)
-        .with_context(|| format!("failed to read {}", log.display()))?;
+        .map_err(|err| LiveLogError::io(log, IoAction::Read, err))?;
     Ok(buf)
 }
 
@@ -177,13 +175,11 @@ fn parse_seq(line: &[u8], log: &Path) -> Result<u64> {
 /// appends than the disk could hold) but a single corrupt or hand-written line
 /// carrying `u64::MAX` reaches it immediately.
 fn succ(seq: u64, log: &Path) -> Result<u64> {
-    seq.checked_add(1).ok_or_else(|| {
-        anyhow!(
-            "the last span in {} carries seq {seq}, the maximum; the next \
-             sequence number would wrap to zero and make the log decreasing",
-            log.display()
-        )
-    })
+    seq.checked_add(1)
+        .ok_or_else(|| LiveLogError::SequenceExhausted {
+            path: log.to_path_buf(),
+            seq,
+        })
 }
 
 /// Deserialize one span line, failing loud on a corrupt one.
@@ -194,7 +190,10 @@ fn succ(seq: u64, log: &Path) -> Result<u64> {
 /// adding a byte offset or a repair hint to one would silently leave the other
 /// behind.
 pub(super) fn parse_span_line(line: &[u8], log: &Path) -> Result<Span> {
-    serde_json::from_slice(line).with_context(|| format!("corrupt span line in {}", log.display()))
+    serde_json::from_slice(line).map_err(|source| LiveLogError::CorruptSpanLine {
+        path: log.to_path_buf(),
+        source,
+    })
 }
 
 #[cfg(test)]

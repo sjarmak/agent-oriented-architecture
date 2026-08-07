@@ -31,7 +31,7 @@ use serde_json::{Map, Value};
 
 pub mod live_log;
 
-pub use live_log::{LiveLog, TornTailRepair};
+pub use live_log::{LiveLog, LiveLogError, TornTailRepair};
 
 /// The outcome of consulting a policy on a pending action.
 #[derive(Debug, Clone, PartialEq, Eq)]
