@@ -354,3 +354,236 @@ proceed after the fact:
   quoted above read artifacts that already existed and wrote nothing to any run
   directory.
 
+---
+
+# Application
+
+Everything above this line was committed as
+`6c8d7b5 docs: preregister the R0 third design's criteria and threshold rule (aoa-6da35)`
+at **2026-08-07T00:24:32-04:00**, naming no candidate. Everything below was
+committed afterwards. `git log --follow docs/r0-third-design-preregistration.md`
+is the check that
+[Why the ordering is the artifact](#why-the-ordering-is-the-artifact) asks for.
+
+## C1 applied, exhaustively
+
+C1 is the criterion that can be applied without proposing a candidate: it
+defines the excluded set rather than selecting from the admitted one. Applying
+it means enumerating every repository that has a persisted trial artifact under
+any R0 run root, in any codeprobe checkout — not only the primary one.
+
+### The exposure scan is not the instrument for this
+
+`aoa eval exposure scan` answers "which repositories with a mined corpus are
+exposed". That is a narrower question than C1's, and the gap matters twice.
+
+It **errors rather than reporting an empty result** on a root that holds no
+mined corpus: `scan_exposure` returns `NoExposureCorpora` when `load_corpora`
+finds no `prep.json` + `mine.json` pair (`crates/aoa-bench/src/exposure.rs:135-140`).
+A root with no corpus is exactly the case C1 has to distinguish — "never mined"
+against "scanned and found nothing" — and a nonzero exit distinguishes neither.
+It also **errors on a corpus-bearing root whose task files have since moved**,
+which is the state of one R0 root below.
+
+Of the eight R0 run roots the glob below reaches, the scan completes on three.
+Revision 1 of this document reported the other roots as "none", which read as a
+scan result and was not one. Three of the roots it could not scan do hold
+persisted trial artifacts.
+
+### What each root holds, measured
+
+| Checkout | Run root | Mined corpus | Repositories with persisted artifacts | `exposure scan` |
+| --- | --- | --- | --- | --- |
+| `codeprobe` | `r0-campaign` | yes | 8 — the full set below | completes |
+| `codeprobe` | `r0-file-read-seed1` | yes | 5 — gunicorn, isort, marshmallow, requests, rich | completes |
+| `codeprobe` | `r0-preflight-current` | yes | the same 5 | completes |
+| `codeprobe` | `r0-pilot` | no | none — two empty `experiment.json` scaffolds, no tasks, no trials | exits 1, no corpus |
+| `codeprobe` | `r0-prompt-canary` | no | **requests** — 1 task, 8 files under `.codeprobe/runs` | exits 1, no corpus |
+| `codeprobe-hrvq` | `r0` | no | **isort, sqlparse** — seeds 1–3, 825 files | exits 1, no corpus |
+| `codeprobe-i83o` | `r0-campaign` | yes, 8 pairs | 8 — the full set below | exits 1, missing task file |
+| `codeprobe-i83o` | `r0-pilot` | no | none — reports, logs, screening TSVs | exits 1, no corpus |
+
+`codeprobe-i83o/runs/r0-campaign` is the root the scan cannot read at all:
+
+```text
+$ aoa eval exposure scan --runs "$CODEPROBE_ROOT-i83o/runs/r0-campaign"
+error: failed to read .../r0-repos/httpie/.codeprobe/tasks/
+       comprehension-dependency_analysis-010-a2f47e78/instruction.md:
+       No such file or directory (os error 2)
+```
+
+### Two scan-independent enumerations, and they agree
+
+Both run over every checkout at once and neither can exit early on a root it
+cannot classify. The first enumerates repositories with a mined corpus; the
+second reads the repository each persisted task names, which reaches the roots
+that hold trials without a corpus:
+
+```bash
+: "${CODEPROBE_ROOT:?export CODEPROBE_ROOT first (see the runbook)}"
+# Sibling checkouts share the prefix, so the glob covers every one of them.
+
+# A — repositories with a mined corpus
+find "$CODEPROBE_ROOT"*/runs -name mine.json -printf '%h\n' \
+  | xargs -n1 basename | sort -u
+
+# B — repositories named by persisted task metadata
+find "$CODEPROBE_ROOT"*/runs -name metadata.json -path '*tasks*' \
+  -exec jq -r '.repo // empty' {} + | sort -u
+```
+
+Both return the same eight names. `A` alone would miss the two roots that hold
+trials but no corpus; `B` catches them, and adds no ninth repository.
+
+The union is exactly eight repositories, each pinned at one baseline revision
+across every root that contains it:
+
+| Repository | Baseline commit | Status |
+| --- | --- | --- |
+| gunicorn | `a8283bbf5e1416d0dd13f994f71ec2761988aeab` | exposed (16/16) |
+| httpie | `5b604c37c6c67e18e7c3e9aee6c88a8c22b98345` | partially exposed (7/14) |
+| isort | `fd8bd075176d074af69aa6acae7ed89a6a89bb05` | exposed (14/14) |
+| marshmallow | `cd3cda8b1a9ae740d439538cee7aa8faea58d6b9` | exposed (7/7) |
+| requests | `23953c0c875219a715f081cf3de7c149a7629ccf` | exposed (14/14) |
+| rich | `9d8f9a372cc5916fd4781fec207ced7ddac2f08f` | exposed (19/19) |
+| sqlparse | `f80af6a4007f11ada847218df8c29dc859238290` | exposed (16/16) |
+| websockets | `ff4869ba468129f3e85b08c2a8a03ec45cf26537` | exposed (12/12) |
+
+The `Status` column is the exposure classification from the three roots the scan
+completes on. The trials in `r0-prompt-canary` and `codeprobe-hrvq/runs/r0` do
+not change it: they name requests, isort and sqlparse, all three already
+`exposed` and already excluded. They are recorded because C1 asks whether a
+repository was *drawn*, and a trial that no exposure ledger counts is still a
+subject that has been seen.
+
+**C1 therefore admits any repository outside this table**, and it excludes every
+repository inside it — including httpie, whose 7-of-14 partial exposure is
+excluded whole per the [HTTPie verdict](r0-httpie-held-out-verdict.md) rather
+than reduced to its surviving tasks.
+
+This agrees with the eight-repository enumeration in
+[the reserve spendability record](r0-reserve-spendability.md#every-repository-ever-reserved-or-drawn-for-r0),
+which reached it from run artifacts and closed decision records rather than from
+the gate. Three independent derivations now, same set.
+
+A separate caution for whoever selects next: the `r0-repos` directory alongside
+the codeprobe checkouts holds working checkouts of many repositories beyond
+these eight. A checkout is not a draw — none of them has a persisted trial
+artifact under any R0 root, which is what C1 tests — but the directory is not
+evidence of held-out status either, and C1 must be re-run against the
+enumerations above at selection time rather than read off that listing.
+
+## The threshold instantiated
+
+From the rule in the criteria commit, with no new principle. Each branch uses
+its own `M`:
+
+| Branch | `N` | Manifest `M` | Strict majority | New repos that must vote proceed |
+| --- | ---: | ---: | ---: | --- |
+| A — preserved five vote | 2 | 7 | 4 | 2 of 2 — unanimous |
+| B — preserved five ineligible | 5 | 5 | 3 | 3 of 5 |
+
+Row A is numerically identical to the superseded two-repository amendment, which
+is expected: the same rule over the same manifest size returns the same mark.
+
+Row B is `M = N`: the preserved five are ineligible under this branch, so
+`partition` drops them before `decide` sees the manifest and they are neither
+votes for, votes against, nor denominator. `floor(5 / 2) + 1 = 3`, which is the
+same 3 of 5
+[the criteria commit's branch table](#the-precondition-the-count-depends-on)
+states.
+
+Illustrative cost at the inherited planning rate of `$0.2577/trial` and the
+prior corpora's typical 14 dual tasks per repository, `tasks x 2 arms x 3
+seeds`:
+
+```text
+Branch A, N=2:  28 tasks -> 168 trials -> $43.29
+Branch B, N=5:  70 tasks -> 420 trials -> $108.23
+```
+
+These follow `N` and are unaffected by the `M` correction above. Both are
+placeholders for codeprobe's exact dry-run, which cannot be produced until the
+corpora are mined. They are shown because the gap between them is the decision,
+not because either is authorized.
+
+## No repository is chosen here, and why
+
+This is a deliberate stop, not an unfinished step. Three reasons, in decreasing
+order of how much they bind.
+
+**1. The ruling that was made rests on arithmetic that does not hold.** Option 1
+reads "reserve and mine **a** new repository", and Stephanie ruled it on
+2026-08-06 against a record that described the change as affecting "the manifest
+arithmetic". The criteria commit shows one new repository cannot reach proceed
+under either branch. So the option as ruled is not executable, and its
+executable forms cost either two repositories or five. Choosing between them is
+a spend-scale decision, and `aoa-6anq` reserves spend authorization explicitly.
+Selecting repositories here would present that choice as already made.
+
+**2. `N` is not determined.** It follows from the exposure-ledger branch, which
+is a ruling and not a build detail. Selecting repositories before `N` is fixed
+means either selecting for the smaller count and topping up later — so that the
+later additions are chosen with knowledge the first ones were not — or selecting
+for the larger and discarding, which is selection after the fact wearing a
+different hat.
+
+**3. The pool and the tie-break are themselves criteria, and they are not
+preregistered.** The criteria commit fixes admission (C1–C5) but not which
+universe of repositories is considered, nor how to order admissible candidates
+when there are more of them than `N`. Both decide the outcome of selection as
+surely as C1 does. Writing them now and applying them in this same commit would
+produce exactly the pattern the two-commit structure exists to rule out: a rule
+published simultaneously with the choice it justifies. They belong in a
+criteria commit of their own, before any candidate is examined.
+
+## Disclosure
+
+One candidate-shaped repository name was contacted: `git ls-remote` against
+`pallets/click`, run to establish whether this environment had network access at
+all before deciding what the application commit could contain. It returned a
+HEAD SHA. No criterion was evaluated against it, it is not proposed as a
+candidate, and it carries no standing from having been the string used in a
+connectivity check.
+
+**Its timing, since that is the only fact the ordering argument needs.** It was
+run during the work on `aoa-6da35`, which began at `2026-08-06T23:11:35-04:00`
+when the per-bead worktree was created, and before revision 1's application
+commit at `2026-08-06T23:36:12-04:00`. No finer timestamp was recorded at the
+time, so this document does **not** claim the contact followed the criteria
+commit; it may have preceded it. What is checkable instead is the criteria
+commit's own content:
+
+```bash
+git show 6c8d7b5:docs/r0-third-design-preregistration.md | grep -i click
+```
+
+which returns nothing. The criteria commit names no candidate and evaluates no
+criterion against one, whenever the connectivity check happened. Revision 1's
+criteria commit passed the same check before it was rewritten. It is recorded
+here because a
+candidate name that was touched and left unmentioned is the kind of omission
+that makes a selection record unfalsifiable later.
+
+## What has to happen next
+
+Two rulings, then one bead:
+
+1. **Which exposure ledger is authoritative for the preserved five** — the
+   build-time ledger (branch A) or a current scan (branch B). This fixes `N` at
+   `>= 2` or `>= 5`, and with it the pass mark at 2 of 2 or 3 of 5. The criteria
+   commit sets out both readings and takes neither.
+2. **Whether option 1 is still the ruling at its real cost**, now that it is two
+   repositories or five rather than one. If it is not, the remaining options are
+   unchanged and option 2 remains closed; that is a fresh decision, not a
+   fallback available locally.
+
+Then a criteria commit fixing the candidate pool and the ordering rule, and only
+after it, the selection.
+
+## Confirmation
+
+Nothing was mined. No agent trial ran. No spend occurred. Every command in this
+document reads artifacts that already existed, plus one `git ls-remote` that
+transferred no repository content. No run directory was written to, and the
+protected `falsification.k3.json` was not modified.
