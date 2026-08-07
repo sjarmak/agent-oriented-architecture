@@ -6,15 +6,13 @@
 //! - `eprintln!("SKIP …")` + `return` — the test still runs and reports `ok`.
 //! - `#[ignore]` — the test does not run and the summary says `1 ignored`.
 //!
-//! Which one is honest depends on a single question: *can CI ever satisfy this
-//! precondition?* libtest captures a passing test's output, so a printed notice
-//! is invisible in a green run — acceptable only when CI does satisfy the
-//! precondition and therefore really exercises the test. When it never can, the
-//! printed notice reports `ok` for a test that checked nothing, and `#[ignore]`
-//! is the only non-lying option. `docs/adr/0004-environment-dependent-test-skips.md`
-//! records that rule and the reason each site below is classified as it is.
+//! Which one is honest turns on whether CI can ever satisfy the precondition.
+//! `docs/adr/0004-environment-dependent-test-skips.md` decides that and records
+//! why each site below is classified as it is; [`CI_CAN`] and [`CI_CANNOT`]
+//! carry both halves into the failure messages, so an author who trips this file
+//! is told the rule rather than sent to look it up.
 //!
-//! A rule nobody is forced to open is not a rule. This file is the enforcement:
+//! A rule nobody is forced to open is not a rule, which is what this file adds:
 //! it scans the workspace for both idioms and fails when a site appears that the
 //! ADR has not classified, so the third case is decided deliberately rather than
 //! by whichever example its author happened to copy.
@@ -25,17 +23,6 @@ use std::path::{Path, PathBuf};
 /// The decision this test enforces, relative to the workspace root. Named in
 /// every failure message, so it has to keep resolving.
 const ADR: &str = "docs/adr/0004-environment-dependent-test-skips.md";
-
-/// A string literal opening the printed-notice convention. The quote and the
-/// trailing space are both load-bearing: they match `eprintln!("SKIP …")` and
-/// not the `SKIP_DIRS` walk constants in `aoa-audit` and `aoa-migrate`.
-const NOTICE_MARKER: &str = "\"SKIP ";
-
-/// The ignored-by-default convention. Matched without the closing bracket so
-/// both the bare `#[ignore]` and the `#[ignore = "…"]` form are found, and only
-/// at the start of a trimmed line so that prose naming the attribute is not
-/// mistaken for a use of it.
-const IGNORE_MARKER: &str = "#[ignore";
 
 /// Sources carrying a printed SKIP notice, with why each is allowed to.
 ///
@@ -83,7 +70,8 @@ fn rust_sources() -> BTreeSet<String> {
         for entry in entries {
             let entry =
                 entry.unwrap_or_else(|e| panic!("{} entry is readable: {e}", dir.display()));
-            let name = entry.file_name().to_string_lossy().into_owned();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
             let file_type = entry
                 .file_type()
                 .unwrap_or_else(|e| panic!("{name} has a readable file type: {e}"));
@@ -145,20 +133,22 @@ fn sources_matching(matches: fn(&str) -> bool) -> BTreeSet<String> {
         .collect()
 }
 
-/// A printed notice can sit anywhere on a line, so this one matches the whole
-/// source. The literal is specific enough that a false positive would have to
-/// open a string with the word `SKIP`.
+/// A printed notice can sit anywhere on a line, so this matches the whole
+/// source. The opening quote and the trailing space are both load-bearing: they
+/// find `eprintln!("SKIP …")` and not the `SKIP_DIRS` walk constants in
+/// `aoa-audit` and `aoa-migrate`.
 fn prints_a_skip_notice(source: &str) -> bool {
-    source.contains(NOTICE_MARKER)
+    source.contains("\"SKIP ")
 }
 
-/// An attribute always opens its line under rustfmt; prose naming it does not.
-/// Anchoring here is what lets a doc comment discuss `#[ignore]` without being
-/// counted as a use of it.
+/// Matched without the closing bracket so both `#[ignore]` and `#[ignore = "…"]`
+/// are found, and only at the start of a trimmed line — an attribute always opens
+/// its line under rustfmt, so anchoring is what lets a doc comment discuss
+/// `#[ignore]` without being counted as a use of it.
 fn ignores_a_test(source: &str) -> bool {
     source
         .lines()
-        .any(|line| line.trim_start().starts_with(IGNORE_MARKER))
+        .any(|line| line.trim_start().starts_with("#[ignore"))
 }
 
 /// Compare what the workspace does against what the ADR classified, reporting
