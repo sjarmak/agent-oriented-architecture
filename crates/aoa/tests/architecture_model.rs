@@ -52,9 +52,15 @@ const CONCEPTUAL_EDGES: &[(&str, &str, &str)] = &[(
 // The model.
 // ───────────────────────────────────────────────────────────────────────────
 
-/// One `.c4` element and the source links it declares.
+/// One `.c4` element, the keyword that declared it, and the source links it
+/// declares.
 struct Element {
     fqn: String,
+    /// `actor`, `externalSystem`, `system`, `container`, `component` — the word
+    /// after the `=`. It is what marks the system boundary, which is how
+    /// [`Model::elements_standing_for_nothing`] knows where a crate is expected
+    /// to be and where its absence is honest.
+    kind: String,
     links: Vec<String>,
 }
 
@@ -119,6 +125,47 @@ impl Model {
     fn fqns(&self) -> BTreeSet<&str> {
         self.elements
             .iter()
+            .map(|element| element.fqn.as_str())
+            .collect()
+    }
+
+    /// The systems this file declares — the boundaries inside which an element
+    /// is a claim about code. `externalSystem` is a different keyword and is
+    /// deliberately not one of these: the repository under test, CodeProbe and
+    /// the forge are things AOA talks to, and none of them is a crate.
+    fn system_roots(&self) -> Vec<&str> {
+        self.elements
+            .iter()
+            .filter(|element| element.kind == "system")
+            .map(|element| element.fqn.as_str())
+            .collect()
+    }
+
+    /// Elements drawn inside a system that stand for no crate at all — neither
+    /// linking one nor holding one underneath.
+    ///
+    /// This is the same defect as the grouping rule one level up, and it is
+    /// stated over *elements* rather than over the shapes that have been
+    /// demonstrated, because the hole is in the resolution and not in any
+    /// particular way of reaching it. [`resolve`] answers [`Endpoint::Outside`]
+    /// for an element with no crate under it — the right answer for an actor or
+    /// an external system, and the wrong one for anything inside the boundary —
+    /// and [`crate_edges`] then drops every arrow at it as an arrow to the
+    /// outside world. The element and its arrows still render on the published
+    /// diagram, so the claim is visible to every reader and invisible to every
+    /// test.
+    fn elements_standing_for_nothing(&self) -> Vec<&str> {
+        let owners = self.crate_owners();
+        let roots = self.system_roots();
+
+        self.elements
+            .iter()
+            .filter(|element| {
+                roots.iter().any(|root| {
+                    element.fqn == *root || element.fqn.starts_with(&format!("{root}."))
+                })
+            })
+            .filter(|element| matches!(resolve(&element.fqn, &owners), Endpoint::Outside))
             .map(|element| element.fqn.as_str())
             .collect()
     }
@@ -356,6 +403,16 @@ fn parse_model(source: &str, path: &str) -> Model {
             .split_once(char::is_whitespace)
             .map_or("", |(keyword, _)| keyword);
         if ["description", "technology", "title", "style", "notation"].contains(&keyword) {
+            // A whitelisted statement is skipped, not read — but `style { … }`
+            // still opens a block, and skipping one without pushing a scope
+            // hands its closing brace to the enclosing element instead. Every
+            // element declared after it is then named under the wrong parent
+            // and the file ends one scope short, so the only complaint is
+            // "unclosed block" against the last line of the file, which is the
+            // one line that is not the problem.
+            if opens_block {
+                scopes.push(Scope::Anonymous);
+            }
             continue;
         }
 
@@ -379,6 +436,7 @@ fn parse_model(source: &str, path: &str) -> Model {
 
             model.elements.push(Element {
                 fqn,
+                kind: kind.to_owned(),
                 links: Vec::new(),
             });
             if opens_block {
@@ -491,6 +549,38 @@ fn every_crate_is_drawn_exactly_once() {
     assert!(
         phantom.is_empty(),
         "{MODEL} links {phantom:?} under crates/, which is not a crate"
+    );
+}
+
+/// The other direction of membership: every crate is drawn, and everything
+/// drawn inside the system is a crate.
+///
+/// Without this, an element inside the boundary can name a crate in its title,
+/// link nothing, and carry arrows that no test in this file ever sees — they
+/// resolve to the outside world and are dropped. The review of this change
+/// demonstrated it with `recommendGhost = component 'aoa-recommend'`, which
+/// rendered as exactly the `aoa-recommend -> aoa-migrate` arrow aoa-enzj8
+/// exists to delete and passed all fifteen tests that existed then.
+#[test]
+fn every_element_inside_the_system_stands_for_a_crate() {
+    let model = model();
+
+    assert!(
+        !model.system_roots().is_empty(),
+        "{MODEL} declares no `system`, so this test had no boundary to check \
+         inside of and checked nothing"
+    );
+
+    let standing_for_nothing = model.elements_standing_for_nothing();
+    assert!(
+        standing_for_nothing.is_empty(),
+        "these elements are drawn inside the AOA system but link no crate and \
+         hold none underneath: {standing_for_nothing:?} — the title is what the \
+         diagram renders and nothing here reads it, so an element that only \
+         names a crate is a box on a published picture no test can contradict, \
+         and every arrow at it is silently dropped. Link the crate it stands \
+         for, or draw it outside the system boundary, where having no code \
+         behind it is what the shape already says"
     );
 }
 
@@ -674,6 +764,84 @@ fn every_view_step_names_an_element_that_exists() {
          is deliberately not held to the dependency graph, but a step pointing \
          at a renamed or deleted element describes nothing at all"
     );
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// The two holes the model is known to have had.
+// ───────────────────────────────────────────────────────────────────────────
+
+/// The real `model.c4` is well-formed, so the checks above pass on it whether
+/// or not they work. Each snippet here is the smallest input that reproduces a
+/// hole this file was found to have, asserted directly rather than through the
+/// model, so a regression fails with the shape that caused it rather than
+/// waiting for someone to draw it again.
+mod known_holes {
+    use super::parse_model;
+
+    const PATH: &str = "<snippet>";
+
+    /// The shape the review of aoa-enzj8 demonstrated. `recommendGhost` names
+    /// `aoa-recommend` where the diagram renders it and links nothing, so it
+    /// resolves to the outside world; the arrow out of it was dropped by
+    /// `crate_edges` and drew the removed `aoa-recommend -> aoa-migrate`
+    /// dependency through a green suite.
+    #[test]
+    fn an_element_that_only_names_a_crate_is_reported() {
+        let model = parse_model(
+            concat!(
+                "model {\n",
+                "  aoa = system 'AOA' {\n",
+                "    measure = container 'Read-only measurement' {\n",
+                "      recommend = component 'aoa-recommend' {\n",
+                "        link ../crates/aoa-recommend 'crates/aoa-recommend/'\n",
+                "      }\n",
+                "      recommendGhost = component 'aoa-recommend'\n",
+                "    }\n",
+                "  }\n",
+                "  aoa.measure.recommendGhost -> aoa.measure.recommend 'phantom'\n",
+                "}\n",
+            ),
+            PATH,
+        );
+
+        assert_eq!(
+            model.elements_standing_for_nothing(),
+            ["aoa.measure.recommendGhost"],
+            "an element inside the system that links no crate has to be \
+             reported here; nothing else in this file will ever see it"
+        );
+    }
+
+    /// `style { … }` is skipped rather than read, and skipping a block-opener
+    /// without pushing a scope makes its own closing brace pop the element it
+    /// sits in. Before the fix this snippet did not merely mis-name the
+    /// element: the link landed on the enclosing system and the file ran out of
+    /// scopes early, so the parse died on the last brace, naming a line nowhere
+    /// near the `style` that caused it.
+    #[test]
+    fn a_skipped_block_does_not_close_the_element_around_it() {
+        let model = parse_model(
+            concat!(
+                "model {\n",
+                "  aoa = system 'AOA' {\n",
+                "    trace = component 'aoa-trace' {\n",
+                "      style {\n",
+                "      }\n",
+                "      link ../crates/aoa-trace 'crates/aoa-trace/'\n",
+                "    }\n",
+                "  }\n",
+                "  aoa.trace -> aoa.trace 'self'\n",
+                "}\n",
+            ),
+            PATH,
+        );
+
+        assert_eq!(
+            model.crate_owners().get("aoa-trace"),
+            Some(&"aoa.trace"),
+            "the link belongs to the component it was written inside"
+        );
+    }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
