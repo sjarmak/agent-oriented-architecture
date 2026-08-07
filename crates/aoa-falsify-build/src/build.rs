@@ -34,7 +34,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::answer::AnswerContext;
-use crate::error::{BuildError, ReusedInput, TaskPurpose};
+use crate::error::{BuildError, BuildResult, ReusedInput, TaskPurpose};
 use crate::evidence::{build_observation, read_artifact, read_calibration, RepoEvidence};
 use crate::exposure::resolve_exposure;
 use crate::manifest::{Manifest, RepoManifest, TaskShape};
@@ -48,9 +48,6 @@ use aoa_falsify::{
     RepoRun, ScoringConvention,
 };
 use aoa_metrics::Confidence;
-
-/// Every fallible step here yields the crate's typed error.
-type Result<T> = std::result::Result<T, BuildError>;
 
 // ---------------------------------------------------------------------------
 // Build
@@ -80,7 +77,7 @@ impl ArmOutcomes {
 /// Read one arm run dir into per-task held-out outcomes. A task whose scoring is
 /// missing/non-dual/errored is recorded as excluded (with reason), not fatal —
 /// it simply cannot form a clean identical pair.
-fn read_arm(run_dir: &Path) -> Result<ArmOutcomes> {
+fn read_arm(run_dir: &Path) -> BuildResult<ArmOutcomes> {
     let task_ids = discover_tasks(run_dir).map_err(|source| BuildError::ArmTrialDiscovery {
         run_dir: run_dir.to_path_buf(),
         source: Box::new(source),
@@ -125,7 +122,7 @@ fn build_repo(
     k_runs: u32,
     mut answer_ctx: Option<AnswerContext>,
     answer_context_error: Option<String>,
-) -> Result<RepoOutcome> {
+) -> BuildResult<RepoOutcome> {
     repo.repo_commit
         .validate()
         .map_err(|source| BuildError::InvalidRepoCommit {
@@ -471,7 +468,7 @@ fn build_repo(
 /// Validate the manifest's task-shape declarations: one uniform shape per
 /// manifest (the gate scores one convention family), `scip_index` required for
 /// `answer` and rejected for `edit` (where it would silently do nothing).
-fn validated_shape(manifest: &Manifest) -> Result<TaskShape> {
+fn validated_shape(manifest: &Manifest) -> BuildResult<TaskShape> {
     let shape = manifest.repos[0].task_shape;
     for repo in &manifest.repos {
         if repo.task_shape != shape {
@@ -502,7 +499,7 @@ fn build_inner(
     manifest: &Manifest,
     tasks_dir: &Path,
     base_dir: &Path,
-) -> Result<(FalsifyInput, BuildReport, Vec<MeasurementObservationV1>)> {
+) -> BuildResult<(FalsifyInput, BuildReport, Vec<MeasurementObservationV1>)> {
     manifest.validate_repo_inventory()?;
     if manifest.repos.is_empty() {
         return Err(BuildError::NoRepos);

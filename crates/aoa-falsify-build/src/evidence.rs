@@ -12,7 +12,7 @@ use aoa_bench::{
 };
 
 use crate::answer::AnswerContext;
-use crate::error::{BuildError, TaskPurpose};
+use crate::error::{BuildError, BuildResult, TaskPurpose};
 use crate::manifest::{RepoManifest, TaskShape};
 
 /// Per-artifact and aggregate task-evidence read bound.
@@ -264,7 +264,7 @@ pub(crate) fn build_observation(
     repo_evidence: &RepoEvidence,
     answer_ctx: Option<&mut AnswerContext>,
     answer_context_error: Option<&str>,
-) -> std::result::Result<(MeasurementObservationV1, Option<String>), BuildError> {
+) -> BuildResult<(MeasurementObservationV1, Option<String>)> {
     let scoring = read_artifact(&scoring_path(run_dir, task_id));
     let trace = read_artifact(&transcript_path(run_dir, task_id));
     let oracle = task_artifact_digest(&tasks_dir.join(task_id));

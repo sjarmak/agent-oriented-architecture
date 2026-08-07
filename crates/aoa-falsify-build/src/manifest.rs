@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 use aoa_bench::GitObjectId;
 use aoa_metrics::Confidence;
 
-use crate::error::{BuildError, DiagnosticRepoId, DiagnosticRepoIds, PairYieldDetail, RepoIdList};
+use crate::error::{
+    BuildError, BuildResult, DiagnosticRepoId, DiagnosticRepoIds, PairYieldDetail, RepoIdList,
+};
 
 /// The whole build manifest.
 ///
@@ -38,7 +40,7 @@ pub struct Manifest {
 }
 
 impl Manifest {
-    pub(crate) fn validate_repo_inventory(&self) -> std::result::Result<(), BuildError> {
+    pub(crate) fn validate_repo_inventory(&self) -> BuildResult<()> {
         if let Some(repo_id) = first_duplicate(self.expected_repo_ids.iter().map(String::as_str)) {
             return Err(BuildError::DuplicateRepoId {
                 list: RepoIdList::Expected,

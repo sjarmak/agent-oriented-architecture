@@ -21,10 +21,7 @@ use aoa_falsify::UNREACHABLE_TRACE_REACH_DEPTH;
 use aoa_metrics::{compute_trace_convention_inputs, trace_footprint, SymbolGraph, TraceReach};
 use aoa_scip_graph::index_with_scip;
 
-use crate::error::{BuildError, TaskPurpose};
-
-/// Every fallible step here yields the crate's typed error.
-type Result<T> = std::result::Result<T, BuildError>;
+use crate::error::{BuildError, BuildResult, TaskPurpose};
 
 /// Per-repo state for computing answer-task convention inputs: the SCIP graph,
 /// its file universe, and a task-id-memoized oracle-chain cache (the chain is a
@@ -40,7 +37,7 @@ impl AnswerContext {
     /// Load the repo's declared SCIP index. The index is an operator assertion
     /// (like `confidence`), so a missing/unreadable/empty index is a hard error
     /// — never a silent degrade to sentinel inputs.
-    pub(crate) fn load(repo_id: &str, index_path: &Path, tasks_dir: &Path) -> Result<Self> {
+    pub(crate) fn load(repo_id: &str, index_path: &Path, tasks_dir: &Path) -> BuildResult<Self> {
         let indexed =
             index_with_scip(index_path).map_err(|source| BuildError::ScipIndexUnreadable {
                 repo_id: repo_id.to_string(),
@@ -69,7 +66,7 @@ impl AnswerContext {
         task_id: &str,
         run_dir: &Path,
         arm: &str,
-    ) -> Result<(f64, u32)> {
+    ) -> BuildResult<(f64, u32)> {
         let oracle = self.oracle_chain(task_id)?;
         self.arm_inputs(run_dir, task_id, &oracle, arm)
     }
@@ -84,7 +81,7 @@ impl AnswerContext {
         task_id: &str,
         oracle: &BTreeSet<String>,
         arm: &str,
-    ) -> Result<(f64, u32)> {
+    ) -> BuildResult<(f64, u32)> {
         let transcript = transcript_path(run_dir, task_id);
         let shim = parse_transcript_file(&transcript).map_err(|source| {
             BuildError::TranscriptUnreadable {
@@ -119,7 +116,7 @@ impl AnswerContext {
     /// The task's oracle chain, resolved against the index universe (memoized).
     /// An empty resolution is an exclusion reason: without an oracle chain the
     /// pair has no measurable convention inputs.
-    fn oracle_chain(&mut self, task_id: &str) -> Result<BTreeSet<String>> {
+    fn oracle_chain(&mut self, task_id: &str) -> BuildResult<BTreeSet<String>> {
         if let Some(chain) = self.oracle_cache.get(task_id) {
             return Ok(chain.clone());
         }

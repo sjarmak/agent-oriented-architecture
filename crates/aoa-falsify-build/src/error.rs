@@ -90,6 +90,10 @@ impl From<BuildError> for FalsifyBuildError {
 /// Result alias for this crate.
 pub type Result<T> = std::result::Result<T, FalsifyBuildError>;
 
+/// What every fallible step inside the crate returns, before the boundary
+/// flattens it into a [`FalsifyBuildError`].
+pub(crate) type BuildResult<T> = std::result::Result<T, BuildError>;
+
 /// Every way assembling an R0 falsification input can fail.
 #[derive(Debug, Error)]
 pub(crate) enum BuildError {

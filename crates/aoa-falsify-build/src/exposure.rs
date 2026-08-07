@@ -10,7 +10,7 @@ use std::path::Path;
 use aoa_bench::{ExposureScan, GitObjectId};
 use aoa_domain::ExposureStatus;
 
-use crate::error::BuildError;
+use crate::error::{BuildError, BuildResult};
 use crate::evidence::MAX_EVIDENCE_BYTES;
 
 /// Shortest revision fragment accepted as an identity, matching git's own
@@ -26,7 +26,7 @@ pub(crate) fn resolve_exposure(
     scan_path: &Path,
     repo_id: &str,
     repo_commit: &GitObjectId,
-) -> std::result::Result<ExposureStatus, BuildError> {
+) -> BuildResult<ExposureStatus> {
     let unreadable = |source| BuildError::ExposureLedgerUnreadable {
         repo_id: repo_id.to_string(),
         path: scan_path.to_path_buf(),
