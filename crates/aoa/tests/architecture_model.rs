@@ -27,7 +27,7 @@
 
 mod common;
 
-use common::{declared_dependencies, library_crates, workspace_root, CLI_CRATE};
+use common::{declared_dependencies, library_crates, read, CLI_CRATE};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The decision record behind this test, and the bead that produced it. Both
@@ -473,11 +473,6 @@ fn parse_model(source: &str, path: &str) -> Model {
         model.relationships.len()
     );
     model
-}
-
-fn read(relative: &str) -> String {
-    let path = workspace_root().join(relative);
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{relative} is readable: {e}"))
 }
 
 const MODEL: &str = "architecture/model.c4";
