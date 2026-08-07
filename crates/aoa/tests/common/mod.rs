@@ -21,6 +21,16 @@
 //! edge is what can invert a layer or falsify an arrow, and a dev-dependency is
 //! neither. Two copies of that definition is where the next drift lives, so
 //! there is one.
+//!
+//! Each integration-test target compiles this module into its own binary and
+//! uses a different subset of it, so every helper is "never used" from the
+//! point of view of at least one target. That is what sharing a helper module
+//! between test targets costs; it is not dead code, and the allow below says so
+//! rather than letting `-D warnings` fail the build over it. A helper that no
+//! target uses is still dead — delete it here, and the targets that stop
+//! compiling are the proof.
+
+#![allow(dead_code)]
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
