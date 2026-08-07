@@ -7,7 +7,9 @@
 //! Either prerequisite missing skips with a printed notice rather than failing,
 //! but a skip is not a vacuous pass: the assertions would still catch a silent
 //! empty plan if the adapter were broken. CI must install `node` and run
-//! `npm ci` so these execute.
+//! `npm ci` so these execute: that install is what keeps a printed notice the
+//! right convention here rather than `#[ignore]`, per
+//! `docs/adr/0004-environment-dependent-test-skips.md`.
 
 use std::fs;
 use std::path::Path;

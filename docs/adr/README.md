@@ -14,6 +14,7 @@ duplicates one is already built.
 | [0001](0001-crate-layer-assignment.md) | Every library crate gets exactly one architectural layer, and CLAUDE.md is where the assignment lives | Accepted |
 | [0002](0002-trace-schema-ownership.md) | `aoa-trace` owns the trace wire format; every other crate reads it from there | Accepted |
 | [0003](0003-held-out-provenance.md) | Held-out provenance is load-bearing evidence: an unprovable held-out claim demotes the repository rather than the standard | Accepted |
+| [0004](0004-environment-dependent-test-skips.md) | A test skips on a precondition CI can satisfy; it is ignored on one CI can never satisfy | Accepted |
 
 ## What belongs here
 

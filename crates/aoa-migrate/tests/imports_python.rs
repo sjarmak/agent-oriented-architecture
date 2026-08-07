@@ -5,7 +5,9 @@
 //! developer machine, so each test probes for it and skips with a printed notice
 //! rather than failing. A skip is NOT a vacuous pass: the assertions below would
 //! still catch a silent empty plan if `ruff` were present but the adapter were
-//! broken. CI must install a pinned `ruff` so these execute rather than skip.
+//! broken. CI must install a pinned `ruff` so these execute rather than skip:
+//! that install is what keeps a printed notice the right convention here rather
+//! than `#[ignore]`, per `docs/adr/0004-environment-dependent-test-skips.md`.
 
 use std::fs;
 use std::process::Command;

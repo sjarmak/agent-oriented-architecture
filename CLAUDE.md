@@ -138,4 +138,11 @@ not exist.
   at operator-authored input boundaries where schema drift must fail.
 - Add regression tests at the public boundary that exposed a defect. Security
   filesystem tests must prove the planted target was not modified.
+- A test whose precondition CI can satisfy skips with a printed notice, and CI
+  installs whatever it needs; one whose precondition CI can never satisfy is
+  `#[ignore]`d, because libtest captures a passing test's output and a notice
+  would report `ok` for a run that checked nothing.
+  [docs/adr/0004-environment-dependent-test-skips.md](docs/adr/0004-environment-dependent-test-skips.md)
+  records the rule and `crates/aoa/tests/environment_dependent_skips.rs` fails
+  on a skip site it has not classified.
 - Preserve unrelated user changes and use `bd` for every unit of tracked work.

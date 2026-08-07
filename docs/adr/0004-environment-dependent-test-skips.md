@@ -1,0 +1,79 @@
+# 0004 — A test skips on a precondition CI can satisfy; it is ignored on one CI can never satisfy
+
+**Status:** Accepted. Recorded here in 2026-08 from the split that already
+stands in the workspace, after aoa-m1yqw made the R0 campaign test `#[ignore]`d
+and left two conventions side by side with nothing saying which was which.
+
+## Context
+
+Some tests need something the machine may not have: a tool on `PATH`, a vendored
+dependency tree, a directory of data produced elsewhere. There are two ways to
+make such a test stop early, and they report differently.
+
+`eprintln!("SKIP …")` followed by `return` leaves the test running. It passes,
+and the summary counts it among the passes. libtest captures a passing test's
+output, so the notice is invisible in a green run — nobody reading the run sees
+that the test checked nothing.
+
+`#[ignore]` stops the test from running at all. The summary says `1 ignored`,
+which is a line a reader can act on, and the test is still reachable on demand
+with `--ignored`.
+
+The invisibility of the first form is the whole problem. It is harmless when the
+test really runs somewhere that matters, and it is a lie when it does not.
+
+## Decision
+
+The convention is chosen by one question: **can CI ever satisfy this
+precondition?**
+
+- **Yes** — use `eprintln!("SKIP …")` + `return`, and make CI install whatever
+  the test needs. CI is the run whose greenness is load-bearing; it exercises
+  the test for real, so the skip is a local-dev affordance and its invisibility
+  costs nothing. Skipping locally is then a statement about the developer's
+  machine, not about the code.
+- **No** — use `#[ignore]`, with a reason string naming what to set and how to
+  run it. A printed notice here would report `ok` in CI for a test that scanned
+  nothing, which is the failure mode worth spending a summary line to avoid.
+
+The question is about the precondition, not about how inconvenient it is. A tool
+that CI *could* install but currently does not is a `yes` with a missing CI
+step, not a `no`.
+
+## Consequences
+
+Both conventions stay in the workspace, and the split is now the rule rather
+than an accident:
+
+- `crates/aoa-migrate/tests/imports_python.rs` and `imports_typescript.rs` probe
+  for `ruff`, `node`, and the vendored ESLint. `.github/workflows/rust-ci.yml`
+  installs all three, in both the `ci` and `coverage` jobs, so these tests run
+  for real on every push and the printed notice never decides whether a green
+  run means anything. The CI steps are load-bearing: dropping one would silently
+  convert these tests into the case this record forbids.
+- `crates/aoa-bench/tests/exposure_scan.rs` holds
+  `real_r0_campaign_matches_documented_exposure_and_held_out_provenance`, which
+  scans the R0 campaign codeprobe produced on an operator's machine. No runner
+  can hold that input, so the test is `#[ignore]`d and names
+  `AOA_R0_CAMPAIGN_RUNS` in its reason string.
+
+That test also prints a SKIP notice, which is not a third convention: the notice
+sits *inside* the ignored test and reports an unset `AOA_R0_CAMPAIGN_RUNS` to
+somebody who asked for the test by name with `--ignored`. `#[ignore]` has
+already made the CI-honesty decision by then. A variable that *is* set must name
+a real directory, so a typo fails rather than skipping.
+
+A third case is what this record exists for. Answer the question above, add the
+source to the registry in
+`crates/aoa/tests/environment_dependent_skips.rs`, and record the reason there
+next to the entries already present. The test fails on any skip site the record
+has not classified, so the decision cannot be made by copying whichever nearby
+example the author happened to read first.
+
+## Where this lives
+
+- `CLAUDE.md`, "Conventions & Patterns" — the standing rule.
+- `crates/aoa/tests/environment_dependent_skips.rs` — the registry of classified
+  sites, and the workspace test that fails when an unclassified one appears.
+- `.github/workflows/rust-ci.yml` — the `node`, ESLint, and `ruff` installs that
+  keep the `aoa-migrate` adapter tests on the `yes` side of the question.

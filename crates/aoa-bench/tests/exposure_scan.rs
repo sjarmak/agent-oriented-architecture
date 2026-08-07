@@ -125,13 +125,11 @@ fn void_scored_trials_remain_exposed_and_report_their_provenance() {
 // operator ran it. Naming it by variable keeps that machine-specific location out
 // of the repository.
 //
-// Ignored by default because the input can never exist on a CI runner. The other
-// environment-dependent tests here skip via `eprintln!` (see aoa-migrate's node
-// and ruff guards), but those tools ARE installed in CI, so those tests really
-// run there. This one would not, and libtest captures a passing test's output —
-// so an unconditional version would print `ok` in CI having scanned nothing.
-// `1 ignored` in the default summary is the honest line. Run it with `--ignored`
-// and the variable set; see docs/r0-reserve-spendability.md.
+// Ignored rather than skipped with a printed notice because no CI runner can
+// ever hold that input, which is the question
+// docs/adr/0004-environment-dependent-test-skips.md turns on. `1 ignored` in the
+// default summary is the honest line. Run it with `--ignored` and the variable
+// set; see docs/r0-reserve-spendability.md.
 #[test]
 #[ignore = "scans the real R0 campaign; set AOA_R0_CAMPAIGN_RUNS and run with --ignored"]
 fn real_r0_campaign_matches_documented_exposure_and_held_out_provenance() {
