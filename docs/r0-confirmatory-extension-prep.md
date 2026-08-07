@@ -1,5 +1,16 @@
 # R0 confirmatory extension: authorized two-repository amendment
 
+> **Superseded as an executable plan (2026-08-07, `aoa-6da35`).** The two
+> repositories this amendment names were subsequently exposed, leaving the
+> reserve pool empty; see
+> [the reserve spendability record](r0-reserve-spendability.md). Stephanie ruled
+> on 2026-08-06 to reserve and mine a repository never drawn for R0, and the
+> replacement criteria and threshold rule are preregistered in
+> [the third design preregistration](r0-third-design-preregistration.md). The
+> seven-repository arithmetic below is retained for provenance and as the
+> instantiation the new threshold rule is checked against; it is no longer a
+> campaign instruction.
+
 Originally prepared on 2026-08-04 for `aoa-h4q5`. At the time this record was
 prepared, that preparation chain had performed only offline planning: it had
 run no agent trial and inspected no trial outcome. Stephanie authorized the

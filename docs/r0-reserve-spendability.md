@@ -205,6 +205,12 @@ an engineering one. Three paths are available, and they are not equivalent:
    [the extension prep](r0-confirmatory-extension-prep.md), whose
    seven-repository threshold assumed sqlparse and websockets.
 
+   **Ruled by Stephanie on 2026-08-06.** The replacement threshold and the
+   repository-selection criteria are preregistered in
+   [the third design preregistration](r0-third-design-preregistration.md),
+   which also records why a *single* new repository cannot reach a proceed
+   verdict under the unchanged vote rule.
+
 2. **Rerun sqlparse and websockets as acknowledged-exposed.** Cheap and
    immediate, and the corrected `$10.348696` spend leaves `$32.94` under the
    `$43.29` ceiling. But it does not measure what R0 is for: the
