@@ -35,6 +35,26 @@ fn liveness_state(report: &Value) -> String {
         .to_string()
 }
 
+/// What git hands a fresh clone: the tracked registration and no telemetry.
+///
+/// `observe --enforce` provisions `.aoa/traces/` as part of installing, so that
+/// directory is the local install's own footprint and removing it leaves exactly
+/// the checkout shape. The install is driven through the real command rather
+/// than a transcribed settings.json for the reason `planes.rs` records: a
+/// hand-spelled hook fixture drifted from `hook_command` and kept passing.
+fn registered_checkout() -> TempDir {
+    let repo = TempDir::new().unwrap();
+    observe_enforce(repo.path());
+    std::fs::remove_dir_all(repo.path().join(".aoa")).unwrap();
+    repo
+}
+
+/// Satisfy the other Tier-1 plane, so a `--fail-on tier1` assertion below turns
+/// on the enforcement plane's liveness and not on a missing CI workflow.
+fn present_ci_plane(repo: &Path) {
+    std::fs::create_dir_all(repo.join(".github/workflows")).unwrap();
+}
+
 /// Criterion (d), the sharp direction: hooks installed and nothing able to run
 /// them. The plane must read as installed-but-silent, and must NOT read as
 /// enforcing.
@@ -150,19 +170,11 @@ fn a_repo_with_no_hook_set_reports_not_installed() {
 }
 
 /// A tree with a registered plane and no `.aoa/` at all is the shape of every
-/// clean checkout, and it is not the shape of a plane that went silent.
-///
-/// `observe --enforce` provisions `.aoa/traces/` as part of installing, so that
-/// directory is the local install's own footprint; removing it leaves exactly
-/// what git hands a fresh clone — the tracked registration, no telemetry. The
-/// install is driven through the real command rather than a transcribed
-/// settings.json for the reason `planes.rs` records: a hand-spelled hook fixture
-/// drifted from `hook_command` and kept passing.
+/// clean checkout, and it is not the shape of a plane that went silent. See
+/// [`registered_checkout`] for why that shape is what it is.
 #[test]
 fn a_checkout_with_no_local_telemetry_is_unobserved_rather_than_silent() {
-    let repo = TempDir::new().unwrap();
-    observe_enforce(repo.path());
-    std::fs::remove_dir_all(repo.path().join(".aoa")).unwrap();
+    let repo = registered_checkout();
 
     let report = audit_json(repo.path());
     assert_eq!(
@@ -184,10 +196,8 @@ fn a_checkout_with_no_local_telemetry_is_unobserved_rather_than_silent() {
 /// checkout can carry, so no CI run could ever have passed it.
 #[test]
 fn a_checkout_with_no_local_telemetry_passes_the_tier1_gate() {
-    let repo = TempDir::new().unwrap();
-    observe_enforce(repo.path());
-    std::fs::remove_dir_all(repo.path().join(".aoa")).unwrap();
-    std::fs::create_dir_all(repo.path().join(".github/workflows")).unwrap();
+    let repo = registered_checkout();
+    present_ci_plane(repo.path());
 
     aoa_stdin()
         .args(["audit", "--fail-on", "tier1", "--repo"])
@@ -202,9 +212,7 @@ fn a_checkout_with_no_local_telemetry_passes_the_tier1_gate() {
 /// was given and the reason this is not simply omitted from the punch-list.
 #[test]
 fn an_unobserved_plane_is_still_a_finding_in_both_registers() {
-    let repo = TempDir::new().unwrap();
-    observe_enforce(repo.path());
-    std::fs::remove_dir_all(repo.path().join(".aoa")).unwrap();
+    let repo = registered_checkout();
 
     let report = audit_json(repo.path());
     let silent: Vec<&Value> = report["items"]
@@ -248,7 +256,7 @@ fn an_unobserved_plane_is_still_a_finding_in_both_registers() {
 fn an_installed_plane_that_emitted_nothing_still_fails_the_tier1_gate() {
     let repo = TempDir::new().unwrap();
     observe_enforce(repo.path());
-    std::fs::create_dir_all(repo.path().join(".github/workflows")).unwrap();
+    present_ci_plane(repo.path());
 
     assert_eq!(
         liveness_state(&audit_json(repo.path())),
@@ -281,7 +289,7 @@ fn an_installed_plane_that_emitted_nothing_still_fails_the_tier1_gate() {
 fn deleting_the_telemetry_directory_downgrades_a_measured_silence() {
     let repo = TempDir::new().unwrap();
     observe_enforce(repo.path());
-    std::fs::create_dir_all(repo.path().join(".github/workflows")).unwrap();
+    present_ci_plane(repo.path());
 
     aoa_stdin()
         .args(["audit", "--fail-on", "tier1", "--repo"])

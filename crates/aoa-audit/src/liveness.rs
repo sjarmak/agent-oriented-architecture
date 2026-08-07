@@ -78,12 +78,11 @@ pub enum EnforcementLiveness {
     #[default]
     NotInstalled,
     /// The hook set is installed and this tree holds no enforcement telemetry at
-    /// all: `<repo>/.aoa/traces` does not exist.
+    /// all: `<repo>/.aoa/traces` does not exist. The module doc derives why that
+    /// is the state of every clean checkout.
     ///
-    /// The install provisions that directory, so its absence says the
-    /// registration arrived through git and no local install followed — a clean
-    /// checkout. It is not evidence that a running plane fell silent, and it is
-    /// not evidence that one is healthy: nothing here has been watched.
+    /// Not evidence that a running plane fell silent, and not evidence that one
+    /// is healthy: nothing here has been watched.
     InstalledUnobserved,
     /// The hook set is installed, its telemetry directory exists, and no
     /// enforcement record reached the live log. The plane reads as present from
@@ -168,7 +167,7 @@ const UNOBSERVED_REASON: &str = "no .aoa/traces directory exists, so this tree \
 /// [`crate::PunchItem`], which is the public shape. Widen it when something
 /// outside this crate needs the tier and reason without going through a punch
 /// item, not before.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct LivenessFinding {
     /// The evidence tier this finding is reported at.
     pub(crate) tier: Tier,
@@ -519,11 +518,8 @@ mod tests {
     /// to be its own tag and the silence reason has to survive.
     #[test]
     fn the_wire_form_carries_the_state_and_its_reason() {
-        let silent = EnforcementLiveness::InstalledButSilent {
-            silence: Silence::NoLiveLogs,
-        };
         assert_eq!(
-            serde_json::to_value(&silent).unwrap(),
+            serde_json::to_value(silent(Silence::NoLiveLogs)).unwrap(),
             serde_json::json!({"state":"installed-but-silent","silence":"no-live-logs"})
         );
         assert_eq!(
