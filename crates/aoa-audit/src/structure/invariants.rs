@@ -19,11 +19,11 @@ use crate::tier::Tier;
 /// conventions* are statically discoverable before an agent edits — a policy
 /// file, an agent-context doc, a lint/format config, a pre-commit config, or a
 /// CODEOWNERS. Matched case-insensitively, the mechanical equivalent of the
-/// verification family's [`TEST_CONFIG_MARKERS`]: presence of a well-known
+/// verification family's `TEST_CONFIG_MARKERS`: presence of a well-known
 /// rule-file marker, never a judgment of the *content* of the rules (ZFC). The
 /// `CONTRIBUTING*` doc and `.eslintrc*` family (many extensions) are matched by
 /// prefix in [`is_invariant_file`] instead. README is deliberately *excluded*:
-/// it is the navigability anchor ([`navigability_sites`]), a distinct construct.
+/// it is the navigability anchor ([`super::navigability_sites`]), a distinct construct.
 const INVARIANT_FILE_MARKERS: &[&str] = &[
     "aoa-policy.yaml",
     "aoa-policy.yml",
@@ -46,7 +46,7 @@ const INVARIANT_DIR: &str = ".aoa";
 
 /// Conventional non-root CODEOWNERS locations (relative to the repo root). A root
 /// `CODEOWNERS` is already caught by [`INVARIANT_FILE_MARKERS`]; these two cover
-/// the `.github/` and `docs/` placements, probed by filename like [`CI_FILES`].
+/// the `.github/` and `docs/` placements, probed by filename like `CI_FILES`.
 const CODEOWNERS_PATHS: &[&str] = &[".github/CODEOWNERS", "docs/CODEOWNERS"];
 
 /// The package roots under `repo` for which the project's *declared rules /
@@ -63,7 +63,7 @@ const CODEOWNERS_PATHS: &[&str] = &[".github/CODEOWNERS", "docs/CODEOWNERS"];
 ///   from one front-door place, so no root is a site.
 /// - **Per-package-local**: an [`INVARIANT_FILE_MARKERS`] file found by a bounded
 ///   walk *under* the root (skipping build-output and hidden *directories* and
-///   never following symlinks). Unlike [`super::verification::has_local_verification`], a leading-dot
+///   never following symlinks). Unlike `verification::has_local_verification`, a leading-dot
 ///   *file* is NOT skipped — rule files are commonly dotfiles (`.editorconfig`,
 ///   `.eslintrc.json`) — only hidden directories are pruned.
 ///
@@ -120,7 +120,7 @@ fn has_repo_global_invariants(repo: &Path) -> Result<bool, AuditError> {
 }
 
 /// Whether any [`CODEOWNERS_PATHS`] file exists. `.is_file()` follows symlinks, a
-/// fixed-name one-level probe that cannot escape the tree (like [`has_manifest`]).
+/// fixed-name one-level probe that cannot escape the tree (like [`super::has_manifest`]).
 fn has_nonroot_codeowners(repo: &Path) -> bool {
     CODEOWNERS_PATHS.iter().any(|rel| repo.join(rel).is_file())
 }
@@ -142,10 +142,10 @@ fn has_root_invariant_marker(repo: &Path) -> Result<bool, AuditError> {
 }
 
 /// Whether a declared-rule marker is reachable *within* `root` by a walk bounded
-/// by [`SKIP_DIRS`], hidden-*directory* exclusions, and [`MAX_WALK_DEPTH`].
+/// by [`super::SKIP_DIRS`], hidden-*directory* exclusions, and [`super::MAX_WALK_DEPTH`].
 /// Short-circuits on the first hit. Never follows symlinks.
 ///
-/// Divergence from [`super::verification::has_local_verification`] by design: a leading-dot *file* is
+/// Divergence from `verification::has_local_verification` by design: a leading-dot *file* is
 /// NOT skipped here, because rule files are overwhelmingly dotfiles
 /// (`.editorconfig`, `.eslintrc.json`, `.pre-commit-config.yaml`); only hidden
 /// *directories* are pruned. The hidden `.aoa` dir is therefore a repo-global

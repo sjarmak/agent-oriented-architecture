@@ -20,7 +20,7 @@ use crate::tier::Tier;
 /// Dependency-pinning lockfile names probed at the repo root. Any one existing
 /// declares deterministic build inputs (the Factory build-system pillar's
 /// trace-testable fact). A documented well-known set in the
-/// [`MANIFEST_MARKERS`] style; membership is by exact-name existence alone —
+/// [`super::MANIFEST_MARKERS`] style; membership is by exact-name existence alone —
 /// lossy by contract (a repo pinning some other way reads as absent), which is
 /// the conservative direction for an advisory measure.
 const BUILD_DETERMINISM_MARKERS: &[&str] = &[
@@ -70,7 +70,7 @@ const DEV_ENVIRONMENT_MARKERS: &[&str] = &[
 /// documented issue-template locations (GitHub's `.github/ISSUE_TEMPLATE` dir or
 /// single-file forms, GitLab's `.gitlab/issue_templates`) and the in-repo
 /// `.beads` issue tracker (the toolkit-ecosystem convention, same precedent as
-/// the `.aoa` dir in [`INVARIANT_DIR`]). Any one existing means structured work
+/// the `.aoa` dir in `INVARIANT_DIR`). Any one existing means structured work
 /// items are discoverable from the tree. Exact-name matches only — lossy by
 /// contract, like the sibling marker sets.
 const TASK_DISCOVERY_SURFACES: &[&str] = &[
@@ -84,7 +84,7 @@ const TASK_DISCOVERY_SURFACES: &[&str] = &[
 
 /// The attribute token a `.gitattributes` entry uses to mark a path as a
 /// generated artifact (so an agent does not edit derived state). A documented,
-/// well-known marker — the same fixed-name style as [`MANIFEST_MARKERS`] — and
+/// well-known marker — the same fixed-name style as [`super::MANIFEST_MARKERS`] — and
 /// the only generated-artifact-protection convention this probe recognizes. The
 /// probe asks one purely structural question (does the repo *declare* this
 /// convention at all), never which files are generated — that classification is
@@ -96,7 +96,7 @@ const LINGUIST_GENERATED_ATTR: &str = "linguist-generated";
 /// its candidate paths exists; the measure counts the kinds that are absent. A
 /// repository that declares such a surface is funnelling writes through a narrow,
 /// auditable boundary (the report's R5 "mutation gateway / ownership metadata"
-/// signal). The set is a documented well-known-name list, like [`SKIP_DIRS`];
+/// signal). The set is a documented well-known-name list, like [`super::SKIP_DIRS`];
 /// membership is by path existence alone — no parsing, no heuristic.
 ///
 /// CODEOWNERS is probed at each of GitHub's three documented locations (repo
@@ -113,7 +113,7 @@ const WRITE_BOUNDARY_SURFACES: &[&[&str]] = &[
 /// measure is the count of this single marker family that is ABSENT (0 when any
 /// lockfile exists, 1 when none does) — the Factory build-system pillar reduced
 /// to its one mechanically checkable fact. Fixed-path existence only (`exists()`
-/// follows a symlinked lockfile, like [`has_manifest`]); no file content is ever
+/// follows a symlinked lockfile, like [`super::has_manifest`]); no file content is ever
 /// read, so the probe is infallible. A repo with no package manager at all reads
 /// the same as one that has not pinned — a neutral measured fact either way,
 /// exactly like the sibling absence probes. Born [`Tier::Tier3`].
@@ -187,7 +187,7 @@ fn absence_item(
 /// The measured absence of a fixed-path marker family: `0` when any marker in the
 /// family exists (the good thing is declared), `1` when none does. This is the
 /// value [`absence_item`] emits (as a punch item only when it is `1`) and the
-/// value [`structure_measurements`] reports (including the `0` the punch list
+/// value [`super::structure_measurements`] reports (including the `0` the punch list
 /// drops).
 fn absence_count(repo: &Path, markers: &[&str]) -> u64 {
     u64::from(!markers.iter().any(|rel| repo.join(rel).exists()))
@@ -230,7 +230,7 @@ pub(super) fn generated_artifact_protection_item(
 /// cannot exhaust memory); a missing file is `Ok(false)`, only a genuine IO error
 /// (permissions, vanished file) propagates. The token match is a literal
 /// substring — mechanical, not a parse of the attributes grammar.
-pub(super) fn declares_linguist_generated(repo: &Path) -> Result<bool, AuditError> {
+fn declares_linguist_generated(repo: &Path) -> Result<bool, AuditError> {
     let path = repo.join(".gitattributes");
     if !path.exists() {
         return Ok(false);
@@ -272,7 +272,7 @@ pub(super) fn write_safety_zone_item(repo: &Path) -> Option<PunchItem> {
 
 /// The measured count of write-boundary declaration families absent from `repo`
 /// (0..=[`WRITE_BOUNDARY_SURFACES`]`.len()`). The value [`write_safety_zone_item`]
-/// emits (as a punch item only when non-zero) and [`structure_measurements`]
+/// emits (as a punch item only when non-zero) and [`super::structure_measurements`]
 /// reports (including `0`).
 pub(super) fn write_boundary_absent_count(repo: &Path) -> u64 {
     WRITE_BOUNDARY_SURFACES
@@ -292,6 +292,13 @@ pub(super) fn build_determinism_absent_count(repo: &Path) -> u64 {
 /// `repo` — the corpus register of [`dev_environment_item`].
 pub(super) fn dev_environment_absent_count(repo: &Path) -> u64 {
     absence_count(repo, DEV_ENVIRONMENT_MARKERS)
+}
+
+/// Whether `repo` fails to mark generated artifacts off-limits, as the 0/1 count
+/// the corpus register wants — the counted form of
+/// [`generated_artifact_protection_item`].
+pub(super) fn generated_artifact_protection_absent_count(repo: &Path) -> Result<u64, AuditError> {
+    Ok(u64::from(!declares_linguist_generated(repo)?))
 }
 
 /// The measured count of task-discovery surfaces absent from `repo` — the

@@ -24,13 +24,13 @@
 //! | Pillar | Disposition |
 //! |---|---|
 //! | Style / validation | **Covered**: [`invariant_sites`] (lint/format/policy discoverability, aoa-d6t.21) plus the enforcement-plane probes (pre-commit / CI presence). |
-//! | Build system | **Probe**: [`build_determinism_item`] — dependency-pinning lockfile existence ([`BUILD_DETERMINISM_MARKERS`]). The "documented build command" sub-signal was DROPPED: a build-command token scan of front-door docs cannot be distinguished from the test-command scan [`verification_sites`] already performs without a semantic judgment of which command is "the build". |
+//! | Build system | **Probe**: [`declarations::build_determinism_item`] — dependency-pinning lockfile existence (`declarations::BUILD_DETERMINISM_MARKERS`). The "documented build command" sub-signal was DROPPED: a build-command token scan of front-door docs cannot be distinguished from the test-command scan [`verification_sites`] already performs without a semantic judgment of which command is "the build". |
 //! | Testing | **Covered**: [`verification_sites`] (aoa-d6t.20). |
 //! | Documentation | **Covered**: [`navigability_sites`] (README anchors) plus [`invariant_sites`]' agent-context / CONTRIBUTING markers. |
-//! | Dev environment | **Probe**: [`dev_environment_item`] — reproducible-environment declaration existence ([`DEV_ENVIRONMENT_MARKERS`]). |
+//! | Dev environment | **Probe**: [`declarations::dev_environment_item`] — reproducible-environment declaration existence (`declarations::DEV_ENVIRONMENT_MARKERS`). |
 //! | Debugging / observability | **Excluded**: structured-logging/observability configuration is code-level and ecosystem-specific (a `tracing` subscriber in Rust, a logger setup in Go/JS are *source*, not fixed well-known filenames). The only fixed-filename conventions (`logback.xml`, `log4j2.xml`) are single-ecosystem and would bias the measure; anything broader needs per-ecosystem manifest parsing or token heuristics — forbidden (ZFC), so the pillar is dropped rather than half-built. |
 //! | Security | **Split**: the write-safety leg is covered by aoa-d6t.16 (`generated_artifact_protection_absence`, `write_safety_zone_absence`; merged pending on `wave-d6t16-x0a1-review`) — deliberately not recreated here. The branch-protection / security-posture leg is **excluded**: branch protection lives in forge settings, not the checkout, so a read-only tree probe cannot observe it, and an agent trace never touches it mid-edit. |
-//! | Task discovery | **Probe**: [`task_discovery_item`] — issue-template / in-repo-tracker surface existence ([`TASK_DISCOVERY_SURFACES`]). |
+//! | Task discovery | **Probe**: [`declarations::task_discovery_item`] — issue-template / in-repo-tracker surface existence (`declarations::TASK_DISCOVERY_SURFACES`). |
 //! | Product / experimentation | **Excluded**: analytics/experimentation instrumentation is a product-layer semantic property with no fixed-filename convention and no plausible path from its presence to structural facts in coding-agent traces. |
 
 mod declarations;
@@ -206,9 +206,9 @@ const PROBES: &[Probe] = &[
     Probe {
         kind: FindingKind::GeneratedArtifactProtection,
         measure: Some(|repo, _k| {
-            Ok(StructureMeasure::Measured(u64::from(
-                !declarations::declares_linguist_generated(repo)?,
-            )))
+            Ok(StructureMeasure::Measured(
+                declarations::generated_artifact_protection_absent_count(repo)?,
+            ))
         }),
         item: |repo, _k, _partition| declarations::generated_artifact_protection_item(repo),
     },

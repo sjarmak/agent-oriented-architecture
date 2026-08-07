@@ -21,13 +21,13 @@ use crate::tier::Tier;
 /// Directory names that conventionally hold a package's tests
 /// (`tests/` for Rust/Python, `__tests__/` for JS, `spec/` for Ruby/JS). A
 /// documented well-known set — the same mechanical name match as
-/// [`WORKSPACE_CONTAINER_DIRS`]; the presence of such a dir is a discoverable
+/// [`super::WORKSPACE_CONTAINER_DIRS`]; the presence of such a dir is a discoverable
 /// verification entrypoint, not a quality judgment.
 const TEST_DIRS: &[&str] = &["tests", "test", "__tests__", "spec"];
 
 /// Test-runner configuration filenames. A directory carrying one documents how
 /// the project's tests are run — a reachable verification entrypoint by file
-/// presence alone (the same well-known-path style as [`MANIFEST_MARKERS`]).
+/// presence alone (the same well-known-path style as [`super::MANIFEST_MARKERS`]).
 const TEST_CONFIG_MARKERS: &[&str] = &[
     "pytest.ini",
     "tox.ini",
@@ -85,7 +85,7 @@ const TEST_INVOCATION_MARKERS: &[&str] = &[
 ///   or a root context doc (README / AGENTS.md / CONTRIBUTING) that names a
 ///   documented test command ([`TEST_INVOCATION_MARKERS`]). A repo-wide
 ///   verification path is discoverable from one place, so no root is a site.
-/// - **Per-package-local**: a [`TEST_DIRS`] directory, a [`TEST_CONFIG_MARKERS`]
+/// - **Per-package-local**: a [`TEST_DIRS`] directory, a `TEST_CONFIG_MARKERS`
 ///   file, a test-named source file, or an in-source `cfg(test)` module found by
 ///   a bounded walk *under* the root (skipping hidden / build-output dirs and
 ///   never following symlinks, like the rest of the family).
@@ -206,8 +206,8 @@ fn file_mentions_test_command(path: &Path) -> Result<bool, AuditError> {
 }
 
 /// Whether a verification entrypoint is reachable *within* `root` by a walk
-/// bounded by [`SKIP_DIRS`], hidden-dir exclusions, and [`MAX_WALK_DEPTH`]: a
-/// [`TEST_DIRS`] directory, a [`TEST_CONFIG_MARKERS`] file, a test-named source
+/// bounded by [`super::SKIP_DIRS`], hidden-dir exclusions, and [`super::MAX_WALK_DEPTH`]: a
+/// [`TEST_DIRS`] directory, a `TEST_CONFIG_MARKERS` file, a test-named source
 /// file, or a `.rs` file with an in-source `cfg(test)` module. Short-circuits on
 /// the first hit. Never follows symlinks — `.github` (hidden) is therefore
 /// handled only by [`has_ci_test_step`].

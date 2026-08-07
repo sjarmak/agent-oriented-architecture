@@ -97,7 +97,7 @@ pub(super) fn unused_import_proxy_item(
 /// files. Only files with at least one likely-unused import are pushed — the
 /// clean majority carries no signal for either the sum or the attribution.
 ///
-/// Kept separate from [`collect_source_line_counts`] rather than sharing a walk:
+/// Kept separate from [`super::collect_source_line_counts`] rather than sharing a walk:
 /// that one is multi-language and counts newline bytes, this one is Rust-only and
 /// scans tokens. They share only mechanical traversal constraints: bounded depth
 /// and reads, hidden/build-output exclusions, and never following symlinks.
