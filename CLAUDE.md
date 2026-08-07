@@ -143,6 +143,9 @@ not exist.
   `#[ignore]`d, because libtest captures a passing test's output and a notice
   would report `ok` for a run that checked nothing.
   [docs/adr/0004-environment-dependent-test-skips.md](docs/adr/0004-environment-dependent-test-skips.md)
-  records the rule and `crates/aoa/tests/environment_dependent_skips.rs` fails
-  on a skip site it has not classified.
+  records the rule; `crates/aoa/tests/environment_dependent_skips.rs` counts the
+  sites of each kind and fails on any it has not classified, on a registry that
+  stops matching the record, and on CI dropping an install the printed-notice
+  sites depend on. It reaches the two idioms spelled as the record spells them,
+  not a test that returns early announcing nothing.
 - Preserve unrelated user changes and use `bd` for every unit of tracked work.

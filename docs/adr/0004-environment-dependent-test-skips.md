@@ -64,16 +64,41 @@ already made the CI-honesty decision by then. A variable that *is* set must name
 a real directory, so a typo fails rather than skipping.
 
 A third case is what this record exists for. Answer the question above, add the
-source to the registry in
-`crates/aoa/tests/environment_dependent_skips.rs`, and record the reason there
-next to the entries already present. The test fails on any skip site the record
-has not classified, so the decision cannot be made by copying whichever nearby
-example the author happened to read first.
+source to the registry in `crates/aoa/tests/environment_dependent_skips.rs` with
+its per-convention counts, and record the reason here next to the cases already
+described. That test fails on any skip site this record has not classified, so
+the decision cannot be made by copying whichever nearby example the author
+happened to read first.
+
+It counts sites rather than blessing files, because a file listed once would
+otherwise pre-approve every skip later added anywhere inside it — which is how a
+registry stops describing the workspace without anything going red. It also
+holds the three premises this record leans on but does not itself state: that
+the ADR names every source the registry classifies, that every classified source
+cites the ADR back, and that `.github/workflows/rust-ci.yml` still installs
+`node`, the vendored ESLint, and `ruff`. That last one is the load-bearing half
+of the `yes` branch. Delete the `ruff` step and the seven `imports_python.rs`
+tests report `ok` in CI having checked nothing, with no other check in the
+workspace noticing.
+
+The scan is textual, so its reach is these two idioms spelled the way this
+record spells them. A test that returns early with no notice at all is invisible
+to it, and so is an attribute a macro emits. Neither is a gap to close by
+widening the search until it guesses: a test that announces nothing is a defect
+in that test, not an unclassified convention. What the enforcement guarantees is
+that no *detectable* skip site is unclassified — and because a missed site is a
+silent green run while a spurious match is a loud red gate, the matching is
+deliberately biased toward the second. A match that is not a skip site at all
+goes in the test's `NOT_A_SKIP` list, never into the registry, which would put a
+classification into this record that nobody made.
 
 ## Where this lives
 
 - `CLAUDE.md`, "Conventions & Patterns" — the standing rule.
 - `crates/aoa/tests/environment_dependent_skips.rs` — the registry of classified
-  sites, and the workspace test that fails when an unclassified one appears.
+  sites and their counts, and the workspace tests that fail when an unclassified
+  site appears, when the registry and this record stop describing the same set,
+  when a citation of this record stops resolving, or when CI stops installing
+  what the printed-notice sites depend on.
 - `.github/workflows/rust-ci.yml` — the `node`, ESLint, and `ruff` installs that
   keep the `aoa-migrate` adapter tests on the `yes` side of the question.

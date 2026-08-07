@@ -12,38 +12,109 @@
 //! carry both halves into the failure messages, so an author who trips this file
 //! is told the rule rather than sent to look it up.
 //!
-//! A rule nobody is forced to open is not a rule, which is what this file adds:
-//! it scans the workspace for both idioms and fails when a site appears that the
-//! ADR has not classified, so the third case is decided deliberately rather than
-//! by whichever example its author happened to copy.
+//! A rule nobody is forced to open is not a rule, which is what this file adds.
+//! It holds the four things the record needs to stay true, each of which decays
+//! silently on its own:
+//!
+//! 1. The workspace agrees with the registry — counted per site, not per file.
+//!    A file blessed once would otherwise pre-approve every later skip added
+//!    anywhere inside it.
+//! 2. The registry agrees with the record — the ADR names every source it
+//!    classifies, so the registry cannot grow entries the decision never made.
+//! 3. The record is reachable from where it applies — CLAUDE.md and every
+//!    classified source cite a path that resolves.
+//! 4. CI still installs what the printed-notice sites depend on. That install is
+//!    the entire reason those sites are allowed to be invisible; delete it and
+//!    they become the case the record forbids, silently.
+//!
+//! ## What this does not catch
+//!
+//! The scan is textual, so its reach is the two idioms spelled the documented
+//! way. A test that returns early with no notice at all is invisible here, and
+//! so is an attribute a macro emits. Neither is a gap to close by widening the
+//! needles until they guess: a site that announces nothing is a defect in that
+//! test rather than an unclassified convention, and the honest statement of this
+//! file's guarantee is "no *detectable* skip site is unclassified".
+//!
+//! Widening [`count_sites`] trades false negatives for false positives, and the
+//! two are not symmetric. A missed site is a green CI run that checked nothing —
+//! the failure the ADR exists to prevent. A spurious match is a red workspace
+//! gate, loud and cheap, whose only real danger is that somebody quiets it by
+//! adding a fake row to [`CLASSIFIED`] and corrupting the record. [`NOT_A_SKIP`]
+//! exists so that has a correct answer instead.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// The decision this test enforces, relative to the workspace root. Named in
-/// every failure message, so it has to keep resolving.
+/// every failure message and cited from CLAUDE.md and each classified source, so
+/// it has to keep resolving.
 const ADR: &str = "docs/adr/0004-environment-dependent-test-skips.md";
 
-/// Sources carrying a printed SKIP notice, with why each is allowed to.
+/// The workflow whose installs keep the printed-notice sites on the legal side
+/// of the rule.
+const CI_WORKFLOW: &str = ".github/workflows/rust-ci.yml";
+
+/// One classified source and how many sites of each convention the record
+/// accounts for. Counts rather than a bare path, so a skip added to an
+/// already-classified file has to be classified too.
+struct Classified {
+    path: &'static str,
+    /// Printed `SKIP` notices, legal because CI satisfies the precondition.
+    notices: usize,
+    /// Tests ignored by default, because CI never can.
+    ignored: usize,
+}
+
+/// Every environment-dependent skip site in the workspace, as ADR 0004
+/// classifies it.
 ///
+/// - `exposure_scan.rs` — the ignored test scans the real R0 campaign, which
+///   codeprobe produces on an operator's machine and no runner can hold. Its one
+///   notice is nested *inside* that ignored test and reports an unset
+///   `AOA_R0_CAMPAIGN_RUNS` to somebody who asked for it by name with
+///   `--ignored`; `#[ignore]` already made the CI-honesty decision.
 /// - `imports_python.rs` / `imports_typescript.rs` — `ruff`, `node`, and the
-///   vendored ESLint are all installed by `.github/workflows/rust-ci.yml`, so
-///   these run for real in CI and the notice is a local-dev affordance.
-/// - `exposure_scan.rs` — the notice is nested *inside* an already-ignored test
-///   and reports an unset `AOA_R0_CAMPAIGN_RUNS` to somebody who asked for the
-///   test by name with `--ignored`. It is never the thing that decides whether a
-///   green CI run means anything, because `#[ignore]` already decided that.
-const PRINTED_NOTICE: &[&str] = &[
-    "crates/aoa-bench/tests/exposure_scan.rs",
-    "crates/aoa-migrate/tests/imports_python.rs",
-    "crates/aoa-migrate/tests/imports_typescript.rs",
+///   vendored ESLint are installed by [`CI_WORKFLOW`] in both its jobs, so these
+///   run for real in CI and the notices are a local-dev affordance. TypeScript
+///   carries two because it probes for `node` and the vendored ESLint
+///   separately.
+const CLASSIFIED: &[Classified] = &[
+    Classified {
+        path: "crates/aoa-bench/tests/exposure_scan.rs",
+        notices: 1,
+        ignored: 1,
+    },
+    Classified {
+        path: "crates/aoa-migrate/tests/imports_python.rs",
+        notices: 1,
+        ignored: 0,
+    },
+    Classified {
+        path: "crates/aoa-migrate/tests/imports_typescript.rs",
+        notices: 2,
+        ignored: 0,
+    },
 ];
 
-/// Sources holding a test that is ignored by default, with why each is.
+/// Sources the scan matches that hold no skip site at all — a doc comment
+/// quoting the convention, or a Rust fixture in a raw string whose text happens
+/// to carry an attribute.
 ///
-/// - `exposure_scan.rs` — scans the real R0 campaign, which codeprobe produces
-///   on an operator's machine. No CI runner can ever hold it.
-const IGNORED_BY_DEFAULT: &[&str] = &["crates/aoa-bench/tests/exposure_scan.rs"];
+/// Empty, which is the state it is meant to be in. This is the same shape as
+/// `architecture_doc.rs`'s `LAYER_EXCEPTIONS`, and carries the same warning: an
+/// entry is a licence for the scan to be wrong about one file, not a place to
+/// park a skip site somebody did not want to classify. Anything listed here must
+/// genuinely not skip on an environment precondition — if it does, it belongs in
+/// [`CLASSIFIED`] with the reason written into the ADR.
+const NOT_A_SKIP: &[&str] = &[];
+
+/// The two halves of the rule, written once so the checks cannot drift into
+/// disagreeing about what the decision was.
+const CI_CAN: &str = "eprintln!(\"SKIP …\") + return, and CI must install whatever the \
+                      test needs so the skip stays a local-dev affordance.";
+const CI_CANNOT: &str = "#[ignore], because libtest captures a passing test's output, so a \
+                         printed notice would report `ok` for a run that checked nothing.";
 
 fn workspace_root() -> PathBuf {
     // crates/aoa -> crates -> workspace root
@@ -54,12 +125,59 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Every `.rs` file under `crates/`, workspace-relative and slash-separated.
+fn read(relative: &str) -> String {
+    std::fs::read_to_string(workspace_root().join(relative))
+        .unwrap_or_else(|e| panic!("{relative} is readable: {e}"))
+}
+
+/// How many sites of each convention a source holds.
+#[derive(Default, PartialEq, Eq)]
+struct Sites {
+    notices: usize,
+    ignored: usize,
+}
+
+/// Count both conventions in one pass.
 ///
-/// Panics rather than returning an empty set when the walk finds nothing: a
-/// silently empty listing would make both assertions below vacuous passes, which
+/// The notice needle is `"SKIP` — an opening quote and the word, without the
+/// trailing space an earlier version required. That space exempted
+/// `eprintln!("SKIP: …")`, the same idiom with different punctuation. Dropping it
+/// also matches a literal opening `SKIPPED`, which costs one [`NOT_A_SKIP`] row
+/// if it ever occurs: the cheap direction to be wrong in.
+///
+/// An attribute opens its line under rustfmt, so anchoring `#[ignore` there
+/// keeps prose that discusses it from being counted. `#[cfg_attr(…, ignore)]` is
+/// the standard conditional form and is counted too, on one line, which is where
+/// rustfmt leaves it.
+fn count_sites(source: &str) -> Sites {
+    let ignored = source
+        .lines()
+        .map(str::trim_start)
+        .filter(|line| {
+            line.starts_with("#[ignore")
+                || (line.starts_with("#[cfg_attr") && line.contains("ignore"))
+        })
+        .count();
+
+    Sites {
+        notices: source.matches("\"SKIP").count(),
+        ignored,
+    }
+}
+
+/// Every `.rs` file under `crates/` holding at least one skip site, mapped to
+/// its counts.
+///
+/// `crates/` is the whole workspace: `Cargo.toml` declares
+/// `members = ["crates/*"]`, and the sibling `architecture_doc.rs` rests on the
+/// same fact. A member added elsewhere would escape this walk and would also
+/// break that test's crate-layer list, so the two fail together rather than one
+/// of them going quietly wrong.
+///
+/// Panics rather than returning an empty map when the walk finds nothing: a
+/// silently empty listing would make every assertion below a vacuous pass, which
 /// is the failure this file exists to prevent rather than commit.
-fn rust_sources() -> BTreeSet<String> {
+fn skip_sites() -> BTreeMap<String, Sites> {
     let root = workspace_root();
     let mut sources = BTreeSet::new();
     let mut pending = vec![root.join("crates")];
@@ -104,7 +222,7 @@ fn rust_sources() -> BTreeSet<String> {
          without reading a single source"
     );
 
-    // This file quotes both markers in order to search for them, so leaving it
+    // This file quotes both needles in order to search for them, so leaving it
     // in the set would make it report itself forever. It is the classifier, not
     // a classified site: it holds no test with an environment precondition, and
     // if one is ever added here it belongs in a file that skips, not in the one
@@ -118,77 +236,71 @@ fn rust_sources() -> BTreeSet<String> {
     );
 
     sources
-}
-
-/// The subset of workspace sources whose text satisfies `matches`.
-fn sources_matching(matches: fn(&str) -> bool) -> BTreeSet<String> {
-    let root = workspace_root();
-    rust_sources()
         .into_iter()
-        .filter(|relative| {
-            let source = std::fs::read_to_string(root.join(relative))
-                .unwrap_or_else(|e| panic!("{relative} is readable: {e}"));
-            matches(&source)
+        .filter(|relative| !NOT_A_SKIP.contains(&relative.as_str()))
+        .filter_map(|relative| {
+            let sites = count_sites(&read(&relative));
+            (sites != Sites::default()).then_some((relative, sites))
         })
         .collect()
 }
 
-/// A printed notice can sit anywhere on a line, so this matches the whole
-/// source. The opening quote and the trailing space are both load-bearing: they
-/// find `eprintln!("SKIP …")` and not the `SKIP_DIRS` walk constants in
-/// `aoa-audit` and `aoa-migrate`.
-fn prints_a_skip_notice(source: &str) -> bool {
-    source.contains("\"SKIP ")
-}
+#[test]
+fn every_skip_site_is_classified() {
+    let found = skip_sites();
+    let registered: BTreeMap<&str, Sites> = CLASSIFIED
+        .iter()
+        .map(|c| {
+            (
+                c.path,
+                Sites {
+                    notices: c.notices,
+                    ignored: c.ignored,
+                },
+            )
+        })
+        .collect();
 
-/// Matched without the closing bracket so both `#[ignore]` and `#[ignore = "…"]`
-/// are found, and only at the start of a trimmed line — an attribute always opens
-/// its line under rustfmt, so anchoring is what lets a doc comment discuss
-/// `#[ignore]` without being counted as a use of it.
-fn ignores_a_test(source: &str) -> bool {
-    source
-        .lines()
-        .any(|line| line.trim_start().starts_with("#[ignore"))
-}
-
-/// Compare what the workspace does against what the ADR classified, reporting
-/// each direction of drift as the different problem it is.
-///
-/// `convention` names the idiom that was found. Both halves of the rule are
-/// printed either way, because the point of the message is to send an author who
-/// copied the wrong nearby example to the other branch of the question.
-fn assert_classified(matches: fn(&str) -> bool, registered: &[&str], convention: &str) {
-    let found = sources_matching(matches);
-    let registered: BTreeSet<String> = registered.iter().map(|s| (*s).to_owned()).collect();
-
-    let unclassified: Vec<&String> = found.difference(&registered).collect();
+    let unclassified: Vec<String> = found
+        .iter()
+        .filter(|(path, sites)| registered.get(path.as_str()) != Some(sites))
+        .map(|(path, sites)| {
+            let (n, i) = registered
+                .get(path.as_str())
+                .map_or((0, 0), |r| (r.notices, r.ignored));
+            format!(
+                "{path}: found {} notice(s) and {} ignored; {ADR} accounts for {n} and {i}",
+                sites.notices, sites.ignored
+            )
+        })
+        .collect();
     assert!(
         unclassified.is_empty(),
-        "these sources skip via {convention} but {ADR} has not classified them: \
-         {unclassified:?}\n\
+        "the workspace holds skip sites {ADR} has not classified:\n  {}\n\
          The question that decides the convention is: can CI ever satisfy this \
          precondition?\n  \
          Yes -> {CI_CAN}\n  \
          No  -> {CI_CANNOT}\n\
-         Answer it in {ADR}, then add the source to this test's registry."
+         Answer it in {ADR}, then update this file's CLASSIFIED counts.\n\
+         If the match is not a skip site at all — a comment quoting the \
+         convention, or an attribute inside a raw-string fixture — it belongs in \
+         NOT_A_SKIP, never in CLASSIFIED.",
+        unclassified.join("\n  ")
     );
 
-    let stale: Vec<&String> = registered.difference(&found).collect();
+    let stale: Vec<&str> = registered
+        .keys()
+        .filter(|path| !found.contains_key(**path))
+        .copied()
+        .collect();
     assert!(
         stale.is_empty(),
-        "{ADR} classifies these sources as skipping via {convention}, but they no \
-         longer do: {stale:?}\n\
-         Drop them from the record and from this test's registry so the decision \
-         describes the workspace as it stands."
+        "{ADR} classifies these sources but they no longer skip on anything: \
+         {stale:?}\n\
+         Drop them from the record and from CLASSIFIED so the decision describes \
+         the workspace as it stands."
     );
 }
-
-/// The two halves of the rule, written once so the two checks cannot drift into
-/// disagreeing about what the decision was.
-const CI_CAN: &str = "eprintln!(\"SKIP …\") + return, and CI must install whatever the \
-                      test needs so the skip stays a local-dev affordance.";
-const CI_CANNOT: &str = "#[ignore], because libtest captures a passing test's output, so a \
-                         printed notice would report `ok` for a run that checked nothing.";
 
 #[test]
 fn the_decision_record_this_test_cites_exists() {
@@ -201,19 +313,74 @@ fn the_decision_record_this_test_cites_exists() {
 }
 
 #[test]
-fn every_printed_skip_notice_is_classified() {
-    assert_classified(
-        prints_a_skip_notice,
-        PRINTED_NOTICE,
-        "a printed SKIP notice",
+fn the_decision_record_names_every_classified_source() {
+    let adr = read(ADR);
+    // By file name, not full path: the record groups the two aoa-migrate suites
+    // and names the second one alone, which is how a human writes it.
+    let unmentioned: Vec<&str> = CLASSIFIED
+        .iter()
+        .map(|c| c.path)
+        .filter(|path| {
+            let name = path.rsplit('/').next().expect("a path has a last segment");
+            !adr.contains(name)
+        })
+        .collect();
+
+    assert!(
+        unmentioned.is_empty(),
+        "CLASSIFIED registers sources {ADR} never mentions: {unmentioned:?}\n\
+         An entry with no matching sentence in the record is a classification \
+         nobody made, and this test would then go green on a decision that was \
+         never written down. Record why each is classified as it is, or drop it."
     );
 }
 
 #[test]
-fn every_ignored_test_is_classified() {
-    assert_classified(
-        ignores_a_test,
-        IGNORED_BY_DEFAULT,
-        "an ignored-by-default attribute",
+fn every_classified_source_cites_the_decision_record() {
+    let uncited: Vec<&str> = CLASSIFIED
+        .iter()
+        .map(|c| c.path)
+        .filter(|path| !read(path).contains(ADR))
+        .collect();
+
+    assert!(
+        uncited.is_empty(),
+        "these classified sources do not cite {ADR}: {uncited:?}\n\
+         The author reading the skip site is the one who needs the rule, so each \
+         site names the record that justifies it."
     );
+}
+
+#[test]
+fn claude_md_records_the_rule() {
+    let claude_md = read("CLAUDE.md");
+    for path in [ADR, file!()] {
+        assert!(
+            claude_md.contains(path),
+            "CLAUDE.md no longer names {path}, so its conventions section points a \
+             test author at a path that does not resolve"
+        );
+    }
+}
+
+#[test]
+fn ci_installs_what_the_printed_notices_depend_on() {
+    let workflow = read(CI_WORKFLOW);
+    // Presence, not shape. This catches the deletion the record calls fatal and
+    // claims nothing about a subtler weakening (a version downgrade, a job that
+    // stops running) — those are legible in a workflow diff, whereas a deleted
+    // step is exactly what is not, because every other test here still passes.
+    for (marker, tool) in [
+        ("actions/setup-node", "node"),
+        ("crates/aoa-migrate/assets/eslint", "the vendored ESLint"),
+        ("pipx install ruff", "ruff"),
+    ] {
+        assert!(
+            workflow.contains(marker),
+            "{CI_WORKFLOW} no longer installs {tool} ({marker} is gone), so the \
+             sites {ADR} classifies as printed notices would skip in CI and report \
+             `ok` having checked nothing — the case the record forbids.\n\
+             Restore the install, or reclassify those sites: {CI_CANNOT}"
+        );
+    }
 }
