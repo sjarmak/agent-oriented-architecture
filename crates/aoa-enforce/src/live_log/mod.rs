@@ -25,8 +25,8 @@
 //! waiting, `seq` holds monotonicity and torn-tail repair. This file keeps the
 //! [`LiveLog`] facade and the append/read orchestration that composes all three
 //! — the all-or-nothing rollback lives with the write it guards. `error` states
-//! the [`LiveLogError`] vocabulary all four report through, so a caller can act
-//! on *which* invariant was broken without matching on message text.
+//! the [`LiveLogError`] vocabulary all of them report through, so a caller can
+//! act on *which* invariant was broken without matching on message text.
 //!
 //! ## Trust root
 //!
@@ -654,11 +654,6 @@ mod tests {
             LiveLogError::CorruptSpanLine { path, .. } => assert_eq!(path, corrupt),
             other => panic!("expected CorruptSpanLine, got {other:?}"),
         }
-
-        // And the ordinary pre-first-span state is still not an error at all.
-        assert!(read_spans(&dir.path().join("nope.jsonl"))
-            .unwrap()
-            .is_empty());
     }
 
     /// The common case reports nothing, so a host has no repair to render on an

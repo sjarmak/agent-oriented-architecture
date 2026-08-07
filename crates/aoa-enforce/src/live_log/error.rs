@@ -3,7 +3,7 @@
 //!
 //! # Why this is typed rather than `anyhow`
 //!
-//! The module used to thread `anyhow` through all four submodules. Nothing
+//! The module used to thread `anyhow` through every submodule. Nothing
 //! public named an `anyhow` type by hand, but [`LiveLog::read_spans`],
 //! [`LiveLog::append`] and [`LiveLog::append_with`] all returned
 //! `anyhow::Result`, so the workspace's thiserror convention was in fact broken
@@ -17,17 +17,18 @@
 //!
 //! # How the variants were triaged
 //!
-//! The four submodules stated 21 distinct contexts. Two groups are the same
-//! failure wearing a different noun and are deliberately merged; the merge is
-//! recorded here so a later reader can tell a decision from an oversight.
+//! The three invariant submodules and the facade above them stated 21 distinct
+//! contexts; eleven variants carry them. Two groups are the same failure
+//! wearing a different noun and are deliberately merged; the merge is recorded
+//! here so a later reader can tell a decision from an oversight.
 //!
-//! - [`LiveLogError::Io`] covers all eleven syscall contexts — opening and
-//!   creating the `.aoa`/`traces` components and the log itself, `stat`, `read`,
-//!   `seek`, `flock`, the append `write_all`, and the `set_len` that repairs a
-//!   torn tail. Every one of them already rendered `failed to <verb> <path>`
-//!   over an [`std::io::Error`], and the operator's remedy is whatever the
-//!   underlying errno says, not which of our calls made it. The verb is now the
-//!   [`IoAction`] field, and the messages are unchanged byte-for-byte.
+//! - [`LiveLogError::Io`] covers all eight syscall verbs — `open`, `create`,
+//!   `stat`, `read`, `seek`, `flock`, the append `write_all`, and the `set_len`
+//!   that repairs a torn tail. Every one of them already rendered
+//!   `failed to <verb> <path>` over an [`std::io::Error`], and the operator's
+//!   remedy is whatever the underlying errno says, not which of our calls made
+//!   it. The verb is now the [`IoAction`] field, and the messages are unchanged
+//!   byte-for-byte.
 //! - [`LiveLogError::MalformedLogPath`] covers the four `log_parts` faults. They
 //!   are one condition — the path handed in is not `<repo>/.aoa/traces/<name>`
 //!   — reported once per missing component, and the component is now a field.
@@ -63,7 +64,6 @@ pub type Result<T> = std::result::Result<T, LiveLogError>;
 
 /// Every way reading from or appending to the live span log can fail.
 #[derive(Debug, Error)]
-#[non_exhaustive]
 pub enum LiveLogError {
     /// A filesystem operation on the log or a directory above it failed. The
     /// operation is the field; see the triage note above for why these are one
@@ -191,7 +191,6 @@ impl LiveLogError {
 /// The filesystem operation a [`LiveLogError::Io`] was reporting. Renders as
 /// the verb phrase in `failed to <verb> <path>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum IoAction {
     Open,
     Create,
@@ -220,7 +219,6 @@ impl fmt::Display for IoAction {
 
 /// Which component a malformed log path was missing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum LogPathComponent {
     TracesDir,
     AoaDir,
