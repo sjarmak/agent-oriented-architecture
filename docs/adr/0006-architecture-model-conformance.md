@@ -49,6 +49,16 @@ workflow would ever have said any of this.
   drawing every one of its edges would say nothing. Its arrows are drawn where
   they carry meaning — where the composition root is what joins two crates that
   do not know each other — and are checked for truth, never exhaustiveness.
+- **No arrow may be drawn at a grouping that stands for several crates.** A
+  container with exactly one crate under it resolves to that crate, so an arrow
+  there is checked like any other; one over several — `aoa.substrate`,
+  `aoa.measure` — names neither end of what it claims, and there is nothing to
+  check it against. Left unchecked it would be the one shape of claim that can
+  sit in a published diagram, read as authoritative, and never be wrong enough
+  to fail. Both reviewers of this change found the same gap independently, and
+  each demonstrated it with `aoa.substrate -> aoa.migrate`, which passed every
+  test before the rule existed. Draw the arrow between the components that have
+  the dependency.
 - **`#conceptual`** marks a relationship that is deliberately not a code edge.
   Today there is one: R0's verdict gating whether `migrate` is worth trusting
   on a repository is read by an operator, not called by a crate. Each use is

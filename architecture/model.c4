@@ -25,6 +25,11 @@
 //   - The `aoa` CLI is the single exception to that last rule. It depends on
 //     every library, so drawing all of its edges would say nothing; its arrows
 //     are drawn where they carry meaning and are checked only for being true.
+//   - No arrow may be drawn at a container standing for several crates. One
+//     holding a single crate (aoa.migrate) resolves to it and is checked like
+//     any other; one holding several (aoa.substrate, aoa.measure) names neither
+//     end of what it claims, so nothing could check it. Draw it between the
+//     components that have the dependency.
 //   - #conceptual marks an arrow that is deliberately not a code edge. Each one
 //     is registered with its reason in that test, and the registration is
 //     deleted the moment the edge becomes real.

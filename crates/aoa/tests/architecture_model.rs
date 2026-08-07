@@ -28,6 +28,9 @@
 //!   so drawing every one of its edges would say nothing. Its arrows are drawn
 //!   where they carry meaning and are checked for truth, never for
 //!   exhaustiveness.
+//! - **No arrow at a grouping over several crates.** One over a single crate
+//!   resolves to it and is checked; one over several names neither end of what
+//!   it claims, so nothing could check it. See [`crate_edges`].
 //! - **`#conceptual`** marks a relationship that is deliberately not a code
 //!   edge. Each one is registered in [`CONCEPTUAL_EDGES`] with a reason, and
 //!   [`conceptual_edges_are_registered_and_still_conceptual`] deletes the
@@ -102,6 +105,9 @@ impl Model {
 
         for element in &self.elements {
             for name in element.linked_crates() {
+                // `entry` rather than `insert`, so the common path moves the
+                // name in without cloning and only the duplicate path reads it
+                // back.
                 match owners.entry(name) {
                     std::collections::btree_map::Entry::Vacant(slot) => {
                         slot.insert(element.fqn.as_str());
@@ -128,41 +134,82 @@ impl Model {
         owners
     }
 
-    /// The crate a relationship endpoint stands for, if any.
-    ///
-    /// An element that links a crate directly is that crate. A grouping element
-    /// resolves to the single crate in its subtree when there is exactly one:
-    /// `aoa.migrate` holds only `aoa.migrate.migrator`, so an arrow drawn at
-    /// the container claims exactly what an arrow at the component would, and
-    /// checking only the second would leave the first as a way around this
-    /// test. A grouping with several crates under it — `aoa.substrate`,
-    /// `aoa.measure` — stands for no single crate and is left alone.
-    fn resolve<'a>(&'a self, fqn: &str, owners: &BTreeMap<String, &'a str>) -> Option<String> {
-        if let Some((name, _)) = owners.iter().find(|(_, owner)| **owner == fqn) {
-            return Some(name.clone());
-        }
-
-        let prefix = format!("{fqn}.");
-        let mut under: Vec<String> = owners
+    /// Every element's fully qualified name.
+    fn fqns(&self) -> BTreeSet<&str> {
+        self.elements
             .iter()
-            .filter(|(_, owner)| owner.starts_with(&prefix))
-            .map(|(name, _)| name.clone())
-            .collect();
-        match under.len() {
-            1 => under.pop(),
-            _ => None,
-        }
+            .map(|element| element.fqn.as_str())
+            .collect()
+    }
+}
+
+/// What a relationship endpoint stands for.
+enum Endpoint {
+    /// Exactly one crate: the element links it, or it is a grouping with a
+    /// single crate-backed element under it.
+    Crate(String),
+    /// No crate anywhere under it — an actor, or one of the external systems.
+    /// An arrow here claims nothing about the build graph.
+    Outside,
+    /// A grouping standing for several crates.
+    Grouping(usize),
+}
+
+/// Resolve an endpoint against the crates the model links.
+///
+/// An element that links a crate directly is that crate. A grouping resolves to
+/// the single crate in its subtree when there is exactly one: `aoa.migrate`
+/// holds only `aoa.migrate.migrator`, so an arrow drawn at the container claims
+/// exactly what an arrow at the component would, and checking only the second
+/// would leave the first as a way around this test.
+///
+/// A grouping over several crates is [`Endpoint::Grouping`] rather than "no
+/// crate". The two are not the same and collapsing them was a hole:
+/// `aoa.substrate -> aoa.migrate` would have been dropped as unresolvable and
+/// gone unchecked, while rendering as an arrow between two halves of the system
+/// — a dependency claim with nothing behind it, which is the whole defect this
+/// file exists to catch. [`crate_edges`] refuses it.
+fn resolve(fqn: &str, owners: &BTreeMap<String, &str>) -> Endpoint {
+    if let Some((name, _)) = owners.iter().find(|(_, owner)| **owner == fqn) {
+        return Endpoint::Crate(name.clone());
+    }
+
+    let prefix = format!("{fqn}.");
+    let mut under = owners
+        .iter()
+        .filter(|(_, owner)| owner.starts_with(&prefix))
+        .map(|(name, _)| name.clone());
+    match (under.next(), under.next()) {
+        (None, _) => Endpoint::Outside,
+        (Some(only), None) => Endpoint::Crate(only),
+        (Some(_), Some(_)) => Endpoint::Grouping(2 + under.count()),
     }
 }
 
 impl Element {
+    /// The crates this element's links point into.
+    ///
+    /// The name has to be a plain directory name. Stripping `../crates/` off a
+    /// link is a text operation, so a link written `../crates/../Cargo.toml`
+    /// would otherwise yield `..` and be carried onward as if it were a crate:
+    /// [`declared_dependencies`] would read the workspace manifest, find no
+    /// `aoa-*` entries in it, and report a phantom arrow — a true failure with
+    /// a misleading reason. Rejecting the name here says what is actually
+    /// wrong, and keeps every path this file builds inside `crates/`.
     fn linked_crates(&self) -> BTreeSet<String> {
         self.links
             .iter()
             .filter_map(|link| link.strip_prefix("../crates/"))
             .filter_map(|rest| rest.split('/').next())
             .filter(|name| !name.is_empty())
-            .map(str::to_owned)
+            .map(|name| {
+                assert!(
+                    !name.contains(['.', std::path::MAIN_SEPARATOR]),
+                    "{} links ../crates/{name}/…, which is not a crate directory name",
+                    self.fqn
+                );
+                name.to_owned()
+            })
             .collect()
     }
 }
@@ -189,6 +236,15 @@ impl Relationship {
 /// Two restrictions are enforced rather than handled, because both would make
 /// the classifier below quietly wrong rather than loudly broken: a string may
 /// not span lines, and a statement may not.
+///
+/// Two more are constraints on the `.c4` files rather than on this function,
+/// and are written down because nothing else states them. A description must
+/// spell an apostrophe as `’` and not `'`, which is what both files already do:
+/// a straight apostrophe toggles `in_string`, and while an odd number of them
+/// on a line trips the assertion below, an even number would silently swap
+/// which halves of the line count as string. And a comment must be a whole
+/// line, since only a leading `//` is stripped; a trailing one survives into
+/// the statement, where the whitelist rejects it rather than misreading it.
 fn sanitized_lines(source: &str, path: &str) -> Vec<(usize, String)> {
     let mut out = Vec::new();
 
@@ -230,13 +286,21 @@ fn sanitized_lines(source: &str, path: &str) -> Vec<(usize, String)> {
 /// reports green on a file it did not understand: a new `.c4` construct would
 /// otherwise be read as "no elements here", and a test that checks nothing
 /// passes.
+///
+/// It is over the workspace's usual function-length bar, and deliberately so.
+/// The whitelist is the fail-closed property, and it only reads as exhaustive
+/// while every arm and the final `panic!` are visible together; split across
+/// per-construct helpers, "is anything missing" stops being answerable by
+/// reading one screen. The branches it would split into are what [`fail_closed`]
+/// tests one by one instead.
 fn parse_model(source: &str, path: &str) -> Model {
-    /// What the enclosing `{` opened. Only `Element` contributes to a fully
-    /// qualified name; a relationship's trailing block holds tags and must not
-    /// be mistaken for a nested element, or every name after it is wrong.
+    /// What the enclosing `{` opened, as an index into the model it opened
+    /// into. Only `Element` contributes to a fully qualified name; a
+    /// relationship's trailing block holds tags and must not be mistaken for a
+    /// nested element, or every name after it is wrong.
     enum Scope {
         Anonymous,
-        Element(String),
+        Element(usize),
         Relationship(usize),
     }
 
@@ -268,16 +332,18 @@ fn parse_model(source: &str, path: &str) -> Model {
             continue;
         }
 
+        // A block is opened by a trailing `{`. String literals are already
+        // emptied, so no description can end in one.
+        let opens_block = statement.ends_with('{');
+
         if let Some((source_fqn, rest)) = statement.split_once("->") {
-            let source_fqn = source_fqn.trim();
-            let mut rest = rest.split_whitespace();
             let target_fqn = rest
+                .split_whitespace()
                 .next()
                 .unwrap_or_else(|| panic!("{path}:{line}: a relationship with no target"));
-            let opens_block = rest.clone().last() == Some("{");
 
             model.relationships.push(Relationship {
-                source: source_fqn.to_owned(),
+                source: source_fqn.trim().to_owned(),
                 target: target_fqn.to_owned(),
                 tags: BTreeSet::new(),
                 line,
@@ -293,19 +359,10 @@ fn parse_model(source: &str, path: &str) -> Model {
                 .split_whitespace()
                 .next()
                 .unwrap_or_else(|| panic!("{path}:{line}: a link with no target"));
-            match scopes.last() {
-                Some(Scope::Element(fqn)) => {
-                    let fqn = fqn.clone();
-                    model
-                        .elements
-                        .iter_mut()
-                        .find(|element| element.fqn == fqn)
-                        .expect("the open element was recorded when its scope opened")
-                        .links
-                        .push(target.to_owned());
-                }
-                _ => panic!("{path}:{line}: a link outside any element"),
-            }
+            let Some(Scope::Element(index)) = scopes.last() else {
+                panic!("{path}:{line}: a link outside any element");
+            };
+            model.elements[*index].links.push(target.to_owned());
             continue;
         }
 
@@ -314,40 +371,37 @@ fn parse_model(source: &str, path: &str) -> Model {
             continue;
         }
 
-        if ["description", "technology", "title", "style", "notation"]
-            .iter()
-            .any(|keyword| statement.starts_with(&format!("{keyword} ")))
-        {
+        let keyword = statement
+            .split_once(char::is_whitespace)
+            .map_or("", |(keyword, _)| keyword);
+        if ["description", "technology", "title", "style", "notation"].contains(&keyword) {
             continue;
         }
 
         if let Some((name, declaration)) = statement.split_once('=') {
             let name = name.trim();
-            let mut declaration = declaration.split_whitespace();
-            let kind = declaration.next().unwrap_or_default();
+            let kind = declaration.split_whitespace().next().unwrap_or_default();
             assert!(
                 !name.is_empty() && !name.contains(char::is_whitespace) && !kind.is_empty(),
                 "{path}:{line}: not a recognizable element declaration: {statement:?}"
             );
 
-            let parent: Vec<&str> = scopes
-                .iter()
-                .filter_map(|scope| match scope {
-                    Scope::Element(fqn) => Some(fqn.as_str()),
-                    _ => None,
-                })
-                .collect();
-            let fqn = match parent.last() {
+            // The innermost open element is the parent; a relationship's tag
+            // block or the anonymous `model {` never names anything.
+            let fqn = match scopes.iter().rev().find_map(|scope| match scope {
+                Scope::Element(index) => Some(model.elements[*index].fqn.as_str()),
+                _ => None,
+            }) {
                 Some(parent) => format!("{parent}.{name}"),
                 None => name.to_owned(),
             };
 
             model.elements.push(Element {
-                fqn: fqn.clone(),
+                fqn,
                 links: Vec::new(),
             });
-            if statement.ends_with('{') {
-                scopes.push(Scope::Element(fqn));
+            if opens_block {
+                scopes.push(Scope::Element(model.elements.len() - 1));
             }
             continue;
         }
@@ -386,32 +440,43 @@ fn model() -> Model {
     parse_model(&read(MODEL), MODEL)
 }
 
-/// Every relationship reduced to the crate edge it claims, dropping the ones
-/// that do not claim a crate edge at all: arrows to actors, to the external
-/// systems, and to groupings that stand for more than one crate.
+/// Every relationship reduced to the crate edge it claims, dropping only the
+/// ones that claim no crate edge at all: arrows to the actors and the external
+/// systems.
+///
+/// An arrow may not be drawn at a grouping that stands for several crates. Such
+/// an arrow reads on the rendered diagram as a dependency between two halves of
+/// the system while naming neither crate, so there is nothing to check it
+/// against — it would be the one shape of claim that could sit in a published
+/// model, look authoritative, and never be wrong enough to fail. Draw it
+/// between the components that actually have the dependency.
 fn crate_edges(model: &Model) -> Vec<(String, String, &Relationship)> {
     let owners = model.crate_owners();
-    let declared: BTreeSet<&str> = model
-        .elements
-        .iter()
-        .map(|element| element.fqn.as_str())
-        .collect();
+    let declared = model.fqns();
 
     let mut edges = Vec::new();
     for relationship in &model.relationships {
-        for endpoint in [&relationship.source, &relationship.target] {
+        let ends = [&relationship.source, &relationship.target].map(|endpoint| {
             assert!(
                 declared.contains(endpoint.as_str()),
                 "{MODEL}:{}: {endpoint} is not an element declared in this file. \
                  An endpoint nobody declared is an arrow nothing checks",
                 relationship.line
             );
-        }
+            let end = resolve(endpoint, &owners);
+            if let Endpoint::Grouping(crates) = end {
+                panic!(
+                    "{MODEL}:{}: this arrow is drawn at {endpoint}, a grouping over \
+                     {crates} crates, so it claims a dependency without naming \
+                     either end of it and nothing can check it. Draw it between \
+                     the components that have the dependency",
+                    relationship.line
+                );
+            }
+            end
+        });
 
-        let (Some(source), Some(target)) = (
-            model.resolve(&relationship.source, &owners),
-            model.resolve(&relationship.target, &owners),
-        ) else {
+        let [Endpoint::Crate(source), Endpoint::Crate(target)] = ends else {
             continue;
         };
         edges.push((source, target, relationship));
@@ -590,11 +655,7 @@ fn the_model_carries_its_own_decision_record() {
 #[test]
 fn every_view_step_names_an_element_that_exists() {
     let model = model();
-    let declared: BTreeSet<&str> = model
-        .elements
-        .iter()
-        .map(|element| element.fqn.as_str())
-        .collect();
+    let declared = model.fqns();
 
     let views = read(VIEWS);
     let mut steps = 0usize;
@@ -625,4 +686,91 @@ fn every_view_step_names_an_element_that_exists() {
          is deliberately not held to the dependency graph, but a step pointing \
          at a renamed or deleted element describes nothing at all"
     );
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// The parser's fail-closed branches.
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Everything above runs against the real `model.c4`, which is well-formed, so
+/// none of it ever reaches a rejection path. That leaves the property the whole
+/// file rests on — that an unrecognized construct panics instead of being read
+/// as nothing — asserted by no test at all. A regression in the whitelist, or
+/// in the order its arms are tried, would turn the rejection into a silent skip
+/// and every check above into a vacuous pass, with the suite still green.
+///
+/// These snippets are synthetic on purpose: each one is the smallest input that
+/// reaches one branch.
+mod fail_closed {
+    use super::{parse_model, Model};
+
+    const PATH: &str = "<snippet>";
+
+    fn parse(source: &str) -> Model {
+        parse_model(source, PATH)
+    }
+
+    #[test]
+    #[should_panic(expected = "unrecognized statement")]
+    fn a_construct_the_whitelist_does_not_know_is_rejected() {
+        parse("model {\n  bogusStatement someArgument\n}\n");
+    }
+
+    #[test]
+    #[should_panic(expected = "a closing brace with nothing open")]
+    fn a_brace_closing_nothing_is_rejected() {
+        parse("}\n");
+    }
+
+    #[test]
+    #[should_panic(expected = "the file ends with an unclosed block")]
+    fn a_block_left_open_is_rejected() {
+        parse("model {\n  a = component 'x' {\n");
+    }
+
+    #[test]
+    #[should_panic(expected = "a link outside any element")]
+    fn a_link_belonging_to_no_element_is_rejected() {
+        parse("model {\n  link ../crates/aoa-trace 'x'\n}\n");
+    }
+
+    #[test]
+    #[should_panic(expected = "a string literal is left open")]
+    fn a_string_running_past_the_line_is_rejected() {
+        parse("model {\n  a = component 'unterminated\n}\n");
+    }
+
+    #[test]
+    #[should_panic(expected = "a relationship with no target")]
+    fn an_arrow_pointing_at_nothing_is_rejected() {
+        parse("model {\n  a ->\n}\n");
+    }
+
+    #[test]
+    #[should_panic(expected = "not a recognizable element declaration")]
+    fn a_nameless_declaration_is_rejected() {
+        parse("model {\n   = component 'x' {\n  }\n}\n");
+    }
+
+    /// The guard that matters most: a parse that finds nothing must not be
+    /// mistaken for a model with nothing wrong in it.
+    #[test]
+    #[should_panic(expected = "Finding nothing is how")]
+    fn a_parse_that_yields_no_model_is_rejected() {
+        parse("model {\n}\n");
+    }
+
+    #[test]
+    #[should_panic(expected = "which is not a crate directory name")]
+    fn a_link_escaping_the_crates_directory_is_rejected() {
+        parse(concat!(
+            "model {\n",
+            "  a = component 'x' {\n",
+            "    link ../crates/../Cargo.toml 'escape'\n",
+            "  }\n",
+            "  a -> a 'self'\n",
+            "}\n",
+        ))
+        .crate_owners();
+    }
 }
