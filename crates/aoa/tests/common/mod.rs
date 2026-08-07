@@ -1,12 +1,10 @@
 //! What a documentation test needs before it can read the document (aoa-g7yxv).
 //!
 //! Three integration-test targets in this directory assert that a file under
-//! the workspace root still says what the workspace does: `architecture_doc.rs`
-//! (CLAUDE.md's crate list), `decision_records.rs` (`docs/adr/`), and
-//! `environment_dependent_skips.rs` (ADR 0004 and the sites it classifies).
-//! Each one starts from the same two steps — find the workspace root from
-//! `CARGO_MANIFEST_DIR`, then read a path relative to it and panic loudly if it
-//! is missing — and each had grown its own byte-identical copy of both.
+//! the workspace root still says what the workspace does, and each had grown
+//! its own byte-identical copy of the two steps that takes: find the workspace
+//! root from `CARGO_MANIFEST_DIR`, then read a path relative to it and panic
+//! loudly if it is missing.
 //!
 //! Loud is the load-bearing part. A test that reads a document and quietly gets
 //! nothing back passes while checking nothing, which is the failure these
