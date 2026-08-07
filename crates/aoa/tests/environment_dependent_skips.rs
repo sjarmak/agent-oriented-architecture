@@ -44,7 +44,10 @@
 //! exists so that has a correct answer instead.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+
+mod common;
+
+use common::{read, workspace_root};
 
 /// The decision this test enforces, relative to the workspace root. Named in
 /// every failure message and cited from CLAUDE.md and each classified source, so
@@ -115,20 +118,6 @@ const CI_CAN: &str = "eprintln!(\"SKIP …\") + return, and CI must install what
                       test needs so the skip stays a local-dev affordance.";
 const CI_CANNOT: &str = "#[ignore], because libtest captures a passing test's output, so a \
                          printed notice would report `ok` for a run that checked nothing.";
-
-fn workspace_root() -> PathBuf {
-    // crates/aoa -> crates -> workspace root
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("crates/aoa sits two levels below the workspace root")
-        .to_path_buf()
-}
-
-fn read(relative: &str) -> String {
-    std::fs::read_to_string(workspace_root().join(relative))
-        .unwrap_or_else(|e| panic!("{relative} is readable: {e}"))
-}
 
 /// How many sites of each convention a source holds.
 #[derive(Default, PartialEq, Eq)]

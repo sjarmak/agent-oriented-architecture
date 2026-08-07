@@ -21,7 +21,10 @@
 //! entry is a licence for a tracked edge to stay wrong, not a place to park one.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+
+mod common;
+
+use common::{read, workspace_root};
 
 /// The prose immediately above the layer bullets. The list is anchored to it
 /// rather than to a heading so that reordering sections cannot silently point
@@ -35,15 +38,6 @@ const LIST_ANCHOR: &str = "remaining crates are narrow libraries:";
 /// layer list.
 const CLI_CRATE: &str = "aoa";
 
-fn workspace_root() -> PathBuf {
-    // crates/aoa -> crates -> workspace root
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("crates/aoa sits two levels below the workspace root")
-        .to_path_buf()
-}
-
 /// The crate names each layer bullet claims, one inner `Vec` per bullet, in
 /// document order. Bullet order *is* layer order: the list runs bottom-up, so a
 /// crate may depend on its own bullet or an earlier one and never a later one.
@@ -52,8 +46,7 @@ fn workspace_root() -> PathBuf {
 /// missing: a parser that quietly finds nothing would turn every assertion below
 /// into a vacuous pass, which is worse than having no test.
 fn layer_bullets() -> Vec<Vec<String>> {
-    let claude_md =
-        std::fs::read_to_string(workspace_root().join("CLAUDE.md")).expect("CLAUDE.md is readable");
+    let claude_md = read("CLAUDE.md");
     let (_, after_anchor) = claude_md
         .split_once(LIST_ANCHOR)
         .unwrap_or_else(|| panic!("CLAUDE.md no longer contains the anchor {LIST_ANCHOR:?}"));

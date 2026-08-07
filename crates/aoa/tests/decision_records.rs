@@ -11,24 +11,13 @@
 //! file fails on both.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+
+mod common;
+
+use common::{read, workspace_root};
 
 /// The index every citation resolves to, relative to the workspace root.
 const INDEX: &str = "docs/adr/README.md";
-
-fn workspace_root() -> PathBuf {
-    // crates/aoa -> crates -> workspace root
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("crates/aoa sits two levels below the workspace root")
-        .to_path_buf()
-}
-
-fn read(relative: &str) -> String {
-    let path = workspace_root().join(relative);
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{relative} is readable: {e}"))
-}
 
 /// The ADR files present on disk, excluding the index itself.
 ///
