@@ -410,7 +410,17 @@ fn parse_model(source: &str, path: &str) -> Model {
         let keyword = statement
             .split_once(char::is_whitespace)
             .map_or("", |(keyword, _)| keyword);
-        if ["description", "technology", "title", "style", "notation"].contains(&keyword) {
+        // The whitelist matches on the statement's first WORD, and an element
+        // may legally be named after one of those words. `title = container
+        // '…' {` is a declaration, not a `title` directive, and reading it as
+        // the directive drops the element with no complaint and reparents
+        // every child it held one level up — the third instance of the silent
+        // misread this file exists to make impossible. Shape decides, so the
+        // declaration is recognized first and the whitelist only gets what is
+        // not one.
+        if ["description", "technology", "title", "style", "notation"].contains(&keyword)
+            && !declares_element(statement)
+        {
             // A whitelisted statement is skipped, not read — but `style { … }`
             // still opens a block, and skipping one without pushing a scope
             // hands its closing brace to the enclosing element instead. Every
@@ -473,6 +483,29 @@ fn parse_model(source: &str, path: &str) -> Model {
         model.relationships.len()
     );
     model
+}
+
+/// Whether a statement is `name = kind …`, the shape that declares an element.
+///
+/// This is what keeps the keyword whitelist from swallowing a declaration whose
+/// name happens to be a whitelisted word. It asks the same question the
+/// declaration arm asks, so the two cannot disagree about what a declaration is:
+/// a single bare name left of the first `=`, and a kind after it. String
+/// literals are emptied before any statement reaches here, so no `=` inside a
+/// description can be mistaken for the one that splits a declaration.
+fn declares_element(statement: &str) -> bool {
+    statement
+        .split_once('=')
+        .is_some_and(|(name, declaration)| {
+            let name = name.trim();
+            !name.is_empty()
+                && !name.contains(char::is_whitespace)
+                && !declaration
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .is_empty()
+        })
 }
 
 const MODEL: &str = "architecture/model.c4";
@@ -869,6 +902,41 @@ mod known_holes {
             model.crate_owners().get("aoa-trace"),
             Some(&"aoa.trace"),
             "the link belongs to the component it was written inside"
+        );
+    }
+
+    /// The whitelist matches a statement's first word, and an element may be
+    /// named after one of those words. Read as the directive it resembles,
+    /// `title = container '…' {` vanishes with no complaint and every element
+    /// inside it is reparented one level up — so a container could disappear
+    /// from the model while the arrows that survived it still resolved and
+    /// passed. That is the same silent misread as the unlinked component and
+    /// the `style` block, reached a third way, which is why the parser decides
+    /// on shape rather than on the first word.
+    #[test]
+    fn an_element_named_after_a_whitelisted_keyword_is_still_an_element() {
+        let model = parse_model(
+            concat!(
+                "model {\n",
+                "  aoa = system 'AOA' {\n",
+                "    title = container 'Named after a keyword' {\n",
+                "      trace = component 'aoa-trace' {\n",
+                "        link ../crates/aoa-trace 'crates/aoa-trace/'\n",
+                "      }\n",
+                "    }\n",
+                "  }\n",
+                "  aoa.title.trace -> aoa.title.trace 'self'\n",
+                "}\n",
+            ),
+            PATH,
+        );
+
+        assert_eq!(
+            model.crate_owners().get("aoa-trace"),
+            Some(&"aoa.title.trace"),
+            "the component keeps the parent it was written inside, so the \
+             container named `title` was read as a container and not skipped \
+             as a `title` directive"
         );
     }
 }
