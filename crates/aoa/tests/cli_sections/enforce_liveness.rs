@@ -4,9 +4,16 @@
 //! It could not tell **installed and enforcing** from **installed and silently
 //! emitting nothing** — settings.json reads identically in both, and the absent
 //! live log reads as no-activity rather than as broken instrumentation
-//! (aoa-dpluh). These are the boundary tests for the three-state answer: the
-//! silent state must be reported as silent and must never be reported as
-//! enforcing.
+//! (aoa-dpluh). These are the boundary tests for that answer: the silent state
+//! must be reported as silent and must never be reported as enforcing.
+//!
+//! The fourth state is the one a clean checkout is in. Registration is tracked
+//! (`.claude/settings.json` and the wrapper are force-included in `.gitignore`)
+//! and telemetry is ignored (`.aoa/`), so every fresh clone carries a registered
+//! plane and no local runtime footprint at all — and used to audit as a Tier-1
+//! silent plane on that basis alone, failing the CI self-audit gate on a
+//! condition no checkout can satisfy (aoa-rsixa). That state is reported, and it
+//! still raises a finding, but at the tier its evidence actually supports.
 
 use super::enforce::{aoa_stdin, hook_payload, observe_enforce};
 use super::*;
@@ -67,6 +74,7 @@ fn installed_hooks_that_never_ran_report_silent_and_never_enforcing() {
     );
     assert_eq!(silent[0]["tier"], "tier-1");
     assert_eq!(silent[0]["plane"], "runtime-hook");
+    assert_eq!(silent[0]["measured_cost"]["unit"], "silent plane");
 }
 
 /// The negative direction of (d): a repo genuinely emitting spans reports
@@ -118,7 +126,7 @@ fn the_silent_state_is_loud_in_the_human_register() {
         .stdout(predicate::str::contains("NOT enforcing"));
 }
 
-/// A repo with no hook set at all is the third state, and it is distinct from
+/// A repo with no hook set at all is a state of its own, and it is distinct from
 /// silence: there is nothing installed to be silent about, and the existing
 /// missing-plane finding already covers it. Reporting silence here would tell an
 /// operator to debug an install that was never done.
@@ -141,20 +149,165 @@ fn a_repo_with_no_hook_set_reports_not_installed() {
     );
 }
 
-/// (e) An absent `.aoa/traces` is not the same fact as an empty one. Both are
-/// silence, but only one of them means the telemetry install itself never ran,
-/// and an operator handed a single undifferentiated "silent" cannot tell which
-/// thing to fix.
+/// A tree with a registered plane and no `.aoa/` at all is the shape of every
+/// clean checkout, and it is not the shape of a plane that went silent.
+///
+/// `observe --enforce` provisions `.aoa/traces/` as part of installing, so that
+/// directory is the local install's own footprint; removing it leaves exactly
+/// what git hands a fresh clone — the tracked registration, no telemetry. The
+/// install is driven through the real command rather than a transcribed
+/// settings.json for the reason `planes.rs` records: a hand-spelled hook fixture
+/// drifted from `hook_command` and kept passing.
 #[test]
-fn an_absent_traces_directory_is_distinguished_from_an_empty_one() {
+fn a_checkout_with_no_local_telemetry_is_unobserved_rather_than_silent() {
     let repo = TempDir::new().unwrap();
     observe_enforce(repo.path());
     std::fs::remove_dir_all(repo.path().join(".aoa")).unwrap();
 
     let report = audit_json(repo.path());
-    assert_eq!(liveness_state(&report), "installed-but-silent");
     assert_eq!(
-        report["enforcement_liveness"]["silence"], "traces-directory-absent",
-        "an absent traces dir must not read as an empty one: {report}"
+        liveness_state(&report),
+        "installed-unobserved",
+        "a registered plane with no local runtime footprint has not been \
+         observed running; asserting it went silent claims a measurement that \
+         was never taken: {report}"
     );
+    assert!(
+        report["enforcement_liveness"]["silence"].is_null(),
+        "the unobserved state carries no silence reason — it is not silence: {report}"
+    );
+}
+
+/// The regression proper (aoa-rsixa). `audit --fail-on tier1` is the CI
+/// self-audit gate, and on a pristine checkout it exited 2 on the finding above
+/// — a gate keyed on local runtime state that `.gitignore` guarantees no
+/// checkout can carry, so no CI run could ever have passed it.
+#[test]
+fn a_checkout_with_no_local_telemetry_passes_the_tier1_gate() {
+    let repo = TempDir::new().unwrap();
+    observe_enforce(repo.path());
+    std::fs::remove_dir_all(repo.path().join(".aoa")).unwrap();
+    std::fs::create_dir_all(repo.path().join(".github/workflows")).unwrap();
+
+    aoa_stdin()
+        .args(["audit", "--fail-on", "tier1", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .success();
+}
+
+/// Still a finding, and still loud — the checkout case is downgraded, not
+/// dropped. A consumer reading only `items` must not be able to mistake an
+/// unobserved plane for a healthy one, which is the guarantee the silent state
+/// was given and the reason this is not simply omitted from the punch-list.
+#[test]
+fn an_unobserved_plane_is_still_a_finding_in_both_registers() {
+    let repo = TempDir::new().unwrap();
+    observe_enforce(repo.path());
+    std::fs::remove_dir_all(repo.path().join(".aoa")).unwrap();
+
+    let report = audit_json(repo.path());
+    let silent: Vec<&Value> = report["items"]
+        .as_array()
+        .expect("items array")
+        .iter()
+        .filter(|item| item["kind"] == "silent_plane")
+        .collect();
+    assert_eq!(
+        silent.len(),
+        1,
+        "an unobserved plane still raises exactly one finding: {report}"
+    );
+    assert_eq!(
+        silent[0]["tier"], "tier-3",
+        "the audit has no measurement showing this plane stopped emitting, so \
+         the finding sits at the asserted-but-unsupported tier: {report}"
+    );
+    assert_eq!(silent[0]["plane"], "runtime-hook");
+    assert_eq!(
+        silent[0]["measured_cost"]["unit"], "unobserved plane",
+        "the cost unit is the only place `items` says which of the two \
+         not-emitting states this is, since both share a kind: {report}"
+    );
+
+    aoa_stdin()
+        .args(["audit", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("NEVER OBSERVED RUNNING"))
+        .stdout(predicate::str::contains("not known to be enforcing"));
+}
+
+/// The direction that must not move. Once the install has run in this tree, its
+/// telemetry directory exists, and a plane that then emits nothing is a measured
+/// silence — Tier-1, and it still fails the gate. Without this the change above
+/// would read as "stop failing on silence" rather than "stop failing on the
+/// absence of a measurement".
+#[test]
+fn an_installed_plane_that_emitted_nothing_still_fails_the_tier1_gate() {
+    let repo = TempDir::new().unwrap();
+    observe_enforce(repo.path());
+    std::fs::create_dir_all(repo.path().join(".github/workflows")).unwrap();
+
+    assert_eq!(
+        liveness_state(&audit_json(repo.path())),
+        "installed-but-silent",
+        "the install provisioned .aoa/traces, so its emptiness is a measurement"
+    );
+
+    aoa_stdin()
+        .args(["audit", "--fail-on", "tier1", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .failure();
+}
+
+/// Deleting the telemetry directory downgrades a measured silence to an
+/// unobserved plane, and the gate then passes. Pinned deliberately, because it
+/// is the accepted cost of the change and not an oversight: `.aoa/` is ignored
+/// and self-ignoring, so `rm -rf .aoa` and a routine `git clean -xdf` both reach
+/// it.
+///
+/// It cannot be had both ways from repository state alone. The only thing that
+/// made deletion pointless before was reporting an absent directory as Tier-1 —
+/// which is the same behavior that made the gate unpassable by every checkout,
+/// not a separable protection sitting beside it. Closing this properly needs
+/// evidence that survives the working tree (aoa-zswh6), not a tier.
+///
+/// The finding does survive the deletion, at Tier-3 and in the human register,
+/// so a reader is still told. Only the exit code moves.
+#[test]
+fn deleting_the_telemetry_directory_downgrades_a_measured_silence() {
+    let repo = TempDir::new().unwrap();
+    observe_enforce(repo.path());
+    std::fs::create_dir_all(repo.path().join(".github/workflows")).unwrap();
+
+    aoa_stdin()
+        .args(["audit", "--fail-on", "tier1", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .failure();
+
+    std::fs::remove_dir_all(repo.path().join(".aoa")).unwrap();
+
+    let report = audit_json(repo.path());
+    assert_eq!(
+        liveness_state(&report),
+        "installed-unobserved",
+        "the measurement was deleted, so the audit stops claiming to hold one: {report}"
+    );
+    assert!(
+        report["items"]
+            .as_array()
+            .expect("items array")
+            .iter()
+            .any(|item| item["kind"] == "silent_plane" && item["tier"] == "tier-3"),
+        "the finding must survive the deletion, only its tier moves: {report}"
+    );
+    aoa_stdin()
+        .args(["audit", "--fail-on", "tier1", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .success();
 }

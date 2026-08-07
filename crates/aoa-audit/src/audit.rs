@@ -324,18 +324,22 @@ fn mutation_surface_item(metrics: &[&MetricRecord]) -> Option<PunchItem> {
 }
 
 /// One punch item per missing enforcement plane, tier mapped from the plane,
-/// plus one for a runtime plane that is installed and emitting nothing.
+/// plus one for a runtime plane that is installed and not known to be emitting.
 ///
-/// Cost = 1 plane in both cases (a real count, not a score). The silent item is
+/// Cost = 1 plane in every case (a real count, not a score). The liveness item is
 /// what keeps an inert plane off the pass side of the ledger: `missing_planes`
 /// sees an installed hook set and says nothing, so before this the only two
-/// readings were "missing" and silence-as-health. An installed-but-silent plane
-/// is missing *evidence*, and the audit reports it at the plane's own tier
-/// rather than withholding it (the aoa-xo8y0 rule, one layer over).
+/// readings were "missing" and silence-as-health. A plane that is installed and
+/// not emitting is missing *evidence*, and the audit reports it rather than
+/// withholding it (the aoa-xo8y0 rule, one layer over).
 ///
-/// The two never both fire for one plane: `missing_planes` reports the runtime
-/// plane only when the hook set is absent, and liveness reports silence only
-/// when it is present.
+/// Its tier comes from the liveness state rather than from the plane — see
+/// [`EnforcementLiveness::finding`] for why — which makes this the one punch
+/// item whose tier `EnforcementPlane::tier` does not decide.
+///
+/// A plane never draws both: `missing_planes` reports the runtime plane only
+/// when the hook set is absent, and liveness raises a finding only when it is
+/// present.
 fn plane_items(repo: &Path, liveness: &EnforcementLiveness) -> Vec<PunchItem> {
     let mut items: Vec<PunchItem> = missing_planes(repo)
         .into_iter()
@@ -349,17 +353,18 @@ fn plane_items(repo: &Path, liveness: &EnforcementLiveness) -> Vec<PunchItem> {
         })
         .collect();
 
-    if let Some(silence) = liveness.silence() {
+    if let Some(finding) = liveness.finding() {
         let plane = EnforcementPlane::RuntimeHook;
         items.push(PunchItem {
             title: format!(
-                "enforcement plane installed but silent: {} ({})",
+                "enforcement plane {}: {} ({})",
+                finding.headline,
                 plane.label(),
-                silence.reason()
+                finding.reason
             ),
             kind: FindingKind::SilentPlane,
-            tier: plane.tier(),
-            measured_cost: MeasuredCost::new(1, "silent plane"),
+            tier: finding.tier,
+            measured_cost: MeasuredCost::new(1, finding.cost_unit),
             plane: Some(plane),
             subtree: None,
         });

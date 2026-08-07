@@ -6,9 +6,10 @@
 //!   only creates the explicitly-ignored `.aoa/` tree. [`write_trace`] is the
 //!   instrumentation path that lands a validated trace under `.aoa/traces/`.
 //! - [`enforcement_liveness`] answers whether the installed runtime enforcement
-//!   plane is actually emitting records, in three states rather than two:
-//!   enforcing, installed-but-silent, or not installed. [`audit`] carries the
-//!   same answer on its report and raises silence as a Tier-1 finding.
+//!   plane is actually emitting records, in four states rather than two:
+//!   enforcing, installed-but-silent, installed-unobserved, or not installed.
+//!   [`audit`] carries the same answer on its report and raises both
+//!   not-emitting states as findings, each at the tier its evidence supports.
 //! - [`hook_set_defect`] answers whether an installed plane is the one this
 //!   binary writes: behind, ahead, unstamped, or running a wrapper that is gone.
 //!   The hook contract it checks against — [`hook_command`] and the constants

@@ -41,9 +41,10 @@ pub struct AuditReport {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub live_observations: Vec<LiveMetricObservation>,
     /// Whether the runtime enforcement plane is actually emitting records:
-    /// enforcing, installed-but-silent, or not installed. Always serialized —
-    /// the whole point is that silence used to be a blank (aoa-dpluh), and a
-    /// field omitted when uninteresting would restore exactly that.
+    /// enforcing, installed-but-silent, installed-unobserved, or not installed.
+    /// Always serialized — the whole point is that silence used to be a blank
+    /// (aoa-dpluh), and a field omitted when uninteresting would restore exactly
+    /// that.
     #[serde(default)]
     pub enforcement_liveness: EnforcementLiveness,
 }

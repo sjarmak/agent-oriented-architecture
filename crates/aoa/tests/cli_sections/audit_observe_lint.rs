@@ -119,10 +119,12 @@ fn audit_fail_on_tier1_exits_zero_without_tier1_gap() {
     // Present the two Tier-1 planes (runtime hook + CI) so only the Tier-2
     // pre-commit plane is missing; --fail-on tier1 must then exit 0.
     //
-    // The runtime plane has to be *live*, not merely installed: an installed
-    // hook set that has emitted nothing is itself a Tier-1 finding (aoa-dpluh),
-    // so a fixture that only writes settings.json no longer describes a repo
-    // with no Tier-1 gap.
+    // The runtime plane is made *live* rather than merely registered, so the
+    // fixture pins the strongest passing state. The two weaker ones are not
+    // interchangeable with it: a traces directory that exists and stays empty is
+    // a Tier-1 silence (aoa-dpluh) and would fail this gate, while an absent one
+    // is the Tier-3 unobserved plane (aoa-rsixa) and would pass it — but pass on
+    // a different fact than the one this test is pinning.
     let repo = TempDir::new().expect("tempdir");
     std::fs::create_dir_all(repo.path().join(".claude")).unwrap();
     std::fs::write(

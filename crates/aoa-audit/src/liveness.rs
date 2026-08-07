@@ -9,19 +9,38 @@
 //! installed, every one invoking a binary on no session's PATH, `.aoa/traces/`
 //! never created — and nothing here or anywhere else said so (aoa-dpluh).
 //!
-//! So this module reports three distinct states, never two:
+//! So this module reports four distinct states, never two:
 //! [`EnforcementLiveness::NotInstalled`],
+//! [`EnforcementLiveness::InstalledUnobserved`],
 //! [`EnforcementLiveness::InstalledButSilent`], and
 //! [`EnforcementLiveness::Enforcing`]. Silence carries a [`Silence`] reason
 //! because the ways of being silent are different defects with different fixes:
-//! an absent `.aoa/traces` means the telemetry install never ran, an empty one
-//! means it ran and the hooks did not, and logs holding zero records mean a
-//! session opened one and wrote nothing into it. Collapsing those into one blank
-//! hands an operator a symptom with no direction.
+//! an empty `.aoa/traces` means the install ran and the hooks did not, and logs
+//! holding zero records mean a session opened one and wrote nothing into it.
+//! Collapsing those into one blank hands an operator a symptom with no
+//! direction.
 //!
 //! Silence is emphatically not a pass. [`crate::audit`] raises it as a Tier-1
 //! finding, the same rule the metrics side adopted after aoa-xo8y0: an absent
 //! measurement is missing evidence, not a benign zero.
+//!
+//! The fourth state exists because an absent `.aoa/traces` is not a measurement
+//! of anything. Registration and telemetry live on opposite sides of the
+//! `.gitignore`: `.claude/settings.json` and the wrapper are tracked, `.aoa/` is
+//! ignored, and `aoa observe --enforce` provisions the traces directory as part
+//! of installing. So a tree with a registered plane and no traces directory is
+//! one that git handed a registration into and in which no local install ever
+//! ran — the state of every clean checkout, every CI runner, and every fresh
+//! worktree. Reading it as silence asserted that a plane had stopped emitting on
+//! the strength of never having been watched, and made the repository's own
+//! `--fail-on tier1` self-audit unpassable by any checkout (aoa-rsixa).
+//!
+//! Unobserved is still not a pass either: it raises the same finding, at Tier-3,
+//! the tier this crate reserves for what it asserts without a measurement to
+//! back it. What it cannot do is distinguish "no session has run here" from
+//! "every hook here failed before it could write" — both leave exactly the same
+//! empty tree, and [`crate::hook_set`] answers the parts of that question a
+//! repository's own files can answer.
 
 use std::fs::DirEntry;
 use std::io::{BufRead, BufReader};
@@ -32,6 +51,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::observe::TRACES_SUBDIR;
 use crate::planes::runtime_hook_present;
+use crate::tier::Tier;
 
 /// The filename shape the enforcement hooks append to, one per session. Owned by
 /// `aoa_enforce::live_log`, which sits a layer above this crate and so cannot be
@@ -42,9 +62,10 @@ const LIVE_LOG_EXTENSION: &str = ".jsonl";
 
 /// Whether this repository's runtime enforcement plane is producing records.
 ///
-/// Three states, deliberately not a boolean: the pair that matters is
-/// `Enforcing` vs `InstalledButSilent`, and a boolean "installed" answers
-/// neither.
+/// Four states, deliberately not a boolean: the pair that matters is
+/// `Enforcing` vs `InstalledButSilent`, a boolean "installed" answers neither,
+/// and `InstalledUnobserved` is the tree where the question has not been put to
+/// a plane at all.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub enum EnforcementLiveness {
@@ -56,9 +77,17 @@ pub enum EnforcementLiveness {
     /// read as enforcing.
     #[default]
     NotInstalled,
-    /// The hook set is installed and no enforcement record reached the live log.
-    /// The plane reads as present from every configuration surface and enforces
-    /// nothing.
+    /// The hook set is installed and this tree holds no enforcement telemetry at
+    /// all: `<repo>/.aoa/traces` does not exist.
+    ///
+    /// The install provisions that directory, so its absence says the
+    /// registration arrived through git and no local install followed — a clean
+    /// checkout. It is not evidence that a running plane fell silent, and it is
+    /// not evidence that one is healthy: nothing here has been watched.
+    InstalledUnobserved,
+    /// The hook set is installed, its telemetry directory exists, and no
+    /// enforcement record reached the live log. The plane reads as present from
+    /// every configuration surface and enforces nothing.
     InstalledButSilent { silence: Silence },
     /// The hook set is installed and the live log holds records.
     Enforcing {
@@ -70,12 +99,34 @@ pub enum EnforcementLiveness {
 }
 
 impl EnforcementLiveness {
-    /// The silence reason, when the plane is installed and silent.
+    /// The punch-list finding this state raises, if any.
+    ///
+    /// The tier is decided here, by the state, rather than by the plane: what
+    /// separates these two findings is not which plane they are about but what
+    /// evidence the audit is holding. A silence is measured — the telemetry
+    /// directory is there and empty — and lands on the evidence-backed tier. An
+    /// unobserved plane is an assertion with no measurement under it, which is
+    /// what [`Tier::Tier3`] is for.
+    ///
+    /// Both raise a finding: dropping the unobserved one would put an unwatched
+    /// plane on the pass side of the ledger, which is the reading this module
+    /// exists to prevent.
     #[must_use]
-    pub fn silence(&self) -> Option<Silence> {
+    pub(crate) fn finding(&self) -> Option<LivenessFinding> {
         match self {
-            EnforcementLiveness::InstalledButSilent { silence } => Some(*silence),
-            _ => None,
+            EnforcementLiveness::NotInstalled | EnforcementLiveness::Enforcing { .. } => None,
+            EnforcementLiveness::InstalledUnobserved => Some(LivenessFinding {
+                tier: Tier::Tier3,
+                headline: "installed but never observed running",
+                reason: UNOBSERVED_REASON,
+                cost_unit: "unobserved plane",
+            }),
+            EnforcementLiveness::InstalledButSilent { silence } => Some(LivenessFinding {
+                tier: Tier::Tier1,
+                headline: "installed but silent",
+                reason: silence.reason(),
+                cost_unit: "silent plane",
+            }),
         }
     }
 
@@ -87,6 +138,10 @@ impl EnforcementLiveness {
             EnforcementLiveness::NotInstalled => {
                 "enforcement plane: not installed (no runtime hook set)".to_string()
             }
+            EnforcementLiveness::InstalledUnobserved => format!(
+                "enforcement plane: installed but NEVER OBSERVED RUNNING — {UNOBSERVED_REASON}; \
+                 this repo is not known to be enforcing"
+            ),
             EnforcementLiveness::InstalledButSilent { silence } => format!(
                 "enforcement plane: INSTALLED BUT SILENT — {}; this repo is NOT enforcing",
                 silence.reason()
@@ -98,17 +153,42 @@ impl EnforcementLiveness {
     }
 }
 
+/// Why an installed plane reads as unobserved. Stated once, so the punch-list
+/// title and the human line cannot describe the same state differently.
+const UNOBSERVED_REASON: &str = "no .aoa/traces directory exists, so this tree \
+                                 carries no enforcement telemetry to read";
+
+/// What a liveness state contributes to the audit's punch-list.
+///
+/// Carried as one value rather than as separate tier and text accessors: the
+/// tier and the phrase justifying it are the same judgment, and splitting them
+/// is how a Tier-1 headline ends up over Tier-3 evidence.
+///
+/// Crate-internal: it is consumed by [`crate::audit`] and flattened into
+/// [`crate::PunchItem`], which is the public shape. Widen it when something
+/// outside this crate needs the tier and reason without going through a punch
+/// item, not before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LivenessFinding {
+    /// The evidence tier this finding is reported at.
+    pub(crate) tier: Tier,
+    /// The state's headline, read after `enforcement plane `.
+    pub(crate) headline: &'static str,
+    /// Why the plane reads that way.
+    pub(crate) reason: &'static str,
+    /// The unit its measured cost of 1 is counted in.
+    pub(crate) cost_unit: &'static str,
+}
+
 /// Why an installed plane counts as silent.
 ///
-/// Separate variants because they are separate defects: the first two say the
-/// hooks never ran, and which one it is tells the operator whether `aoa observe`
-/// ran at all.
+/// Separate variants because they are separate defects, and every one of them is
+/// read off a telemetry directory that exists — an absent one is
+/// [`EnforcementLiveness::InstalledUnobserved`] and carries no `Silence` at all,
+/// because there was nothing there to find quiet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Silence {
-    /// `<repo>/.aoa/traces` does not exist: no session ever opened a live log,
-    /// and the telemetry install itself may never have run.
-    TracesDirectoryAbsent,
     /// `<repo>/.aoa/traces` exists but could not be read. Not evidence of
     /// enforcement, so it is reported as silence rather than swallowed.
     TracesDirectoryUnreadable,
@@ -125,7 +205,6 @@ impl Silence {
     #[must_use]
     pub fn reason(self) -> &'static str {
         match self {
-            Silence::TracesDirectoryAbsent => "no .aoa/traces directory exists",
             Silence::TracesDirectoryUnreadable => ".aoa/traces could not be read",
             Silence::NoLiveLogs => "no live log exists under .aoa/traces",
             Silence::LiveLogsEmpty => "every live log under .aoa/traces is empty",
@@ -153,8 +232,9 @@ pub fn enforcement_liveness(repo: &Path, since: Option<SystemTime>) -> Enforceme
 
     let entries = match std::fs::read_dir(repo.join(TRACES_SUBDIR)) {
         Ok(entries) => entries,
+        // Absent, not silent: nothing here was ever watched (aoa-rsixa).
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return silent(Silence::TracesDirectoryAbsent)
+            return EnforcementLiveness::InstalledUnobserved
         }
         Err(_) => return silent(Silence::TracesDirectoryUnreadable),
     };
@@ -269,33 +349,45 @@ mod tests {
         dir
     }
 
+    /// The silent state carrying `silence`. Assertions compare the whole state
+    /// rather than a reason pulled out of it, so a result that is silent for the
+    /// right reason but in the wrong variant cannot pass.
+    fn silent(silence: Silence) -> EnforcementLiveness {
+        EnforcementLiveness::InstalledButSilent { silence }
+    }
+
     fn record_line(seq: u64) -> String {
         format!(r#"{{"type":"test.run","source":"native","seq":{seq},"attributes":{{}}}}"#)
     }
 
-    /// Criterion (e): three separate facts, three separate answers. Reported as
+    /// Criterion (e): four separate facts, four separate answers. Reported as
     /// one sequence because the point is that they differ — asserting each in
     /// isolation would pass just as well against a single collapsed variant.
+    ///
+    /// The first step is the one that moved (aoa-rsixa): an absent traces
+    /// directory is not the weakest kind of silence, it is the absence of the
+    /// measurement silence is read from.
     #[test]
-    fn absent_empty_and_populated_traces_dirs_are_three_distinct_facts() {
+    fn absent_empty_and_populated_traces_dirs_are_four_distinct_facts() {
         let repo = installed_repo();
 
         assert_eq!(
-            enforcement_liveness(repo.path(), None).silence(),
-            Some(Silence::TracesDirectoryAbsent)
+            enforcement_liveness(repo.path(), None),
+            EnforcementLiveness::InstalledUnobserved,
+            "an absent traces dir is not silence: nothing here was ever watched"
         );
 
         let traces = traces_dir(repo.path());
         assert_eq!(
-            enforcement_liveness(repo.path(), None).silence(),
-            Some(Silence::NoLiveLogs),
+            enforcement_liveness(repo.path(), None),
+            silent(Silence::NoLiveLogs),
             "an existing but empty traces dir is not an absent one"
         );
 
         std::fs::write(traces.join("live-s1.jsonl"), "").unwrap();
         assert_eq!(
-            enforcement_liveness(repo.path(), None).silence(),
-            Some(Silence::LiveLogsEmpty),
+            enforcement_liveness(repo.path(), None),
+            silent(Silence::LiveLogsEmpty),
             "a live log holding nothing is not the same as having no live log"
         );
 
@@ -338,8 +430,8 @@ mod tests {
         std::fs::write(traces.join("notes.txt"), "not a log\n").unwrap();
 
         assert_eq!(
-            enforcement_liveness(repo.path(), None).silence(),
-            Some(Silence::NoLiveLogs)
+            enforcement_liveness(repo.path(), None),
+            silent(Silence::NoLiveLogs)
         );
     }
 
@@ -352,8 +444,8 @@ mod tests {
         std::fs::write(traces.join("live-torn.jsonl"), r#"{"type":"test.run""#).unwrap();
 
         assert_eq!(
-            enforcement_liveness(repo.path(), None).silence(),
-            Some(Silence::LiveLogsEmpty)
+            enforcement_liveness(repo.path(), None),
+            silent(Silence::LiveLogsEmpty)
         );
 
         std::fs::write(
@@ -387,8 +479,8 @@ mod tests {
 
         let future = SystemTime::now() + Duration::from_secs(3_600);
         assert_eq!(
-            enforcement_liveness(repo.path(), Some(future)).silence(),
-            Some(Silence::NoneInWindow)
+            enforcement_liveness(repo.path(), Some(future)),
+            silent(Silence::NoneInWindow)
         );
 
         let past = SystemTime::now() - Duration::from_secs(3_600);
@@ -423,8 +515,8 @@ mod tests {
         );
     }
 
-    /// The wire form is what a downstream consumer keys on, so the three states
-    /// have to be three distinct tags and the silence reason has to survive.
+    /// The wire form is what a downstream consumer keys on, so every state has
+    /// to be its own tag and the silence reason has to survive.
     #[test]
     fn the_wire_form_carries_the_state_and_its_reason() {
         let silent = EnforcementLiveness::InstalledButSilent {
@@ -439,12 +531,65 @@ mod tests {
             serde_json::json!({"state":"not-installed"})
         );
         assert_eq!(
+            serde_json::to_value(EnforcementLiveness::InstalledUnobserved).unwrap(),
+            serde_json::json!({"state":"installed-unobserved"}),
+            "the unobserved state is its own tag and carries no silence reason"
+        );
+        assert_eq!(
             serde_json::to_value(EnforcementLiveness::Enforcing {
                 live_logs: 1,
                 spans: 2
             })
             .unwrap(),
             serde_json::json!({"state":"enforcing","live_logs":1,"spans":2})
+        );
+    }
+
+    /// The tier each state's finding is reported at, asserted as one table
+    /// because the whole decision is the contrast between the two rows that
+    /// raise something. A measured silence is evidence-backed; an unobserved
+    /// plane is the same claim with nothing under it.
+    #[test]
+    fn the_finding_tier_follows_the_evidence_not_the_plane() {
+        assert_eq!(
+            EnforcementLiveness::InstalledButSilent {
+                silence: Silence::NoLiveLogs,
+            }
+            .finding()
+            .map(|finding| finding.tier),
+            Some(Tier::Tier1)
+        );
+        assert_eq!(
+            EnforcementLiveness::InstalledUnobserved
+                .finding()
+                .map(|finding| finding.tier),
+            Some(Tier::Tier3),
+            "nothing was measured, so the finding cannot claim to be measured"
+        );
+        assert_eq!(EnforcementLiveness::NotInstalled.finding(), None);
+        assert_eq!(
+            EnforcementLiveness::Enforcing {
+                live_logs: 1,
+                spans: 1
+            }
+            .finding(),
+            None
+        );
+    }
+
+    /// An unobserved plane still reaches the punch-list and the human line, and
+    /// neither may read as health. Dropping it there was the tempting fix for
+    /// aoa-rsixa and would have put an unwatched plane on the pass side.
+    #[test]
+    fn an_unobserved_plane_is_never_rendered_as_healthy() {
+        let line = EnforcementLiveness::InstalledUnobserved.render_line();
+        assert!(
+            line.contains("NEVER OBSERVED RUNNING") && line.contains("not known to be enforcing"),
+            "the unobserved line must not read as a pass: {line}"
+        );
+        assert!(
+            EnforcementLiveness::InstalledUnobserved.finding().is_some(),
+            "an unobserved plane still raises a finding; only its tier moved"
         );
     }
 
