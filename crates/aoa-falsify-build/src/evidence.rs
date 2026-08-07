@@ -4,7 +4,6 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result as AnyResult};
 use aoa_bench::{
     load_task, scoring_path, transcript_path, AnswerMetricsV1, ArmIdentity, ArtifactDigestSetV1,
     CalibrationConclusion, CalibrationEvidenceV1, ExclusionReasonV1, MeasurementMetricsV1,
@@ -13,6 +12,7 @@ use aoa_bench::{
 };
 
 use crate::answer::AnswerContext;
+use crate::error::{BuildError, TaskPurpose};
 use crate::manifest::{RepoManifest, TaskShape};
 
 /// Per-artifact and aggregate task-evidence read bound.
@@ -264,7 +264,7 @@ pub(crate) fn build_observation(
     repo_evidence: &RepoEvidence,
     answer_ctx: Option<&mut AnswerContext>,
     answer_context_error: Option<&str>,
-) -> AnyResult<(MeasurementObservationV1, Option<String>)> {
+) -> std::result::Result<(MeasurementObservationV1, Option<String>), BuildError> {
     let scoring = read_artifact(&scoring_path(run_dir, task_id));
     let trace = read_artifact(&transcript_path(run_dir, task_id));
     let oracle = task_artifact_digest(&tasks_dir.join(task_id));
@@ -348,8 +348,13 @@ pub(crate) fn build_observation(
                         },
                     ) {
                         Ok((trace_locality, trace_reach_depth)) => {
-                            let task = load_task(tasks_dir.join(task_id)).with_context(|| {
-                                format!("failed to load task {task_id} provenance")
+                            let task = load_task(tasks_dir.join(task_id)).map_err(|source| {
+                                BuildError::TaskUnreadable {
+                                    task_id: task_id.to_string(),
+                                    purpose: TaskPurpose::Provenance,
+                                    tasks_dir: tasks_dir.to_path_buf(),
+                                    source: Box::new(source),
+                                }
                             })?;
                             (
                                 MeasurementStateV1::Measured {
@@ -374,7 +379,7 @@ pub(crate) fn build_observation(
                         }
                         Err(error) => excluded(
                             ExclusionReasonV1::MetricComputationFailed,
-                            format!("{error:#}"),
+                            error.flattened(),
                         ),
                     }
                 }

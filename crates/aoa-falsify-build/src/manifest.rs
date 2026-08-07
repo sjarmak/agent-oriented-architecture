@@ -7,11 +7,12 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
 use aoa_bench::GitObjectId;
 use aoa_metrics::Confidence;
+
+use crate::error::{BuildError, DiagnosticRepoId, DiagnosticRepoIds, PairYieldDetail, RepoIdList};
 
 /// The whole build manifest.
 ///
@@ -37,19 +38,19 @@ pub struct Manifest {
 }
 
 impl Manifest {
-    pub(crate) fn validate_repo_inventory(&self) -> anyhow::Result<()> {
+    pub(crate) fn validate_repo_inventory(&self) -> std::result::Result<(), BuildError> {
         if let Some(repo_id) = first_duplicate(self.expected_repo_ids.iter().map(String::as_str)) {
-            bail!(
-                "manifest expected_repo_ids contains duplicate repo id: {}",
-                diagnostic_repo_id(repo_id)
-            );
+            return Err(BuildError::DuplicateRepoId {
+                list: RepoIdList::Expected,
+                repo_id: DiagnosticRepoId::new(repo_id),
+            });
         }
         if let Some(repo_id) = first_duplicate(self.repos.iter().map(|repo| repo.repo_id.as_str()))
         {
-            bail!(
-                "manifest repos contains duplicate repo id: {}",
-                diagnostic_repo_id(repo_id)
-            );
+            return Err(BuildError::DuplicateRepoId {
+                list: RepoIdList::Repos,
+                repo_id: DiagnosticRepoId::new(repo_id),
+            });
         }
 
         let expected: BTreeSet<_> = self.expected_repo_ids.iter().map(String::as_str).collect();
@@ -58,57 +59,42 @@ impl Manifest {
             .iter()
             .map(|repo| repo.repo_id.as_str())
             .collect();
-        let missing = diagnostic_repo_ids(expected.difference(&actual).copied());
-        let unexpected = diagnostic_repo_ids(actual.difference(&expected).copied());
+        let missing = DiagnosticRepoIds::new(expected.difference(&actual).copied());
+        let unexpected = DiagnosticRepoIds::new(actual.difference(&expected).copied());
         if !missing.is_empty() || !unexpected.is_empty() {
-            bail!(
-                "manifest repo inventory mismatch: missing [{missing}]; unexpected [{unexpected}]"
-            );
+            return Err(BuildError::RepoInventoryMismatch {
+                missing,
+                unexpected,
+            });
         }
         Ok(())
     }
 
     /// Require the seed-1-only manifest used by the pair-yield budget preflight.
     pub fn validate_pair_yield_preflight(&self) -> crate::Result<()> {
-        self.validate_repo_inventory()
-            .map_err(crate::FalsifyBuildError::from_anyhow)?;
+        self.validate_repo_inventory()?;
         let invalid_repo = self.repos.iter().find(|repo| repo.runs.len() != 1);
         if self.k_runs == 1 && invalid_repo.is_none() {
             return Ok(());
         }
 
         let detail = invalid_repo.map_or_else(
-            || format!("manifest declares k_runs={}", self.k_runs),
-            |repo| {
-                format!(
-                    "repo {} supplies {} runs and manifest declares k_runs={}",
-                    repo.repo_id,
-                    repo.runs.len(),
-                    self.k_runs
-                )
+            || PairYieldDetail::DeclaredRuns {
+                k_runs: self.k_runs,
+            },
+            |repo| PairYieldDetail::SuppliedRuns {
+                repo_id: repo.repo_id.clone(),
+                supplied: repo.runs.len(),
+                k_runs: self.k_runs,
             },
         );
-        Err(crate::FalsifyBuildError::from_anyhow(anyhow::anyhow!(
-            "--min-pair-yield is a seed-1 preflight and requires exactly one run per repo with \
-             k_runs=1; {detail}. Use the seed-1 manifest from docs/r0_runbook.md Step 3"
-        )))
+        Err(BuildError::PairYieldPreflightShape { detail }.into())
     }
 }
 
 fn first_duplicate<'a>(values: impl Iterator<Item = &'a str>) -> Option<&'a str> {
     let mut seen = BTreeSet::new();
     values.into_iter().find(|value| !seen.insert(*value))
-}
-
-fn diagnostic_repo_ids<'a>(repo_ids: impl Iterator<Item = &'a str>) -> String {
-    repo_ids
-        .map(diagnostic_repo_id)
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn diagnostic_repo_id(repo_id: &str) -> String {
-    format!(r#""{}""#, repo_id.escape_default())
 }
 
 /// One repo's operator assertions and its per-seed arm run dirs.

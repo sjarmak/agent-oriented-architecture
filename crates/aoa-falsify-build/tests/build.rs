@@ -349,6 +349,60 @@ fn a_missing_ledger_fails_the_build_rather_than_defaulting_to_unexposed() {
 }
 
 #[test]
+fn a_wrapped_failure_flattens_its_whole_cause_chain_into_the_public_message() {
+    // The public error carries no `#[source]`, so whatever the message omits is
+    // unrecoverable to the caller. This pins the flattening itself: the crate's
+    // own context AND the underlying cause must both survive into one string.
+    // Nothing else asserts it, and it is the behavior most easily lost when the
+    // internal plumbing changes.
+    let temp = tempfile::tempdir().unwrap();
+    let tasks_dir = write_admissible_fixture(temp.path());
+    let ledger = temp.path().join("exposure.json");
+    // The exact text the OS produces for this path, rather than a guess at its
+    // wording — the point is that the cause is present, not how it is spelled.
+    let cause = std::fs::symlink_metadata(&ledger).unwrap_err().to_string();
+
+    let error = build(&admissible_manifest(), &tasks_dir, temp.path())
+        .unwrap_err()
+        .to_string();
+
+    assert_eq!(
+        error,
+        format!(
+            "repo sample/repo: cannot read exposure ledger {}: {cause}",
+            ledger.display()
+        )
+    );
+}
+
+#[test]
+fn a_cause_that_inlines_its_own_source_reports_it_twice_as_it_always_has() {
+    // `BenchError` puts its source in BOTH its own message and its `source()`,
+    // so flattening the chain says it twice. That has always been the rendered
+    // text and operators read it; pinning it here so the redundancy is a
+    // recorded decision rather than something a later reader quietly "fixes"
+    // and changes the message in the process.
+    let temp = tempfile::tempdir().unwrap();
+    let runs = r#"
+        {"seed":1,"repo_arm":"a","harness_arm":"b"},
+        {"seed":2,"repo_arm":"c","harness_arm":"d"},
+        {"seed":3,"repo_arm":"e","harness_arm":"f"}"#;
+    let absent = temp.path().join("a");
+    let cause = std::fs::read_dir(&absent).unwrap_err().to_string();
+
+    let error = build_error(&manifest(&repo(runs, "")), temp.path());
+
+    assert_eq!(
+        error,
+        format!(
+            "failed to discover arm trials in {absent}: \
+             failed to read codeprobe run dir {absent}: {cause}: {cause}",
+            absent = absent.display()
+        )
+    );
+}
+
+#[test]
 fn an_abbreviated_ledger_revision_still_binds_to_the_manifest_commit() {
     // codeprobe's `prep.json` records an abbreviated `baseline_sha`, so this is
     // the shape a real ledger arrives in.

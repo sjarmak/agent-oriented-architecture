@@ -15,13 +15,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, bail, Context, Result};
-
 use aoa_bench::{load_task, transcript_path};
 use aoa_codeprobe_shim::parse_transcript_file;
 use aoa_falsify::UNREACHABLE_TRACE_REACH_DEPTH;
 use aoa_metrics::{compute_trace_convention_inputs, trace_footprint, SymbolGraph, TraceReach};
 use aoa_scip_graph::index_with_scip;
+
+use crate::error::{BuildError, TaskPurpose};
+
+/// Every fallible step here yields the crate's typed error.
+type Result<T> = std::result::Result<T, BuildError>;
 
 /// Per-repo state for computing answer-task convention inputs: the SCIP graph,
 /// its file universe, and a task-id-memoized oracle-chain cache (the chain is a
@@ -38,19 +41,18 @@ impl AnswerContext {
     /// (like `confidence`), so a missing/unreadable/empty index is a hard error
     /// — never a silent degrade to sentinel inputs.
     pub(crate) fn load(repo_id: &str, index_path: &Path, tasks_dir: &Path) -> Result<Self> {
-        let indexed = index_with_scip(index_path).with_context(|| {
-            format!(
-                "repo {repo_id}: failed to read declared scip_index {}",
-                index_path.display()
-            )
-        })?;
+        let indexed =
+            index_with_scip(index_path).map_err(|source| BuildError::ScipIndexUnreadable {
+                repo_id: repo_id.to_string(),
+                path: index_path.to_path_buf(),
+                source,
+            })?;
         let universe: BTreeSet<String> = indexed.graph.node_paths.values().cloned().collect();
         if indexed.graph.nodes.is_empty() || universe.is_empty() {
-            bail!(
-                "repo {repo_id}: scip_index {} yields no definitions with document paths; \
-                 answer-task convention inputs cannot be derived from it",
-                index_path.display()
-            );
+            return Err(BuildError::ScipIndexEmpty {
+                repo_id: repo_id.to_string(),
+                path: index_path.to_path_buf(),
+            });
         }
         Ok(Self {
             graph: indexed.graph,
@@ -84,11 +86,12 @@ impl AnswerContext {
         arm: &str,
     ) -> Result<(f64, u32)> {
         let transcript = transcript_path(run_dir, task_id);
-        let shim = parse_transcript_file(&transcript).with_context(|| {
-            format!(
-                "{arm} arm: cannot read trial transcript {}",
-                transcript.display()
-            )
+        let shim = parse_transcript_file(&transcript).map_err(|source| {
+            BuildError::TranscriptUnreadable {
+                arm: arm.to_string(),
+                path: transcript.clone(),
+                source,
+            }
         })?;
         let footprint = trace_footprint(&shim.trace, &self.universe);
         // A relative span path that only resolves as a sub-repo suffix of a
@@ -96,19 +99,16 @@ impl AnswerContext {
         // ambiguous — excluded with the reason, never silently dropped (see
         // `trace_footprint`'s asymmetry rationale).
         if !footprint.ambiguous_relative.is_empty() {
-            bail!(
-                "{arm} arm: trace path(s) [{}] are ambiguous sub-repo-relative suffixes of \
-                 universe files; the trial's footprint cannot be measured",
-                footprint
-                    .ambiguous_relative
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
+            return Err(BuildError::AmbiguousTracePaths {
+                arm: arm.to_string(),
+                paths: footprint.ambiguous_relative.iter().cloned().collect(),
+            });
         }
         let inputs = compute_trace_convention_inputs(&self.graph, &footprint.files, oracle)
-            .map_err(|e| anyhow!("{arm} arm: {e}"))?;
+            .map_err(|cause| BuildError::ConventionInputs {
+                arm: arm.to_string(),
+                cause,
+            })?;
         let depth = match inputs.trace_reach {
             TraceReach::Depth(d) => d,
             TraceReach::Unreachable => UNREACHABLE_TRACE_REACH_DEPTH,
@@ -123,14 +123,17 @@ impl AnswerContext {
         if let Some(chain) = self.oracle_cache.get(task_id) {
             return Ok(chain.clone());
         }
-        let task = load_task(self.tasks_dir.join(task_id))
-            .with_context(|| format!("failed to load task {task_id} oracle"))?;
+        let task = load_task(self.tasks_dir.join(task_id)).map_err(|source| {
+            BuildError::TaskUnreadable {
+                task_id: task_id.to_string(),
+                purpose: TaskPurpose::Oracle,
+                tasks_dir: self.tasks_dir.clone(),
+                source: Box::new(source),
+            }
+        })?;
         let chain = task.oracle_chain.resolve(&self.universe);
         if chain.is_empty() {
-            bail!(
-                "oracle chain unresolvable: no answer/consensus/defining-file/symbol reference \
-                 resolves against the scip_index file universe"
-            );
+            return Err(BuildError::OracleChainUnresolvable);
         }
         self.oracle_cache.insert(task_id.to_string(), chain.clone());
         Ok(chain)
@@ -170,10 +173,13 @@ mod tests {
 
         let ctx = AnswerContext::load("sample/repo", &index, &dir).unwrap();
         let oracle: BTreeSet<String> = ["src/pkg/app.py".to_string()].into();
-        let err = ctx.arm_inputs(&dir, "task-1", &oracle, "repo").unwrap_err();
+        let err = ctx
+            .arm_inputs(&dir, "task-1", &oracle, "repo")
+            .unwrap_err()
+            .to_string();
         assert!(
-            format!("{err:#}").contains("ambiguous") && format!("{err:#}").contains("pkg/app.py"),
-            "exclusion must carry the ambiguity reason and path, got: {err:#}"
+            err.contains("ambiguous") && err.contains("pkg/app.py"),
+            "exclusion must carry the ambiguity reason and path, got: {err}"
         );
 
         std::fs::remove_dir_all(&dir).ok();

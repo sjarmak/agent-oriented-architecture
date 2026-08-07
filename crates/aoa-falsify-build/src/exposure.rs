@@ -7,10 +7,10 @@
 
 use std::path::Path;
 
-use anyhow::{anyhow, bail, Context, Result as AnyResult};
 use aoa_bench::{ExposureScan, GitObjectId};
 use aoa_domain::ExposureStatus;
 
+use crate::error::BuildError;
 use crate::evidence::MAX_EVIDENCE_BYTES;
 
 /// Shortest revision fragment accepted as an identity, matching git's own
@@ -26,57 +26,50 @@ pub(crate) fn resolve_exposure(
     scan_path: &Path,
     repo_id: &str,
     repo_commit: &GitObjectId,
-) -> AnyResult<ExposureStatus> {
-    let metadata = std::fs::symlink_metadata(scan_path).with_context(|| {
-        format!(
-            "repo {repo_id}: cannot read exposure ledger {}",
-            scan_path.display()
-        )
-    })?;
+) -> std::result::Result<ExposureStatus, BuildError> {
+    let unreadable = |source| BuildError::ExposureLedgerUnreadable {
+        repo_id: repo_id.to_string(),
+        path: scan_path.to_path_buf(),
+        source,
+    };
+    let metadata = std::fs::symlink_metadata(scan_path).map_err(unreadable)?;
     if !metadata.file_type().is_file() {
-        bail!(
-            "repo {repo_id}: exposure ledger {} is not a regular file",
-            scan_path.display()
-        );
+        return Err(BuildError::ExposureLedgerNotFile {
+            repo_id: repo_id.to_string(),
+            path: scan_path.to_path_buf(),
+        });
     }
     if metadata.len() > MAX_EVIDENCE_BYTES {
-        bail!(
-            "repo {repo_id}: exposure ledger {} exceeds the {MAX_EVIDENCE_BYTES} byte evidence cap",
-            scan_path.display()
-        );
+        return Err(BuildError::ExposureLedgerTooLarge {
+            repo_id: repo_id.to_string(),
+            path: scan_path.to_path_buf(),
+            cap: MAX_EVIDENCE_BYTES,
+        });
     }
-    let bytes = std::fs::read(scan_path).with_context(|| {
-        format!(
-            "repo {repo_id}: cannot read exposure ledger {}",
-            scan_path.display()
-        )
-    })?;
-    let scan: ExposureScan = serde_json::from_slice(&bytes).with_context(|| {
-        format!(
-            "repo {repo_id}: exposure ledger {} is malformed",
-            scan_path.display()
-        )
-    })?;
+    let bytes = std::fs::read(scan_path).map_err(unreadable)?;
+    let scan: ExposureScan =
+        serde_json::from_slice(&bytes).map_err(|source| BuildError::ExposureLedgerMalformed {
+            repo_id: repo_id.to_string(),
+            path: scan_path.to_path_buf(),
+            source,
+        })?;
 
     // Exactly one entry, not the first match: `scan_exposure` rejects duplicate
     // repos, so two entries mean a ledger that was assembled by some other means
     // and it is no longer clear which verdict describes this repo. Resolving that
     // silently would be the same "a word decides" failure in a new place.
     let mut matching = scan.repos.iter().filter(|entry| entry.repo_id == repo_id);
-    let entry = matching.next().ok_or_else(|| {
-        anyhow!(
-            "repo {repo_id}: exposure ledger {} has no exposure entry for it; \
-             re-run `aoa eval exposure scan --out` against the runs root that \
-             holds this repo's trials",
-            scan_path.display()
-        )
-    })?;
+    let entry = matching
+        .next()
+        .ok_or_else(|| BuildError::ExposureEntryMissing {
+            repo_id: repo_id.to_string(),
+            path: scan_path.to_path_buf(),
+        })?;
     if matching.next().is_some() {
-        bail!(
-            "repo {repo_id}: exposure ledger {} carries more than one entry for it, \
-             so no single measured verdict describes this repo",
-            scan_path.display()
-        );
+        return Err(BuildError::ExposureEntryAmbiguous {
+            repo_id: repo_id.to_string(),
+            path: scan_path.to_path_buf(),
+        });
     }
     // codeprobe records `prep.json`'s `baseline_sha`, conventionally abbreviated,
     // while the manifest pins a full object id — so this is prefix identification,
@@ -85,24 +78,20 @@ pub(crate) fn resolve_exposure(
     // against the wrong one.
     let baseline = entry.baseline_commit.to_ascii_lowercase();
     if baseline.len() < MIN_BASELINE_ABBREV || !baseline.bytes().all(|b| b.is_ascii_hexdigit()) {
-        // Quoted and escaped: a display-hostile value must not reshape the
-        // diagnostic it appears in.
-        bail!(
-            "repo {repo_id}: exposure ledger {} records baseline commit \"{}\", which cannot \
-             identify a revision: at least {MIN_BASELINE_ABBREV} hex characters are required",
-            scan_path.display(),
-            entry.baseline_commit.escape_default()
-        );
+        return Err(BuildError::ExposureBaselineUnusable {
+            repo_id: repo_id.to_string(),
+            path: scan_path.to_path_buf(),
+            baseline: entry.baseline_commit.clone(),
+            minimum: MIN_BASELINE_ABBREV,
+        });
     }
     if !repo_commit.hex.starts_with(&baseline) {
-        bail!(
-            "repo {repo_id}: exposure ledger {} was scanned at baseline commit {} but the \
-             manifest declares repo_commit {}; the ledger does not describe the revision \
-             being measured",
-            scan_path.display(),
+        return Err(BuildError::ExposureBaselineMismatch {
+            repo_id: repo_id.to_string(),
+            path: scan_path.to_path_buf(),
             baseline,
-            repo_commit.hex
-        );
+            repo_commit: repo_commit.hex.clone(),
+        });
     }
     Ok(entry.status.clone())
 }
@@ -169,7 +158,7 @@ mod tests {
 
         let error = resolve_exposure(&path, "sample/repo", &commit(HEX)).unwrap_err();
 
-        let error = format!("{error:#}");
+        let error = error.to_string();
         assert!(error.contains("sample/repo"), "got: {error}");
         assert!(
             error.contains("has no exposure entry for it"),
@@ -196,8 +185,8 @@ mod tests {
         let error = resolve_exposure(&path, "sample/repo", &commit(HEX)).unwrap_err();
 
         assert!(
-            format!("{error:#}").contains("more than one entry"),
-            "got: {error:#}"
+            format!("{error}").contains("more than one entry"),
+            "got: {error}"
         );
     }
 
@@ -229,8 +218,8 @@ mod tests {
         let error = resolve_exposure(&path, "sample/repo", &commit(HEX)).unwrap_err();
 
         assert!(
-            format!("{error:#}").contains("cannot identify"),
-            "got: {error:#}"
+            format!("{error}").contains("cannot identify"),
+            "got: {error}"
         );
     }
 
@@ -245,8 +234,8 @@ mod tests {
         let error = resolve_exposure(&path, "sample/repo", &commit(HEX)).unwrap_err();
 
         assert!(
-            format!("{error:#}").contains("cannot identify"),
-            "got: {error:#}"
+            format!("{error}").contains("cannot identify"),
+            "got: {error}"
         );
     }
 
@@ -261,8 +250,8 @@ mod tests {
         let error = resolve_exposure(&path, "sample/repo", &commit(HEX)).unwrap_err();
 
         assert!(
-            format!("{error:#}").contains("does not describe the revision being measured"),
-            "got: {error:#}"
+            format!("{error}").contains("does not describe the revision being measured"),
+            "got: {error}"
         );
     }
 
@@ -276,7 +265,7 @@ mod tests {
 
         let error = resolve_exposure(&path, "sample/repo", &commit(HEX)).unwrap_err();
 
-        let error = format!("{error:#}");
+        let error = error.to_string();
         assert!(error.contains(OTHER_HEX), "got: {error}");
         assert!(error.contains(HEX), "got: {error}");
     }
@@ -289,15 +278,15 @@ mod tests {
             resolve_exposure(&dir.path().join("absent.json"), "sample/repo", &commit(HEX))
                 .unwrap_err();
         assert!(
-            format!("{missing:#}").contains("absent.json"),
-            "got: {missing:#}"
+            format!("{missing}").contains("absent.json"),
+            "got: {missing}"
         );
 
         let path = write_scan(dir.path(), "{\"repos\":[{\"repo_id\":\"sample/repo\"}]}");
         let malformed = resolve_exposure(&path, "sample/repo", &commit(HEX)).unwrap_err();
         assert!(
-            format!("{malformed:#}").contains("exposure.json"),
-            "got: {malformed:#}"
+            format!("{malformed}").contains("exposure.json"),
+            "got: {malformed}"
         );
     }
 
@@ -309,9 +298,6 @@ mod tests {
 
         let error = resolve_exposure(&path, "sample/repo", &commit(HEX)).unwrap_err();
 
-        assert!(
-            format!("{error:#}").contains("regular file"),
-            "got: {error:#}"
-        );
+        assert!(format!("{error}").contains("regular file"), "got: {error}");
     }
 }

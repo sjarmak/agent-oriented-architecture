@@ -206,7 +206,6 @@ dependencies = [
 name = "aoa-falsify-build"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "aoa-bench",
  "aoa-codeprobe-shim",
  "aoa-domain",

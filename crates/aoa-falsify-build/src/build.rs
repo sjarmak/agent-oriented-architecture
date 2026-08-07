@@ -33,10 +33,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result as AnyResult};
-
 use crate::answer::AnswerContext;
-use crate::error::FalsifyBuildError;
+use crate::error::{BuildError, ReusedInput, TaskPurpose};
 use crate::evidence::{build_observation, read_artifact, read_calibration, RepoEvidence};
 use crate::exposure::resolve_exposure;
 use crate::manifest::{Manifest, RepoManifest, TaskShape};
@@ -50,6 +48,9 @@ use aoa_falsify::{
     RepoRun, ScoringConvention,
 };
 use aoa_metrics::Confidence;
+
+/// Every fallible step here yields the crate's typed error.
+type Result<T> = std::result::Result<T, BuildError>;
 
 // ---------------------------------------------------------------------------
 // Build
@@ -79,9 +80,11 @@ impl ArmOutcomes {
 /// Read one arm run dir into per-task held-out outcomes. A task whose scoring is
 /// missing/non-dual/errored is recorded as excluded (with reason), not fatal —
 /// it simply cannot form a clean identical pair.
-fn read_arm(run_dir: &Path) -> AnyResult<ArmOutcomes> {
-    let task_ids = discover_tasks(run_dir)
-        .with_context(|| format!("failed to discover arm trials in {}", run_dir.display()))?;
+fn read_arm(run_dir: &Path) -> Result<ArmOutcomes> {
+    let task_ids = discover_tasks(run_dir).map_err(|source| BuildError::ArmTrialDiscovery {
+        run_dir: run_dir.to_path_buf(),
+        source: Box::new(source),
+    })?;
     let mut held_out = BTreeMap::new();
     let mut excluded = BTreeMap::new();
     for task_id in task_ids {
@@ -96,9 +99,9 @@ fn read_arm(run_dir: &Path) -> AnyResult<ArmOutcomes> {
                 );
             }
             Err(e) => {
-                // `e` is a `BenchError`, not an `anyhow::Error`: its
-                // `#[error(..)]` already inlines `{source}`, so there is no
-                // chain to walk and no alternate flag to set.
+                // Plain `to_string`, not a chain walk: `BenchError`'s
+                // `#[error(..)]` already inlines its `{source}`, so walking
+                // would print the cause twice.
                 excluded.insert(task_id, e.to_string());
             }
         }
@@ -122,10 +125,13 @@ fn build_repo(
     k_runs: u32,
     mut answer_ctx: Option<AnswerContext>,
     answer_context_error: Option<String>,
-) -> AnyResult<RepoOutcome> {
+) -> Result<RepoOutcome> {
     repo.repo_commit
         .validate()
-        .with_context(|| format!("repo {}: invalid repo_commit", repo.repo_id))?;
+        .map_err(|source| BuildError::InvalidRepoCommit {
+            repo_id: repo.repo_id.clone(),
+            source,
+        })?;
     let repo_evidence = RepoEvidence {
         calibration: read_calibration(&base_dir.join(&repo.calibration_artifact)),
         repo_config: read_artifact(&base_dir.join(&repo.repo_arm_config)),
@@ -136,13 +142,11 @@ fn build_repo(
             .map(|path| read_artifact(&base_dir.join(path))),
     };
     if (repo.runs.len() as u32) < k_runs {
-        bail!(
-            "repo {}: manifest supplies {} run(s) but k_runs is {}; each repo needs \
-             at least k_runs fixed-seed replications",
-            repo.repo_id,
-            repo.runs.len(),
-            k_runs
-        );
+        return Err(BuildError::InsufficientRuns {
+            repo_id: repo.repo_id.clone(),
+            supplied: repo.runs.len(),
+            k_runs,
+        });
     }
 
     // R0 determinism evidence is only meaningful across K INDEPENDENT runs.
@@ -153,12 +157,10 @@ fn build_repo(
     let mut seen_dirs: BTreeSet<PathBuf> = BTreeSet::new();
     for run in &repo.runs {
         if !seen_seeds.insert(run.seed) {
-            bail!(
-                "repo {}: seed {} is used by more than one run; each of the k_runs \
-                 replications must use a distinct seed",
-                repo.repo_id,
-                run.seed
-            );
+            return Err(BuildError::ReusedReplicationInput {
+                repo_id: repo.repo_id.clone(),
+                input: ReusedInput::Seed(run.seed),
+            });
         }
         for dir in [&run.repo_arm, &run.harness_arm] {
             // Compare RESOLVED directories, not raw manifest spellings: two runs
@@ -171,12 +173,10 @@ fn build_repo(
             let resolved = base_dir.join(dir);
             let key = resolved.canonicalize().unwrap_or(resolved);
             if !seen_dirs.insert(key) {
-                bail!(
-                    "repo {}: run directory {} is used by more than one run/arm; each \
-                     replication must read a distinct run directory",
-                    repo.repo_id,
-                    dir.display()
-                );
+                return Err(BuildError::ReusedReplicationInput {
+                    repo_id: repo.repo_id.clone(),
+                    input: ReusedInput::RunDirectory(dir.clone()),
+                });
             }
         }
     }
@@ -372,18 +372,19 @@ fn build_repo(
         if ids != representative {
             let reference: BTreeSet<&String> = representative.iter().collect();
             let this: BTreeSet<&String> = ids.iter().collect();
-            let missing: Vec<&String> = reference.difference(&this).copied().collect();
-            let extra: Vec<&String> = this.difference(&reference).copied().collect();
-            bail!(
-                "repo {}: run {} (seed {}) admits a different identical-pair set than run 0 \
-                 (missing {:?}, extra {:?}); determinism across runs requires identical task \
-                 identities, not just equal counts",
-                repo.repo_id,
+            return Err(BuildError::PairSetMismatch {
+                repo_id: repo.repo_id.clone(),
                 run_index,
-                repo.runs[run_index].seed,
-                missing,
-                extra
-            );
+                seed: repo.runs[run_index].seed,
+                missing: reference
+                    .difference(&this)
+                    .map(|id| id.to_string())
+                    .collect(),
+                extra: this
+                    .difference(&reference)
+                    .map(|id| id.to_string())
+                    .collect(),
+            });
         }
     }
 
@@ -392,16 +393,19 @@ fn build_repo(
     // provenance is a task property, identical across arms by construction.
     let mut provenances = Vec::with_capacity(representative.len());
     for id in representative {
-        let task = load_task(tasks_dir.join(id)).with_context(|| {
-            format!(
-                "failed to load task {id} oracle from {}",
-                tasks_dir.display()
-            )
+        let task = load_task(tasks_dir.join(id)).map_err(|source| BuildError::TaskUnreadable {
+            task_id: id.clone(),
+            purpose: TaskPurpose::Oracle,
+            tasks_dir: tasks_dir.to_path_buf(),
+            source: Box::new(source),
         })?;
         provenances.push(task.held_out_provenance());
     }
-    let native_span = aggregate_provenance(&provenances)
-        .with_context(|| format!("repo {}: held-out provenance", repo.repo_id))?;
+    let native_span =
+        aggregate_provenance(&provenances).map_err(|source| BuildError::HeldOutProvenance {
+            repo_id: repo.repo_id.clone(),
+            source: Box::new(source),
+        })?;
 
     // Derived from the persisted ledger, never asserted by the manifest: this is
     // the anti-leakage check the whole gate rests on, so a ledger that does not
@@ -467,27 +471,26 @@ fn build_repo(
 /// Validate the manifest's task-shape declarations: one uniform shape per
 /// manifest (the gate scores one convention family), `scip_index` required for
 /// `answer` and rejected for `edit` (where it would silently do nothing).
-fn validated_shape(manifest: &Manifest) -> AnyResult<TaskShape> {
+fn validated_shape(manifest: &Manifest) -> Result<TaskShape> {
     let shape = manifest.repos[0].task_shape;
     for repo in &manifest.repos {
         if repo.task_shape != shape {
-            bail!(
-                "manifest mixes task shapes ({:?} and {:?}); one experiment scores one task shape",
-                shape,
-                repo.task_shape
-            );
+            return Err(BuildError::MixedTaskShapes {
+                first: shape,
+                other: repo.task_shape,
+            });
         }
         match (repo.task_shape, &repo.scip_index) {
-            (TaskShape::Answer, None) => bail!(
-                "repo {}: task_shape \"answer\" requires scip_index (the vendored SCIP JSON \
-                 index the trace-locality/trace-reach inputs are derived from)",
-                repo.repo_id
-            ),
-            (TaskShape::Edit, Some(_)) => bail!(
-                "repo {}: scip_index is only read for task_shape \"answer\"; declare the shape \
-                 or drop the index",
-                repo.repo_id
-            ),
+            (TaskShape::Answer, None) => {
+                return Err(BuildError::AnswerShapeRequiresIndex {
+                    repo_id: repo.repo_id.clone(),
+                })
+            }
+            (TaskShape::Edit, Some(_)) => {
+                return Err(BuildError::EditShapeRejectsIndex {
+                    repo_id: repo.repo_id.clone(),
+                })
+            }
             _ => {}
         }
     }
@@ -499,10 +502,10 @@ fn build_inner(
     manifest: &Manifest,
     tasks_dir: &Path,
     base_dir: &Path,
-) -> AnyResult<(FalsifyInput, BuildReport, Vec<MeasurementObservationV1>)> {
+) -> Result<(FalsifyInput, BuildReport, Vec<MeasurementObservationV1>)> {
     manifest.validate_repo_inventory()?;
     if manifest.repos.is_empty() {
-        bail!("manifest declares no repos");
+        return Err(BuildError::NoRepos);
     }
     let shape = validated_shape(manifest)?;
 
@@ -518,7 +521,7 @@ fn build_inner(
             Some(index) => {
                 match AnswerContext::load(&repo.repo_id, &base_dir.join(index), tasks_dir) {
                     Ok(context) => (Some(context), None),
-                    Err(error) => (None, Some(format!("{error:#}"))),
+                    Err(error) => (None, Some(error.flattened())),
                 }
             }
             None => (None, None),
@@ -617,7 +620,7 @@ pub fn build(
     tasks_dir: &Path,
     base_dir: &Path,
 ) -> crate::Result<(FalsifyInput, BuildReport, Vec<MeasurementObservationV1>)> {
-    build_inner(manifest, tasks_dir, base_dir).map_err(FalsifyBuildError::from_anyhow)
+    build_inner(manifest, tasks_dir, base_dir).map_err(Into::into)
 }
 
 #[cfg(test)]
