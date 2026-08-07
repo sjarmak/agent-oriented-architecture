@@ -144,16 +144,12 @@ impl Model {
     /// Elements drawn inside a system that stand for no crate at all — neither
     /// linking one nor holding one underneath.
     ///
-    /// This is the same defect as the grouping rule one level up, and it is
-    /// stated over *elements* rather than over the shapes that have been
-    /// demonstrated, because the hole is in the resolution and not in any
-    /// particular way of reaching it. [`resolve`] answers [`Endpoint::Outside`]
-    /// for an element with no crate under it — the right answer for an actor or
-    /// an external system, and the wrong one for anything inside the boundary —
-    /// and [`crate_edges`] then drops every arrow at it as an arrow to the
-    /// outside world. The element and its arrows still render on the published
-    /// diagram, so the claim is visible to every reader and invisible to every
-    /// test.
+    /// [`resolve`] answers [`Endpoint::Outside`] for an element with no crate
+    /// under it — the right answer for an actor or an external system, and the
+    /// wrong one for anything inside the boundary — and [`crate_edges`] then
+    /// drops every arrow at it as an arrow to the outside world. The element
+    /// and its arrows still render on the published diagram, so such a claim is
+    /// visible to every reader and invisible to every test.
     fn elements_standing_for_nothing(&self) -> Vec<&str> {
         let owners = self.crate_owners();
         let roots = self.system_roots();
@@ -553,14 +549,8 @@ fn every_crate_is_drawn_exactly_once() {
 }
 
 /// The other direction of membership: every crate is drawn, and everything
-/// drawn inside the system is a crate.
-///
-/// Without this, an element inside the boundary can name a crate in its title,
-/// link nothing, and carry arrows that no test in this file ever sees — they
-/// resolve to the outside world and are dropped. The review of this change
-/// demonstrated it with `recommendGhost = component 'aoa-recommend'`, which
-/// rendered as exactly the `aoa-recommend -> aoa-migrate` arrow aoa-enzj8
-/// exists to delete and passed all fifteen tests that existed then.
+/// drawn inside the system is a crate. The shape this was found to miss is
+/// [`known_holes::an_element_that_only_names_a_crate_is_reported`].
 #[test]
 fn every_element_inside_the_system_stands_for_a_crate() {
     let model = model();
