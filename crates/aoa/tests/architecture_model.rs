@@ -16,33 +16,14 @@
 //! dependency between drawn library crates is an arrow. A crate can sit in the
 //! right layer and still be drawn with an edge it does not have.
 //!
-//! The contract, stated once here and once in the model's own header:
-//!
-//! - **Membership.** Every crate under `crates/` is exactly one element.
-//! - **Soundness.** Every relationship whose two ends both resolve to crates is
-//!   a production dependency of the source on the target.
-//! - **Completeness, library-to-library only.** Every production dependency
-//!   between two library crates is drawn. This is what stops the cheap repair —
-//!   deleting an arrow rather than fixing the code it describes.
-//! - **The CLI is the one asymmetry.** `aoa` depends on all eighteen libraries,
-//!   so drawing every one of its edges would say nothing. Its arrows are drawn
-//!   where they carry meaning and are checked for truth, never for
-//!   exhaustiveness.
-//! - **No arrow at a grouping over several crates.** One over a single crate
-//!   resolves to it and is checked; one over several names neither end of what
-//!   it claims, so nothing could check it. See [`crate_edges`].
-//! - **`#conceptual`** marks a relationship that is deliberately not a code
-//!   edge. Each one is registered in [`CONCEPTUAL_EDGES`] with a reason, and
-//!   [`conceptual_edges_are_registered_and_still_conceptual`] deletes the
-//!   licence the moment the edge becomes real.
-//!
-//! `views.c4` is held to a weaker rule on purpose, and the asymmetry is the
-//! point rather than an omission: its dynamic views are walkthroughs of what
-//! happens at runtime, not claims about the build graph. `operator -> falsify`
-//! and `audit -> operator` are steps in the same file, and no manifest will
-//! ever back them. So the views are checked for the one thing they do owe —
-//! that every endpoint names an element that exists — and their flow steps are
-//! left to say what a run actually does.
+//! The contract's terms — membership, soundness, library-to-library
+//! completeness, the CLI asymmetry, the grouping rule, and `#conceptual` — are
+//! written where a contributor editing the diagram meets them: the header of
+//! `architecture/model.c4` itself, recorded in [`DECISION_RECORD`]. They are
+//! deliberately not restated here. A second copy is a second thing to drift,
+//! with nothing holding the two together, which is the defect this whole file
+//! exists to close. What each test enforces is stated at that test, and each
+//! failure message says what the rule is and why.
 
 mod common;
 
@@ -652,6 +633,13 @@ fn the_model_carries_its_own_decision_record() {
 // Views.
 // ───────────────────────────────────────────────────────────────────────────
 
+/// `views.c4` is held to a weaker rule on purpose, and the asymmetry is the
+/// point rather than an omission: its dynamic views are walkthroughs of what
+/// happens at run time, not claims about the build graph. `operator -> falsify`
+/// and `audit -> operator` are steps in the same file, and no manifest will
+/// ever back them. So the views are checked for the one thing they do owe —
+/// that every endpoint names an element that exists — and their flow steps are
+/// left to say what a run actually does.
 #[test]
 fn every_view_step_names_an_element_that_exists() {
     let model = model();
