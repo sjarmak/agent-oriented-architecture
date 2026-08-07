@@ -17,13 +17,15 @@
 // the build when the two disagree:
 //
 //   - Every crate under crates/ is exactly one element here.
-//   - And the other way round: every element inside the `aoa` system stands for
-//     a crate — it links one, or it groups elements that do. Naming a crate in
-//     an element's TITLE is not standing for it. The title is what the diagram
+//   - And the other way round: every element that claims to be code stands for
+//     a crate — it links one, or it groups elements that do. An element claims
+//     to be code by sitting inside the `aoa` system, or by being declared
+//     `container` or `component` anywhere in this file. Naming a crate in an
+//     element's TITLE is not standing for it. The title is what the diagram
 //     renders and nothing reads it, so an element that only names a crate is a
 //     box on the published picture that no test can contradict, and every arrow
 //     at it is dropped as an arrow to the outside world. An element with no code
-//     behind it belongs outside the system boundary, where the shape says so.
+//     behind it is an actor or an externalSystem, where the shape says so.
 //   - Every arrow between two crate-backed elements is a real production
 //     dependency of the source on the target.
 //   - Every production dependency between two library crates is drawn, so

@@ -49,17 +49,24 @@ workflow would ever have said any of this.
   drawing every one of its edges would say nothing. Its arrows are drawn where
   they carry meaning — where the composition root is what joins two crates that
   do not know each other — and are checked for truth, never exhaustiveness.
-- **Every element inside the `aoa` system stands for a crate.** It links one, or
-  it groups elements that do. Naming a crate in an element's *title* is not
-  standing for it: the title is what the diagram renders and no test reads it,
-  so `recommendGhost = component 'aoa-recommend'` with no link resolved to the
+- **Every element that claims to be code stands for a crate.** It links one, or
+  it groups elements that do. An element claims to be code by sitting inside the
+  `aoa` system, or by being declared `container` or `component` anywhere in the
+  file. Naming a crate in an element's *title* is not standing for it: the title
+  is what the diagram renders and no test reads it, so
+  `recommendGhost = component 'aoa-recommend'` with no link resolved to the
   outside world, had its arrows dropped unchecked, and drew the exact
   `aoa-recommend -> aoa-migrate` dependency this record exists to remove — past
   a green suite. That is the grouping rule's defect one level down, found the
-  same way, by a reviewer building the claim that could not fail. The rule is
-  stated over elements rather than over the shape that demonstrated it, because
-  the hole is in how an endpoint resolves and not in any one way of reaching it.
-  An element with no code behind it belongs outside the system boundary.
+  same way, by a reviewer building the claim that could not fail. An element
+  with no code behind it is an actor or an `externalSystem`.
+
+  The two halves of "claims to be code" are both load-bearing, and the second
+  was learned the hard way *twice*. Stated only over what sits inside the system
+  boundary, the rule was satisfied by moving the ghost one line out of `aoa` and
+  deleting two levels of indentation: still a `component`, still rendered, still
+  drawing its arrow, and green again. A rule about a claim has to be about the
+  claim, not about where in the file it was written.
 - **No arrow may be drawn at a grouping that stands for several crates.** A
   container with exactly one crate under it resolves to that crate, so an arrow
   there is checked like any other; one over several — `aoa.substrate`,

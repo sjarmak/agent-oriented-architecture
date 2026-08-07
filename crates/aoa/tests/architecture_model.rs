@@ -141,15 +141,25 @@ impl Model {
             .collect()
     }
 
-    /// Elements drawn inside a system that stand for no crate at all — neither
+    /// Elements that claim to be code and stand for no crate at all — neither
     /// linking one nor holding one underneath.
     ///
     /// [`resolve`] answers [`Endpoint::Outside`] for an element with no crate
     /// under it — the right answer for an actor or an external system, and the
-    /// wrong one for anything inside the boundary — and [`crate_edges`] then
+    /// wrong one for anything claiming to be code — and [`crate_edges`] then
     /// drops every arrow at it as an arrow to the outside world. The element
     /// and its arrows still render on the published diagram, so such a claim is
     /// visible to every reader and invisible to every test.
+    ///
+    /// An element claims to be code two ways, and both are checked because
+    /// either alone leaves the other as a way around this. Sitting inside a
+    /// system is one: everything in the AOA boundary is one of its crates.
+    /// Being declared `container` or `component` is the other, and it does not
+    /// depend on where the element sits — a `component` written at the top
+    /// level of the file, outside every boundary, renders and draws arrows just
+    /// the same. Bounding the rule to the system boundary alone was the first
+    /// fix for this and did not hold: the ghost simply moved one line out of
+    /// the system and passed again.
     fn elements_standing_for_nothing(&self) -> Vec<&str> {
         let owners = self.crate_owners();
         let roots = self.system_roots();
@@ -157,9 +167,11 @@ impl Model {
         self.elements
             .iter()
             .filter(|element| {
-                roots.iter().any(|root| {
-                    element.fqn == *root || element.fqn.starts_with(&format!("{root}."))
-                })
+                element.kind == "container"
+                    || element.kind == "component"
+                    || roots.iter().any(|root| {
+                        element.fqn == *root || element.fqn.starts_with(&format!("{root}."))
+                    })
             })
             .filter(|element| matches!(resolve(&element.fqn, &owners), Endpoint::Outside))
             .map(|element| element.fqn.as_str())
@@ -549,27 +561,28 @@ fn every_crate_is_drawn_exactly_once() {
 }
 
 /// The other direction of membership: every crate is drawn, and everything
-/// drawn inside the system is a crate. The shape this was found to miss is
-/// [`known_holes::an_element_that_only_names_a_crate_is_reported`].
+/// drawn as code is a crate. The two shapes this was found to miss are in
+/// [`known_holes`].
 #[test]
-fn every_element_inside_the_system_stands_for_a_crate() {
+fn every_element_that_claims_to_be_code_stands_for_a_crate() {
     let model = model();
 
     assert!(
         !model.system_roots().is_empty(),
-        "{MODEL} declares no `system`, so this test had no boundary to check \
-         inside of and checked nothing"
+        "{MODEL} declares no `system`, so half of this rule had no boundary to \
+         check inside of"
     );
 
     let standing_for_nothing = model.elements_standing_for_nothing();
     assert!(
         standing_for_nothing.is_empty(),
-        "these elements are drawn inside the AOA system but link no crate and \
-         hold none underneath: {standing_for_nothing:?} — the title is what the \
-         diagram renders and nothing here reads it, so an element that only \
-         names a crate is a box on a published picture no test can contradict, \
-         and every arrow at it is silently dropped. Link the crate it stands \
-         for, or draw it outside the system boundary, where having no code \
+        "these elements are drawn as code — inside the AOA system, or as a \
+         `container` or `component` anywhere — but link no crate and hold none \
+         underneath: {standing_for_nothing:?} — the title is what the diagram \
+         renders and nothing here reads it, so an element that only names a \
+         crate is a box on a published picture no test can contradict, and \
+         every arrow at it is silently dropped. Link the crate it stands for, \
+         or draw it as an actor or an external system, where having no code \
          behind it is what the shape already says"
     );
 }
@@ -799,6 +812,37 @@ mod known_holes {
             ["aoa.measure.recommendGhost"],
             "an element inside the system that links no crate has to be \
              reported here; nothing else in this file will ever see it"
+        );
+    }
+
+    /// The same ghost, moved one line out of the system boundary. It is still a
+    /// `component`, still renders, and still draws its arrow, so bounding the
+    /// rule to what sits inside a system left the whole defect reachable by
+    /// deleting two levels of indentation.
+    #[test]
+    fn an_element_outside_every_boundary_does_not_escape_by_leaving_it() {
+        let model = parse_model(
+            concat!(
+                "model {\n",
+                "  aoa = system 'AOA' {\n",
+                "    migrate = container 'Repository-mutating migration' {\n",
+                "      migrator = component 'aoa-migrate' {\n",
+                "        link ../crates/aoa-migrate 'crates/aoa-migrate/'\n",
+                "      }\n",
+                "    }\n",
+                "  }\n",
+                "  ghost = component 'aoa-recommend'\n",
+                "  ghost -> aoa.migrate.migrator 'joins migration availability per finding'\n",
+                "}\n",
+            ),
+            PATH,
+        );
+
+        assert_eq!(
+            model.elements_standing_for_nothing(),
+            ["ghost"],
+            "a component that stands for no crate is a component wherever it is \
+             written; the system boundary is not what makes the claim checkable"
         );
     }
 
