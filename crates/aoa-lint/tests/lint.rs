@@ -163,3 +163,60 @@ fn angle_bracket_destinations_are_unwrapped_before_classification() {
         "an angle-bracket URL is external and an existing angle-bracket path resolves; only the missing path is stale"
     );
 }
+
+fn mixed_report() -> LintReport {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mixed/AGENTS.md");
+    lint_context(&root, "o200k_base").expect("lint_context should succeed")
+}
+
+fn findings_for<'a>(report: &'a LintReport, file_name: &str) -> Vec<&'a Finding> {
+    report
+        .findings
+        .iter()
+        .filter(|f| f.file.file_name().is_some_and(|name| name == file_name))
+        .collect()
+}
+
+#[test]
+fn section_rules_skip_non_markdown_closure_members() {
+    let report = mixed_report();
+
+    for file_name in ["snapshot.toml", "sync.ts"] {
+        assert!(
+            report
+                .budget
+                .files
+                .iter()
+                .any(|f| f.path.file_name().is_some_and(|name| name == file_name)),
+            "{file_name} should be a closure member"
+        );
+        let section_findings: Vec<&Finding> = findings_for(&report, file_name)
+            .into_iter()
+            .filter(|f| {
+                matches!(
+                    f.category,
+                    SmellCategory::Verbosity | SmellCategory::Duplication
+                )
+            })
+            .collect();
+        assert!(
+            section_findings.is_empty(),
+            "{file_name} is not markdown, got section findings {section_findings:?}"
+        );
+    }
+}
+
+#[test]
+fn section_rules_still_apply_to_extensionless_context_files() {
+    let report = mixed_report();
+
+    let duplicates: Vec<&Finding> = findings_for(&report, ".cursorrules")
+        .into_iter()
+        .filter(|f| f.category == SmellCategory::Duplication)
+        .collect();
+    assert_eq!(
+        duplicates.len(),
+        1,
+        "expected the repeated heading in .cursorrules, got {duplicates:?}"
+    );
+}
