@@ -29,6 +29,6 @@ pub use closure::{resolve_closure, Closure, ContextFile};
 pub use error::BudgetError;
 pub use fix::{fix_oversized, FixOutcome};
 pub use path::normalize_path;
-pub use reference::{extract_references, Reference};
+pub use reference::{extract_references, markdown_link_paths, Reference};
 pub use suppress::{find_suppression, SUPPRESS_MARKER};
 pub use tokenizer::{count_tokens, reference_encoder, target_encoder, REFERENCE_ENCODING};

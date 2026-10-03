@@ -45,21 +45,40 @@ fn local_path(raw: &str) -> Option<&str> {
     Some(trimmed.split('#').next().unwrap_or(trimmed))
 }
 
+pub fn markdown_link_paths(text: &str) -> Vec<String> {
+    markdown_link_targets(text)
+        .iter()
+        .filter_map(|raw| local_path(raw))
+        .map(str::to_string)
+        .collect()
+}
+
 fn markdown_link_targets(text: &str) -> Vec<String> {
-    let bytes = text.as_bytes();
     let mut out = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b']' && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
-            if let Some(end) = text[i + 2..].find(')') {
-                out.push(text[i + 2..i + 2 + end].to_string());
-                i = i + 2 + end + 1;
-                continue;
-            }
-        }
-        i += 1;
+    let mut rest = text;
+    while let Some(open) = rest.find("](") {
+        let after = &rest[open + 2..];
+        let Some((target, consumed)) = link_destination(after) else {
+            break;
+        };
+        out.push(target.to_string());
+        rest = &after[consumed..];
     }
     out
+}
+
+fn link_destination(after: &str) -> Option<(&str, usize)> {
+    let unpadded = after.trim_start_matches([' ', '\t']);
+    if let Some(bracketed) = unpadded.strip_prefix('<') {
+        if let Some(close) = bracketed.find(['<', '>', '\n']) {
+            if bracketed[close..].starts_with('>') {
+                let padding = after.len() - unpadded.len();
+                return Some((&bracketed[..close], padding + close + 2));
+            }
+        }
+    }
+    let end = after.find(')')?;
+    Some((&after[..end], end + 1))
 }
 
 fn at_include_targets(text: &str) -> Vec<String> {

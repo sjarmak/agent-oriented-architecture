@@ -2,7 +2,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use aoa_budget::{
-    count_budget, fix_oversized, resolve_closure, BudgetError, Config, Verdict, REFERENCE_ENCODING,
+    count_budget, extract_references, fix_oversized, resolve_closure, BudgetError, Config, Verdict,
+    REFERENCE_ENCODING,
 };
 
 fn fixtures() -> PathBuf {
@@ -276,4 +277,31 @@ fn unknown_target_tokenizer_errors() {
     let closure = resolve_closure(&root).unwrap();
     let err = count_budget(&closure, "totally-made-up-model", &Config::blocking(100)).unwrap_err();
     assert!(matches!(err, BudgetError::UnknownTargetTokenizer { .. }));
+}
+
+#[test]
+fn angle_bracket_destinations_are_unwrapped_before_classification() {
+    let base = fixtures().join("angle");
+    let text = std::fs::read_to_string(base.join("AGENTS.md")).unwrap();
+
+    let targets: Vec<PathBuf> = extract_references(&text, &base)
+        .into_iter()
+        .map(|r| r.target)
+        .collect();
+    assert_eq!(
+        targets,
+        [
+            base.join("docs/present (v2).md"),
+            base.join("docs/missing (old).md"),
+        ],
+        "the angle-bracket URL is external; both angle-bracket paths are local"
+    );
+
+    let closure = resolve_closure(&base.join("AGENTS.md")).unwrap();
+    let names: Vec<String> = closure
+        .files
+        .iter()
+        .map(|f| f.path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["AGENTS.md", "present (v2).md"]);
 }

@@ -144,3 +144,22 @@ fn unknown_tokenizer_errors() {
     let result = lint_context(&fixture_root(), "not-a-real-tokenizer");
     assert!(result.is_err(), "unknown tokenizer should error");
 }
+
+#[test]
+fn angle_bracket_destinations_are_unwrapped_before_classification() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/angle/AGENTS.md");
+    let report = lint_context(&root, "o200k_base").expect("lint_context should succeed");
+
+    let stale: Vec<&str> = report
+        .findings
+        .iter()
+        .filter(|f| f.category == SmellCategory::StaleReference)
+        .map(|f| f.message.as_str())
+        .collect();
+
+    assert_eq!(
+        stale,
+        ["stale reference: linked file 'docs/missing (old).md' does not exist"],
+        "an angle-bracket URL is external and an existing angle-bracket path resolves; only the missing path is stale"
+    );
+}
