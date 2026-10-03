@@ -1,32 +1,65 @@
 use std::path::Path;
+use std::process::Command;
 
+use aoa_corpus::PRECOMMIT_HOOK_MARKERS;
 use serde_json::Value;
 
 use crate::hook_set::{read_settings, ENFORCE_HOOK_SET, ENFORCE_WRAPPER_REL};
 use crate::tier::EnforcementPlane;
 
-/// The candidate paths probed for each enforcement plane. A plane is present if
-/// any of its candidates exists; absent otherwise. Runtime hooks are the
-/// exception: [`runtime_hook_present`] validates the load-bearing hook set
-/// rather than trusting a settings filename alone.
-fn candidates(plane: EnforcementPlane) -> &'static [&'static str] {
-    match plane {
-        EnforcementPlane::RuntimeHook => &[],
-        EnforcementPlane::PreCommit => &[".pre-commit-config.yaml", ".git/hooks/pre-commit"],
-        EnforcementPlane::Ci => &[
-            ".github/workflows",
-            ".gitlab-ci.yml",
-            ".circleci/config.yml",
-        ],
-    }
-}
+const CI_MARKERS: &[&str] = &[
+    ".github/workflows",
+    ".gitlab-ci.yml",
+    ".circleci/config.yml",
+];
 
-/// Whether `plane` is structurally present in `repo`.
+const AMBIENT_REPOSITORY_ENV: [&str; 6] = [
+    "GIT_DIR",
+    "GIT_COMMON_DIR",
+    "GIT_WORK_TREE",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+];
+
 fn present(repo: &Path, plane: EnforcementPlane) -> bool {
     match plane {
         EnforcementPlane::RuntimeHook => runtime_hook_present(repo),
-        _ => candidates(plane).iter().any(|rel| repo.join(rel).exists()),
+        EnforcementPlane::PreCommit => {
+            any_exists(repo, PRECOMMIT_HOOK_MARKERS) || installed_pre_commit_hook(repo)
+        }
+        EnforcementPlane::Ci => any_exists(repo, CI_MARKERS),
     }
+}
+
+fn any_exists(repo: &Path, markers: &[&str]) -> bool {
+    markers.iter().any(|rel| repo.join(rel).exists())
+}
+
+fn installed_pre_commit_hook(repo: &Path) -> bool {
+    if !repo.join(".git").exists() {
+        return false;
+    }
+    let mut command = Command::new("git");
+    for variable in AMBIENT_REPOSITORY_ENV {
+        command.env_remove(variable);
+    }
+    let Ok(output) = command
+        .arg("-C")
+        .arg(repo)
+        .args(["rev-parse", "--git-path", "hooks/pre-commit"])
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let Ok(reported) = std::str::from_utf8(&output.stdout) else {
+        return false;
+    };
+    let hook = reported.trim_end_matches(['\n', '\r']);
+    !hook.is_empty() && repo.join(hook).is_file()
 }
 
 /// Whether Claude settings contain every AOA runtime enforcement hook.

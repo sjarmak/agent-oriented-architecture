@@ -277,6 +277,7 @@ model {
   aoa.measure.audit -> aoa.substrate.metrics 'ranks a tiered punch-list from scored metrics'
   aoa.measure.audit -> aoa.measure.budget 'counts the context budget over the resolved closure'
   aoa.measure.audit -> aoa.measure.construct 'reads the construct-validity determination before a metric is allowed to gate'
+  aoa.measure.audit -> aoa.measure.corpus 'reads the pre-commit hook markers the checkbox baseline scores, so both commands state one fact'
   aoa.measure.budget -> repoUnderTest 'reads the transitive closure of context files'
   aoa.measure.lint -> aoa.measure.budget 'composes config-smell detection with the context-budget closure'
   aoa.measure.gap -> aoa.domain.kernel 'reads run outcomes and canary items for the visible-vs-hidden gap'

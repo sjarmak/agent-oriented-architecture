@@ -6,6 +6,7 @@ use aoa_audit::{
     LiveMetricContext, LiveObservationState, Tier,
 };
 use aoa_construct::MIN_HELD_OUT_OBSERVATIONS;
+use aoa_corpus::{score_repo, CriterionStatus, PRECOMMIT_HOOK_MARKERS};
 use aoa_metrics::{IndexQuality, SymbolGraph};
 use aoa_trace::{Span, SpanSource, SpanType, Trace};
 
@@ -1001,4 +1002,139 @@ fn default_audit_on_bare_repo_is_well_formed() {
     for pair in report.items.windows(2) {
         assert!(pair[0].tier <= pair[1].tier, "items not ranked by tier");
     }
+}
+
+fn pre_commit_plane_missing(repo: &Path) -> bool {
+    audit(repo, &audit_config())
+        .expect("audit succeeds")
+        .items
+        .iter()
+        .any(|item| item.plane == Some(aoa_audit::EnforcementPlane::PreCommit))
+}
+
+fn checkbox_scores_pre_commit(repo: &Path) -> bool {
+    let baseline = score_repo("fixture", repo).expect("score fixture");
+    let criterion = baseline
+        .criteria
+        .iter()
+        .find(|criterion| criterion.id == "precommit_hooks")
+        .expect("precommit_hooks criterion");
+    criterion.status == CriterionStatus::Pass
+}
+
+fn plant_marker(repo: &Path, marker: &str) {
+    let path = repo.join(marker);
+    if Path::new(marker).extension().is_some() {
+        std::fs::write(path, "").expect("write marker file");
+    } else {
+        std::fs::create_dir_all(path).expect("create marker directory");
+    }
+}
+
+fn git(repo: &Path, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args([
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .status()
+        .expect("run git");
+    assert!(status.success(), "git {args:?} failed");
+}
+
+fn git_fixture_repo() -> TempDir {
+    let repo = fixture_repo();
+    git(repo.path(), &["init", "--quiet"]);
+    git(repo.path(), &["add", "."]);
+    git(repo.path(), &["commit", "--quiet", "-m", "fixture"]);
+    repo
+}
+
+fn write_hook(path: &Path) {
+    std::fs::create_dir_all(path.parent().expect("hook parent")).expect("create hooks dir");
+    std::fs::write(path, "#!/bin/sh\nexit 0\n").expect("write hook");
+}
+
+#[test]
+fn a_husky_tree_has_no_missing_pre_commit_plane() {
+    let repo = fixture_repo();
+    assert!(pre_commit_plane_missing(repo.path()));
+
+    write_hook(&repo.path().join(".husky/pre-commit"));
+    assert!(!pre_commit_plane_missing(repo.path()));
+}
+
+#[test]
+fn a_lefthook_tree_has_no_missing_pre_commit_plane() {
+    let repo = fixture_repo();
+    std::fs::write(repo.path().join("lefthook.yml"), "pre-commit:\n").expect("write lefthook");
+    assert!(!pre_commit_plane_missing(repo.path()));
+}
+
+#[test]
+fn audit_and_checkbox_baseline_agree_on_every_declared_pre_commit_marker() {
+    let bare = fixture_repo();
+    assert!(pre_commit_plane_missing(bare.path()));
+    assert!(!checkbox_scores_pre_commit(bare.path()));
+
+    assert!(!PRECOMMIT_HOOK_MARKERS.is_empty());
+    for marker in PRECOMMIT_HOOK_MARKERS {
+        let repo = fixture_repo();
+        plant_marker(repo.path(), marker);
+        assert!(
+            checkbox_scores_pre_commit(repo.path()),
+            "checkbox-baseline does not score `{marker}`"
+        );
+        assert!(
+            !pre_commit_plane_missing(repo.path()),
+            "audit reports the pre-commit plane missing beside `{marker}`"
+        );
+    }
+}
+
+#[test]
+fn a_linked_worktree_inherits_the_main_checkout_pre_commit_hook() {
+    let main = git_fixture_repo();
+    let linked_parent = tempfile::tempdir().expect("linked worktree parent");
+    let linked = linked_parent.path().join("linked");
+    git(
+        main.path(),
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "linked",
+            linked.to_str().expect("utf-8 path"),
+        ],
+    );
+    assert!(linked.join(".git").is_file());
+    assert!(pre_commit_plane_missing(&linked));
+
+    write_hook(&main.path().join(".git/hooks/pre-commit"));
+    assert!(!pre_commit_plane_missing(main.path()));
+    assert!(!pre_commit_plane_missing(&linked));
+}
+
+#[test]
+fn a_hook_under_core_hooks_path_satisfies_the_pre_commit_plane() {
+    let repo = git_fixture_repo();
+    git(repo.path(), &["config", "core.hooksPath", ".githooks"]);
+    write_hook(&repo.path().join(".git/hooks/pre-commit"));
+    assert!(
+        pre_commit_plane_missing(repo.path()),
+        "git ignores .git/hooks once core.hooksPath points elsewhere"
+    );
+
+    write_hook(&repo.path().join(".githooks/pre-commit"));
+    assert!(!pre_commit_plane_missing(repo.path()));
 }

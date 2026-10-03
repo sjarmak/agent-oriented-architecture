@@ -121,6 +121,13 @@ pub const PILLARS: [Pillar; 9] = [
     Pillar::ProductAndExperimentation,
 ];
 
+pub const PRECOMMIT_HOOK_MARKERS: &[&str] = &[
+    ".pre-commit-config.yaml",
+    ".husky",
+    "lefthook.yml",
+    ".lefthook.yml",
+];
+
 /// How a criterion is evaluated: a mechanical fixed-path existence check, or an
 /// explicit exclusion (with reason) for criteria that cannot be decided from
 /// the repo tree alone.
@@ -263,12 +270,7 @@ const CRITERIA: &[Criterion] = &[
         id: "precommit_hooks",
         pillar: Pillar::StyleAndValidation,
         level: 3,
-        check: Check::AnyPathExists(&[
-            ".pre-commit-config.yaml",
-            ".husky",
-            "lefthook.yml",
-            ".lefthook.yml",
-        ]),
+        check: Check::AnyPathExists(PRECOMMIT_HOOK_MARKERS),
     },
     Criterion {
         id: "codeowners",

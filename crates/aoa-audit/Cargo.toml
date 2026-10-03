@@ -10,6 +10,7 @@ license.workspace = true
 aoa-trace = { path = "../aoa-trace" }
 aoa-budget = { path = "../aoa-budget" }
 aoa-construct = { path = "../aoa-construct" }
+aoa-corpus = { path = "../aoa-corpus" }
 aoa-metrics = { path = "../aoa-metrics" }
 aoa-observe-shim = { path = "../aoa-observe-shim" }
 serde = { workspace = true }

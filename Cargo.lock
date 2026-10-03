@@ -107,6 +107,7 @@ version = "0.1.0"
 dependencies = [
  "aoa-budget",
  "aoa-construct",
+ "aoa-corpus",
  "aoa-metrics",
  "aoa-observe-shim",
  "aoa-trace",

@@ -32,7 +32,7 @@ mod outcome;
 pub use checkbox_baseline::{
     score_repo, CheckboxBaseline, CheckboxBaselineError, CriterionResult, CriterionStatus,
     LevelScore, Pillar, PillarScore, FACTORY_CRITERIA_SOURCE, FACTORY_CRITERIA_VERSION,
-    FACTORY_LEVEL_NAMES, PILLARS,
+    FACTORY_LEVEL_NAMES, PILLARS, PRECOMMIT_HOOK_MARKERS,
 };
 pub use correlation::{spearman, CorrelationError, RankCorrelation, MAX_EXACT_N};
 pub use outcome::{
