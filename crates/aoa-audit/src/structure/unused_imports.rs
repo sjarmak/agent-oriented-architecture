@@ -90,6 +90,7 @@ pub(super) fn unused_import_proxy_item(
         measured_cost: MeasuredCost::new(files.iter().map(|(_, n)| n).sum(), "imports"),
         plane: None,
         subtree: common_subtree(partition, files.iter().map(|(path, _)| path)),
+        size_outliers: None,
     }))
 }
 

@@ -393,6 +393,7 @@ mod tests {
             measured_cost: MeasuredCost::new(value, unit),
             plane: None,
             subtree: None,
+            size_outliers: None,
         }
     }
 

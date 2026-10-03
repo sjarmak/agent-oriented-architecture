@@ -187,6 +187,7 @@ fn absence_item(
         measured_cost: MeasuredCost::new(1, unit),
         plane: None,
         subtree: None,
+        size_outliers: None,
     })
 }
 
@@ -227,6 +228,7 @@ pub(super) fn generated_artifact_protection_item(
         measured_cost: MeasuredCost::new(1, "protection markers absent"),
         plane: None,
         subtree: None,
+        size_outliers: None,
     }))
 }
 
@@ -275,6 +277,7 @@ pub(super) fn write_safety_zone_item(repo: &Path) -> Option<PunchItem> {
         measured_cost: MeasuredCost::new(absent.len() as u64, "write-boundary surfaces absent"),
         plane: None,
         subtree: None,
+        size_outliers: None,
     })
 }
 

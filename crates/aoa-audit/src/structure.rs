@@ -34,11 +34,14 @@
 //! | Product / experimentation | **Excluded**: analytics/experimentation instrumentation is a product-layer semantic property with no fixed-filename convention and no plausible path from its presence to structural facts in coding-agent traces. |
 
 mod declarations;
+mod generated;
 mod invariants;
+mod size_outliers;
 mod unused_imports;
 mod verification;
 
 pub use invariants::invariant_sites;
+use size_outliers::{module_size_outlier_item, module_size_outliers};
 pub use verification::verification_sites;
 
 use std::collections::BTreeMap;
@@ -155,7 +158,7 @@ const PROBES: &[Probe] = &[
         measure: Some(|repo, k| {
             Ok(
                 module_size_outliers(repo, k)?.map_or(StructureMeasure::Unmeasurable, |outliers| {
-                    StructureMeasure::Measured(outliers.len() as u64)
+                    StructureMeasure::Measured(outliers.count())
                 }),
             )
         }),
@@ -396,67 +399,8 @@ fn navigability_anchor_item(
         measured_cost: MeasuredCost::new(sites.len() as u64, "package roots"),
         plane: None,
         subtree: common_subtree(partition, sites.iter()),
+        size_outliers: None,
     }))
-}
-
-/// Count source files whose line count exceeds `k ×` the repo's *own* median
-/// source-file line count. Self-calibrating: the threshold is the repo's own
-/// distribution, not an external magic size, so the measure asserts no absolute
-/// best-practice. Abstains below [`MIN_FILES_FOR_MEDIAN`] files.
-fn module_size_outlier_item(
-    repo: &Path,
-    k: f64,
-    partition: &SubtreePartition,
-) -> Result<Option<PunchItem>, AuditError> {
-    let Some(outliers) = module_size_outliers(repo, k)? else {
-        return Ok(None);
-    };
-    if outliers.is_empty() {
-        return Ok(None);
-    }
-
-    Ok(Some(PunchItem {
-        title: format!("source files exceeding {k:.1}x the repo median size"),
-        kind: FindingKind::ModuleSizeOutlier,
-        tier: Tier::Tier3,
-        measured_cost: MeasuredCost::new(outliers.len() as u64, "outlier files"),
-        plane: None,
-        subtree: common_subtree(partition, outliers.iter()),
-    }))
-}
-
-/// The source files in `repo` exceeding `k`× the repo's own median source-file
-/// line count, or `None` when the measure cannot run: fewer than
-/// [`MIN_FILES_FOR_MEDIAN`] source files, or a zero median (a repo of empty
-/// source files) with no scale to compare against. `Some(vec![])` is a real
-/// *measured zero* — files exist and none is an outlier — the distinction from
-/// unmeasurable that [`structure_measurements`] needs and the punch list (which
-/// drops both) cannot express.
-fn module_size_outliers(repo: &Path, k: f64) -> Result<Option<Vec<PathBuf>>, AuditError> {
-    let mut files: Vec<(PathBuf, u64)> = Vec::new();
-    collect_source_line_counts(repo, &mut files, 0)?;
-
-    if files.len() < MIN_FILES_FOR_MEDIAN {
-        return Ok(None);
-    }
-
-    let mut line_counts: Vec<u64> = files.iter().map(|(_, n)| *n).collect();
-    line_counts.sort_unstable();
-    let median = median(&line_counts);
-    if median == 0 {
-        return Ok(None);
-    }
-
-    // Line counts are capped by MAX_SOURCE_BYTES (~8M lines max), far below
-    // f64's 2^53 exact-integer range, so these casts lose no precision; `k` is
-    // fractional, so the comparison must be in f64.
-    let threshold = median as f64 * k;
-    let outliers = files
-        .into_iter()
-        .filter(|(_, n)| *n as f64 > threshold)
-        .map(|(path, _)| path)
-        .collect();
-    Ok(Some(outliers))
 }
 
 /// Read `path` as UTF-8 text, returning `None` if it exceeds the byte cap (the

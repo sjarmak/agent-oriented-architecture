@@ -106,6 +106,7 @@ pub(super) fn invariant_discoverability_item(
         measured_cost: MeasuredCost::new(sites.len() as u64, "package roots"),
         plane: None,
         subtree: common_subtree(partition, sites.iter()),
+        size_outliers: None,
     }))
 }
 

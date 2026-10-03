@@ -5,12 +5,14 @@ use serde::{Deserialize, Serialize};
 use aoa_construct::{BehavioralSignal, ConstructValidityReport, InsufficientDataNote};
 
 use crate::liveness::EnforcementLiveness;
-use crate::punch::PunchItem;
+use crate::punch::{OutlierGroup, PunchItem};
 use crate::tier::Tier;
 use crate::LiveMetricObservation;
 
 /// Exit code returned when `fail_on_tier1` is set and a Tier-1 gap exists.
 const TIER1_FAILURE_CODE: i32 = 2;
+
+const HUMAN_LISTED_OUTLIERS: usize = 5;
 
 /// The full audit result: a ranked punch-list plus the repo's held-out
 /// behavioral signal. Serializes to structured JSON and renders to a
@@ -136,6 +138,11 @@ impl AuditReport {
                 item.measured_cost.value,
                 item.measured_cost.unit,
             );
+            if let Some(detail) = &item.size_outliers {
+                let _ = writeln!(out, "      repo median: {} lines", detail.median_lines);
+                render_outlier_group(&mut out, "production", &detail.production);
+                render_outlier_group(&mut out, "test", &detail.test);
+            }
         }
         // Unconditional, and above the optional blocks: the state this line
         // reports is one an operator read as healthy for a whole night of
@@ -162,6 +169,17 @@ impl AuditReport {
             let _ = writeln!(out, "{}", note.render_line(&self.behavioral_signal));
         }
         out
+    }
+}
+
+fn render_outlier_group(out: &mut String, label: &str, group: &OutlierGroup) {
+    let _ = writeln!(out, "      {label}: {} outlier file(s)", group.count);
+    for file in group.largest.iter().take(HUMAN_LISTED_OUTLIERS) {
+        let _ = writeln!(out, "        {:>7} lines  {}", file.lines, file.path);
+    }
+    let shown = group.largest.len().min(HUMAN_LISTED_OUTLIERS) as u64;
+    if group.count > shown {
+        let _ = writeln!(out, "        ... {} more", group.count - shown);
     }
 }
 

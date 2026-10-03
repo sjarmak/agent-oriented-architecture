@@ -44,7 +44,10 @@ pub use liveness::{enforcement_liveness, EnforcementLiveness, Silence};
 pub use observe::{
     observe, reject_symlinked_path, reject_symlinked_trace_dir, write_trace, ObserveOutcome,
 };
-pub use punch::{rank, FindingKind, MeasuredCost, PunchItem};
+pub use punch::{
+    rank, FindingKind, MeasuredCost, OutlierFile, OutlierGroup, PunchItem, SizeOutlierDetail,
+    MAX_LISTED_OUTLIERS,
+};
 pub use report::{exit_code, AuditReport};
 pub use structure::{
     invariant_sites, navigability_sites, structure_measurements, verification_sites,

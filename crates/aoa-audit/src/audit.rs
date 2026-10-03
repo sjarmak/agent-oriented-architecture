@@ -298,6 +298,7 @@ fn context_budget_item(repo: &Path, cfg: &AuditConfig) -> Result<Option<PunchIte
         measured_cost: MeasuredCost::new(overflow as u64, "tokens over ceiling"),
         plane: None,
         subtree: None,
+        size_outliers: None,
     }))
 }
 
@@ -320,6 +321,7 @@ fn mutation_surface_item(metrics: &[&MetricRecord]) -> Option<PunchItem> {
         ),
         plane: None,
         subtree: None,
+        size_outliers: None,
     })
 }
 
@@ -351,6 +353,7 @@ fn plane_items(repo: &Path, liveness: &EnforcementLiveness) -> Vec<PunchItem> {
             measured_cost: MeasuredCost::new(1, "missing plane"),
             plane: Some(plane),
             subtree: None,
+            size_outliers: None,
         })
         .collect();
 
@@ -368,6 +371,7 @@ fn plane_items(repo: &Path, liveness: &EnforcementLiveness) -> Vec<PunchItem> {
             measured_cost: MeasuredCost::new(1, finding.cost_unit),
             plane: Some(plane),
             subtree: None,
+            size_outliers: None,
         });
     }
     items

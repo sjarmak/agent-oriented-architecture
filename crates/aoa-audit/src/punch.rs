@@ -163,6 +163,29 @@ pub struct PunchItem {
     /// from the wire form when `None`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subtree: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_outliers: Option<SizeOutlierDetail>,
+}
+
+pub const MAX_LISTED_OUTLIERS: usize = 50;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutlierFile {
+    pub path: String,
+    pub lines: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutlierGroup {
+    pub count: u64,
+    pub largest: Vec<OutlierFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SizeOutlierDetail {
+    pub median_lines: u64,
+    pub production: OutlierGroup,
+    pub test: OutlierGroup,
 }
 
 /// Rank punch-list items deterministically: Tier-1 before Tier-2 before
@@ -235,6 +258,7 @@ mod tests {
             measured_cost: MeasuredCost::new(2, "package roots"),
             plane: None,
             subtree: None,
+            size_outliers: None,
         };
         let json = serde_json::to_string(&item).expect("serialize");
         // The kind serializes to its snake_case wire name.
@@ -260,6 +284,7 @@ mod tests {
             measured_cost: MeasuredCost::new(1, "outlier files"),
             plane: None,
             subtree: Some("crates/foo".into()),
+            size_outliers: None,
         };
         let json = serde_json::to_string(&item).expect("serialize");
         assert!(

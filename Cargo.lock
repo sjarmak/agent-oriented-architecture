@@ -111,6 +111,7 @@ dependencies = [
  "aoa-metrics",
  "aoa-observe-shim",
  "aoa-trace",
+ "globset",
  "rustix",
  "serde",
  "serde_json",

@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use aoa_audit::{
-    audit, exit_code, observe, write_trace, AuditConfig, AuditReport, LiveExclusionReason,
-    LiveMetricContext, LiveObservationState, Tier,
+    audit, exit_code, observe, write_trace, AuditConfig, AuditReport, FindingKind,
+    LiveExclusionReason, LiveMetricContext, LiveObservationState, Tier, MAX_LISTED_OUTLIERS,
 };
 use aoa_construct::MIN_HELD_OUT_OBSERVATIONS;
 use aoa_corpus::{score_repo, CriterionStatus, PRECOMMIT_HOOK_MARKERS};
@@ -545,6 +545,7 @@ fn exit_code_table() {
         measured_cost: aoa_audit::MeasuredCost::new(1, "missing plane"),
         plane: Some(aoa_audit::EnforcementPlane::RuntimeHook),
         subtree: None,
+        size_outliers: None,
     };
     let tier2_item = aoa_audit::PunchItem {
         title: "tier2 gap".into(),
@@ -553,6 +554,7 @@ fn exit_code_table() {
         measured_cost: aoa_audit::MeasuredCost::new(1, "missing plane"),
         plane: Some(aoa_audit::EnforcementPlane::PreCommit),
         subtree: None,
+        size_outliers: None,
     };
 
     let with_tier1 = AuditReport::new(vec![tier1_item.clone(), tier2_item.clone()]);
@@ -610,6 +612,120 @@ fn audit_surfaces_structure_family_items() {
         anchor.plane.is_none(),
         "a structure item is not plane-shaped"
     );
+}
+
+fn write_lines(repo: &Path, relative: &str, lines: usize) {
+    let path = repo.join(relative);
+    std::fs::create_dir_all(path.parent().expect("relative path has a parent"))
+        .expect("create parent");
+    std::fs::write(path, "x\n".repeat(lines)).expect("write source");
+}
+
+fn size_outlier_repo() -> TempDir {
+    let repo = fixture_repo();
+    for i in 0..(2 * MAX_LISTED_OUTLIERS + 10) {
+        write_lines(repo.path(), &format!("src/small_{i}.rs"), 10);
+    }
+    for i in 0..(MAX_LISTED_OUTLIERS + 2) {
+        write_lines(repo.path(), &format!("src/big_{i}.rs"), 100 + i);
+    }
+    write_lines(repo.path(), "tests/suite.rs", 300);
+    write_lines(repo.path(), "web/button.spec.ts", 200);
+    write_lines(repo.path(), "src/gen/schema.rs", 5000);
+    std::fs::write(
+        repo.path().join(".gitattributes"),
+        "src/gen/** linguist-generated\n",
+    )
+    .expect("write .gitattributes");
+    repo
+}
+
+#[test]
+fn audit_json_itemizes_size_outliers_split_by_test_and_production() {
+    let repo = size_outlier_repo();
+    let report = audit(repo.path(), &audit_config()).expect("audit succeeds");
+    let json = serde_json::to_value(&report).expect("serialize report");
+
+    let item = json["items"]
+        .as_array()
+        .expect("items array")
+        .iter()
+        .find(|item| item["kind"] == "module_size_outlier")
+        .expect("size-outlier item present");
+    let production_count = (MAX_LISTED_OUTLIERS + 2) as u64;
+    assert_eq!(item["measured_cost"]["value"], production_count + 2);
+
+    let detail = &item["size_outliers"];
+    assert_eq!(detail["median_lines"], 10);
+    assert_eq!(detail["production"]["count"], production_count);
+    let production = detail["production"]["largest"]
+        .as_array()
+        .expect("production listing");
+    assert_eq!(production.len(), MAX_LISTED_OUTLIERS);
+    assert_eq!(
+        production[0],
+        serde_json::json!({
+            "path": format!("src/big_{}.rs", MAX_LISTED_OUTLIERS + 1),
+            "lines": 100 + MAX_LISTED_OUTLIERS + 1,
+        })
+    );
+    assert!(production
+        .windows(2)
+        .all(|pair| pair[0]["lines"].as_u64() >= pair[1]["lines"].as_u64()));
+
+    assert_eq!(detail["test"]["count"], 2);
+    assert_eq!(
+        detail["test"]["largest"],
+        serde_json::json!([
+            { "path": "tests/suite.rs", "lines": 300 },
+            { "path": "web/button.spec.ts", "lines": 200 },
+        ])
+    );
+    assert!(
+        !item.to_string().contains("src/gen/schema.rs"),
+        "a linguist-generated file must not be listed"
+    );
+
+    let parsed: AuditReport = serde_json::from_value(json).expect("deserialize report");
+    assert_eq!(parsed, report);
+}
+
+#[test]
+fn audit_human_rendering_reports_the_same_size_outlier_split() {
+    let repo = size_outlier_repo();
+    let report = audit(repo.path(), &audit_config()).expect("audit succeeds");
+    let human = report.render_human();
+
+    assert!(human.contains("repo median: 10 lines"), "{human}");
+    assert!(
+        human.contains(&format!(
+            "production: {} outlier file(s)",
+            MAX_LISTED_OUTLIERS + 2
+        )),
+        "{human}"
+    );
+    assert!(human.contains("test: 2 outlier file(s)"), "{human}");
+    assert!(human.contains("300 lines  tests/suite.rs"), "{human}");
+    assert!(
+        human.contains(&format!("... {} more", MAX_LISTED_OUTLIERS + 2 - 5)),
+        "{human}"
+    );
+    assert!(!human.contains("src/gen/schema.rs"), "{human}");
+}
+
+#[test]
+fn only_the_size_outlier_item_carries_an_itemization() {
+    let repo = size_outlier_repo();
+    let report = audit(repo.path(), &audit_config()).expect("audit succeeds");
+    for item in &report.items {
+        assert_eq!(
+            item.size_outliers.is_some(),
+            item.kind == FindingKind::ModuleSizeOutlier,
+            "{item:?}"
+        );
+    }
+    let json = serde_json::to_string(&report).expect("serialize report");
+    assert_eq!(json.matches("\"size_outliers\"").count(), 1);
 }
 
 // aoa-d6t.31: a workspace repo's punch-list scopes path-carrying findings to

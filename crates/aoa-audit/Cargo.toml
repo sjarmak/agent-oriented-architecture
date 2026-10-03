@@ -13,6 +13,7 @@ aoa-construct = { path = "../aoa-construct" }
 aoa-corpus = { path = "../aoa-corpus" }
 aoa-metrics = { path = "../aoa-metrics" }
 aoa-observe-shim = { path = "../aoa-observe-shim" }
+globset = "0.4.16"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

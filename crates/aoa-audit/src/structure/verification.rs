@@ -23,7 +23,7 @@ use crate::tier::Tier;
 /// documented well-known set — the same mechanical name match as
 /// [`super::WORKSPACE_CONTAINER_DIRS`]; the presence of such a dir is a discoverable
 /// verification entrypoint, not a quality judgment.
-const TEST_DIRS: &[&str] = &["tests", "test", "__tests__", "spec"];
+pub(super) const TEST_DIRS: &[&str] = &["tests", "test", "__tests__", "spec"];
 
 /// Test-runner configuration filenames. A directory carrying one documents how
 /// the project's tests are run — a reachable verification entrypoint by file
@@ -127,6 +127,7 @@ pub(super) fn verification_reachability_item(
         measured_cost: MeasuredCost::new(sites.len() as u64, "package roots"),
         plane: None,
         subtree: common_subtree(partition, sites.iter()),
+        size_outliers: None,
     }))
 }
 
@@ -256,7 +257,7 @@ fn has_local_verification_bounded(root: &Path, depth: usize) -> Result<bool, Aud
 /// common ecosystems (Go `*_test.go`, Python `test_*`/`*_test.py`, JS/TS
 /// `*.test.*`/`*.spec.*`, Ruby `*_spec.rb`, Java `*Test.java`/`*Tests.java`). A
 /// documented well-known set; a name match is a discoverable entrypoint.
-fn is_test_file(name: &str) -> bool {
+pub(super) fn is_test_file(name: &str) -> bool {
     const JS_TEST_EXTS: &[&str] = &[".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"];
     name.ends_with("_test.go")
         || name.ends_with("_test.py")
