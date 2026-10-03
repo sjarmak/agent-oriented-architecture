@@ -203,7 +203,7 @@
           }
         ],
         "criteria_source": "https://docs.factory.ai/web/agent-readiness/overview.md, https://docs.factory.ai/cli/features/readiness-report.md, https://docs.factory.ai/reference/readiness-reports-api.md (retrieved 2026-07-04). Factory publishes the 5 levels, the 80%-of-previous-level progression rule, the 9 pillars, and example criteria only; no exhaustive per-level criteria list is published, so this table is provisional.",
-        "criteria_version": "factory-provisional-2026-07-04",
+        "criteria_version": "factory-provisional-2026-10-03",
         "level": 5,
         "levels": [
           {
@@ -546,7 +546,7 @@
           }
         ],
         "criteria_source": "https://docs.factory.ai/web/agent-readiness/overview.md, https://docs.factory.ai/cli/features/readiness-report.md, https://docs.factory.ai/reference/readiness-reports-api.md (retrieved 2026-07-04). Factory publishes the 5 levels, the 80%-of-previous-level progression rule, the 9 pillars, and example criteria only; no exhaustive per-level criteria list is published, so this table is provisional.",
-        "criteria_version": "factory-provisional-2026-07-04",
+        "criteria_version": "factory-provisional-2026-10-03",
         "level": 4,
         "levels": [
           {
@@ -894,7 +894,7 @@
           }
         ],
         "criteria_source": "https://docs.factory.ai/web/agent-readiness/overview.md, https://docs.factory.ai/cli/features/readiness-report.md, https://docs.factory.ai/reference/readiness-reports-api.md (retrieved 2026-07-04). Factory publishes the 5 levels, the 80%-of-previous-level progression rule, the 9 pillars, and example criteria only; no exhaustive per-level criteria list is published, so this table is provisional.",
-        "criteria_version": "factory-provisional-2026-07-04",
+        "criteria_version": "factory-provisional-2026-10-03",
         "level": 3,
         "levels": [
           {
@@ -1242,7 +1242,7 @@
           }
         ],
         "criteria_source": "https://docs.factory.ai/web/agent-readiness/overview.md, https://docs.factory.ai/cli/features/readiness-report.md, https://docs.factory.ai/reference/readiness-reports-api.md (retrieved 2026-07-04). Factory publishes the 5 levels, the 80%-of-previous-level progression rule, the 9 pillars, and example criteria only; no exhaustive per-level criteria list is published, so this table is provisional.",
-        "criteria_version": "factory-provisional-2026-07-04",
+        "criteria_version": "factory-provisional-2026-10-03",
         "level": 2,
         "levels": [
           {
@@ -1585,7 +1585,7 @@
           }
         ],
         "criteria_source": "https://docs.factory.ai/web/agent-readiness/overview.md, https://docs.factory.ai/cli/features/readiness-report.md, https://docs.factory.ai/reference/readiness-reports-api.md (retrieved 2026-07-04). Factory publishes the 5 levels, the 80%-of-previous-level progression rule, the 9 pillars, and example criteria only; no exhaustive per-level criteria list is published, so this table is provisional.",
-        "criteria_version": "factory-provisional-2026-07-04",
+        "criteria_version": "factory-provisional-2026-10-03",
         "level": 1,
         "levels": [
           {
@@ -1928,7 +1928,7 @@
           }
         ],
         "criteria_source": "https://docs.factory.ai/web/agent-readiness/overview.md, https://docs.factory.ai/cli/features/readiness-report.md, https://docs.factory.ai/reference/readiness-reports-api.md (retrieved 2026-07-04). Factory publishes the 5 levels, the 80%-of-previous-level progression rule, the 9 pillars, and example criteria only; no exhaustive per-level criteria list is published, so this table is provisional.",
-        "criteria_version": "factory-provisional-2026-07-04",
+        "criteria_version": "factory-provisional-2026-10-03",
         "level": 1,
         "levels": [
           {

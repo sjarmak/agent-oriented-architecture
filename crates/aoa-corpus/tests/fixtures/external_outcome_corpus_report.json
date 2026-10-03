@@ -115,7 +115,7 @@
     ]
   },
   "checkbox_baseline": {
-    "criteria_version": "factory-provisional-2026-07-04",
+    "criteria_version": "factory-provisional-2026-10-03",
     "correlations": [
       {
         "outcome": "revert_rate",

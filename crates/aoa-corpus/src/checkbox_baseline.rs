@@ -54,7 +54,7 @@ use thiserror::Error;
 /// Pinned version of the criteria table below. `provisional`: derived from
 /// Factory's published model shape and example criteria, not an official
 /// per-level criteria list (Factory has not published one).
-pub const FACTORY_CRITERIA_VERSION: &str = "factory-provisional-2026-07-04";
+pub const FACTORY_CRITERIA_VERSION: &str = "factory-provisional-2026-10-03";
 
 /// Where the criteria table came from and when it was retrieved.
 pub const FACTORY_CRITERIA_SOURCE: &str =
@@ -185,6 +185,12 @@ const CRITERIA: &[Criterion] = &[
             ".eslintrc.yml",
             "eslint.config.js",
             "eslint.config.mjs",
+            ".oxlintrc.json",
+            ".oxlintrc.jsonc",
+            "oxlint.config.ts",
+            "oxlint.config.mts",
+            "biome.json",
+            "biome.jsonc",
             "ruff.toml",
             ".ruff.toml",
             ".flake8",
@@ -199,7 +205,23 @@ const CRITERIA: &[Criterion] = &[
         id: "test_directory",
         pillar: Pillar::Testing,
         level: 1,
-        check: Check::AnyPathExists(&["tests", "test", "spec", "__tests__"]),
+        check: Check::AnyPathExists(&[
+            "tests",
+            "test",
+            "spec",
+            "__tests__",
+            "vitest.config.ts",
+            "vitest.config.mts",
+            "vitest.config.js",
+            "vitest.config.mjs",
+            "jest.config.js",
+            "jest.config.ts",
+            "jest.config.mjs",
+            "jest.config.cjs",
+            "jest.config.json",
+            "playwright.config.ts",
+            "playwright.config.js",
+        ]),
     },
     // ---- Level 2: Documented — process and documentation established ----
     Criterion {
@@ -227,6 +249,12 @@ const CRITERIA: &[Criterion] = &[
             ".prettierrc.json",
             ".prettierrc.yml",
             "prettier.config.js",
+            ".oxfmtrc.json",
+            ".oxfmtrc.jsonc",
+            "oxfmt.config.ts",
+            "oxfmt.config.mts",
+            "biome.json",
+            "biome.jsonc",
             "rustfmt.toml",
             ".rustfmt.toml",
             ".editorconfig",
@@ -790,6 +818,92 @@ mod tests {
         assert_eq!(b.level, 1, "3/4 on level 1 is below the 80% gate");
     }
 
+    const TRACKED_MARKER_CRITERIA: [&str; 3] =
+        ["lint_config", "formatter_config", "test_directory"];
+
+    fn assert_root_marker_satisfies_exactly(marker: &str, satisfied: &[&str]) {
+        let dir = tempfile::tempdir().unwrap();
+        touch_all(dir.path(), &[marker]);
+        let b = score_repo("marker", dir.path()).unwrap();
+        for id in TRACKED_MARKER_CRITERIA {
+            let expected = if satisfied.contains(&id) {
+                CriterionStatus::Pass
+            } else {
+                CriterionStatus::Fail
+            };
+            assert_eq!(status_of(&b, id), &expected, "{marker} against {id}");
+        }
+    }
+
+    #[test]
+    fn root_oxlint_config_satisfies_lint_config() {
+        for marker in [
+            ".oxlintrc.json",
+            ".oxlintrc.jsonc",
+            "oxlint.config.ts",
+            "oxlint.config.mts",
+        ] {
+            assert_root_marker_satisfies_exactly(marker, &["lint_config"]);
+        }
+    }
+
+    #[test]
+    fn root_oxfmt_config_satisfies_formatter_config() {
+        for marker in [
+            ".oxfmtrc.json",
+            ".oxfmtrc.jsonc",
+            "oxfmt.config.ts",
+            "oxfmt.config.mts",
+        ] {
+            assert_root_marker_satisfies_exactly(marker, &["formatter_config"]);
+        }
+    }
+
+    #[test]
+    fn root_biome_config_satisfies_lint_and_formatter_config() {
+        for marker in ["biome.json", "biome.jsonc"] {
+            assert_root_marker_satisfies_exactly(marker, &["lint_config", "formatter_config"]);
+        }
+    }
+
+    #[test]
+    fn root_test_runner_config_satisfies_test_directory() {
+        for marker in [
+            "vitest.config.ts",
+            "vitest.config.mts",
+            "vitest.config.js",
+            "vitest.config.mjs",
+            "jest.config.js",
+            "jest.config.ts",
+            "jest.config.mjs",
+            "jest.config.cjs",
+            "jest.config.json",
+            "playwright.config.ts",
+            "playwright.config.js",
+        ] {
+            assert_root_marker_satisfies_exactly(marker, &["test_directory"]);
+        }
+    }
+
+    #[test]
+    fn member_level_tooling_configs_do_not_satisfy_repo_scope_criteria() {
+        let dir = tempfile::tempdir().unwrap();
+        touch_all(
+            dir.path(),
+            &[
+                "apps/web/.oxlintrc.json",
+                "apps/web/.oxfmtrc.json",
+                "apps/web/biome.json",
+                "apps/web/vitest.config.ts",
+                "apps/web/src/widget.test.ts",
+            ],
+        );
+        let b = score_repo("members", dir.path()).unwrap();
+        for id in TRACKED_MARKER_CRITERIA {
+            assert_eq!(status_of(&b, id), &CriterionStatus::Fail, "{id}");
+        }
+    }
+
     #[test]
     fn missing_root_is_a_typed_error() {
         let dir = tempfile::tempdir().unwrap();
@@ -809,7 +923,7 @@ mod tests {
         let json = serde_json::to_string(&b).unwrap();
         let back: CheckboxBaseline = serde_json::from_str(&json).unwrap();
         assert_eq!(b, back);
-        assert!(json.contains("factory-provisional-2026-07-04"));
+        assert!(json.contains(FACTORY_CRITERIA_VERSION));
     }
 
     #[test]
