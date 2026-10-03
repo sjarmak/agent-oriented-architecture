@@ -64,7 +64,7 @@ use aoa_trace::{to_envelope_json_pretty, validate_trace_value, Trace};
 
 use crate::cli::EvalRunArgs;
 use crate::commands::eval::TraceView;
-use crate::commands::fsutil::write_atomic;
+use crate::commands::fsutil::write_atomic_owner_only;
 use crate::output::{eprint_human, escape_terminal, print_human, print_json};
 
 /// Mutation-surface reachability depth and retrieval cutoff. Fixed to the value
@@ -448,7 +448,7 @@ fn emit_trace(dir: &Path, task_id: &str, trace: &Trace) -> Result<()> {
     let path = dir.join(format!("{task_id}.trace.json"));
     let json = to_envelope_json_pretty(trace)
         .with_context(|| format!("failed to serialize the trace for {task_id}"))?;
-    write_atomic(&path, json.as_bytes())
+    write_atomic_owner_only(&path, json.as_bytes())
 }
 
 fn span_summary(spans: &TraceView) -> String {

@@ -283,3 +283,23 @@ fn emitting_over_a_planted_symlink_leaves_its_target_untouched() {
         .is_symlink());
     validate_trace_json(&destination);
 }
+
+#[cfg(unix)]
+#[test]
+fn emitted_traces_are_readable_by_their_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().expect("tempdir");
+    let run = two_trial_run(&dir);
+    let traces = dir.path().join("traces");
+
+    eval_run_json(&run, &["--emit-traces".as_ref(), traces.as_os_str()]);
+
+    for task_id in ["busy-task", "silent-task"] {
+        let mode = std::fs::metadata(traces.join(format!("{task_id}.trace.json")))
+            .expect("trace file")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "{task_id}");
+    }
+}

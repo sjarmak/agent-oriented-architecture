@@ -76,6 +76,33 @@ pub(crate) fn load_json_capped<T: DeserializeOwned>(path: &Path, label: &str) ->
 }
 
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_atomic_as(path, bytes, FileAccess::Default)
+}
+
+pub(crate) fn write_atomic_owner_only(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_atomic_as(path, bytes, FileAccess::OwnerOnly)
+}
+
+#[derive(Clone, Copy)]
+enum FileAccess {
+    Default,
+    OwnerOnly,
+}
+
+impl FileAccess {
+    fn open_options(self) -> std::fs::OpenOptions {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if matches!(self, Self::OwnerOnly) {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options
+    }
+}
+
+fn write_atomic_as(path: &Path, bytes: &[u8], access: FileAccess) -> Result<()> {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let name = path
@@ -88,9 +115,8 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
     let result = (|| -> Result<()> {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
+        let mut file = access
+            .open_options()
             .open(&temporary)
             .with_context(|| format!("failed to create {}", temporary.display()))?;
         file.write_all(bytes)
