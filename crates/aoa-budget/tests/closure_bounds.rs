@@ -189,6 +189,7 @@ fn make_fifo(path: &Path) {
     assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0, "mkfifo");
 }
 
+#[cfg(unix)]
 fn unread(path: PathBuf, reason: UnreadReason) -> UnreadLink {
     UnreadLink { path, reason }
 }
@@ -256,6 +257,43 @@ fn a_member_that_cannot_be_counted_is_reported_with_the_reason() {
             unread(dir.path().join("loop.md"), UnreadReason::BrokenSymlink),
             unread(dir.path().join("binary.md"), UnreadReason::NotUtf8),
         ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_broken_symlink_outside_the_boundary_is_not_reported() {
+    let dir = TempDir::new().unwrap();
+    let root = write(dir.path(), "repo/AGENTS.md", "[gone](../gone.md)\n");
+    std::os::unix::fs::symlink("removed.md", dir.path().join("gone.md")).unwrap();
+
+    let closure = resolve_closure_within(&root, &dir.path().join("repo")).unwrap();
+
+    assert!(closure.unread.is_empty(), "{:?}", closure.unread);
+    assert!(closure.outside_boundary.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_broken_symlink_reached_through_a_directory_alias_is_reported_once() {
+    let dir = TempDir::new().unwrap();
+    let root = write(
+        dir.path(),
+        "AGENTS.md",
+        "[direct](real/gone.md) [aliased](alias/gone.md)\n",
+    );
+    fs::create_dir(dir.path().join("real")).unwrap();
+    std::os::unix::fs::symlink("removed.md", dir.path().join("real/gone.md")).unwrap();
+    std::os::unix::fs::symlink("real", dir.path().join("alias")).unwrap();
+
+    let closure = resolve_closure_within(&root, dir.path()).unwrap();
+
+    assert_eq!(
+        closure.unread,
+        [unread(
+            dir.path().join("real/gone.md"),
+            UnreadReason::BrokenSymlink
+        )]
     );
 }
 

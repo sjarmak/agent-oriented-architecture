@@ -1265,11 +1265,8 @@ fn a_git_file_pointing_at_another_repository_does_not_borrow_its_hook() {
     assert!(pre_commit_plane_missing(repo.path()));
 }
 
-#[test]
-fn a_git_dir_outside_the_checkout_that_names_it_as_its_worktree_lends_its_hook() {
+fn separate_git_dir_repo(git_dir: &Path) -> TempDir {
     let repo = fixture_repo();
-    let git_dirs = tempfile::tempdir().expect("git dir parent");
-    let git_dir = git_dirs.path().join("module");
     git(
         repo.path(),
         &[
@@ -1280,18 +1277,91 @@ fn a_git_dir_outside_the_checkout_that_names_it_as_its_worktree_lends_its_hook()
             git_dir.to_str().expect("utf-8 path"),
         ],
     );
-    write_hook(&git_dir.join("hooks/pre-commit"));
+    repo
+}
+
+#[test]
+fn a_separate_git_dir_lends_its_hook() {
+    let git_dirs = tempfile::tempdir().expect("git dir parent");
+    let git_dir = git_dirs.path().join("module");
+    let repo = separate_git_dir_repo(&git_dir);
     assert!(pre_commit_plane_missing(repo.path()));
 
+    write_hook(&git_dir.join("hooks/pre-commit"));
+    assert!(!pre_commit_plane_missing(repo.path()));
+}
+
+#[test]
+fn a_git_dir_outside_the_checkout_lends_its_hook_only_to_the_worktree_it_names() {
+    let git_dirs = tempfile::tempdir().expect("git dir parent");
+    let git_dir = git_dirs.path().join("module");
+    let repo = separate_git_dir_repo(&git_dir);
+    write_hook(&git_dir.join("hooks/pre-commit"));
+    let elsewhere = tempfile::tempdir().expect("another worktree");
+    let config = git_dir.join("config");
+    let set_worktree = |worktree: &Path| {
+        git(
+            git_dirs.path(),
+            &[
+                "config",
+                "--file",
+                config.to_str().expect("utf-8 path"),
+                "core.worktree",
+                worktree.to_str().expect("utf-8 path"),
+            ],
+        );
+    };
+
+    set_worktree(elsewhere.path());
+    assert!(pre_commit_plane_missing(repo.path()));
+
+    set_worktree(repo.path());
+    assert!(!pre_commit_plane_missing(repo.path()));
+}
+
+#[test]
+fn a_git_file_pointing_at_a_bare_repository_does_not_borrow_its_hook() {
+    let bare = tempfile::tempdir().expect("bare repository");
+    git(bare.path(), &["init", "--quiet", "--template=", "--bare"]);
+    write_hook(&bare.path().join("hooks/pre-commit"));
+    let repo = fixture_repo();
+    std::fs::write(
+        repo.path().join(".git"),
+        format!("gitdir: {}\n", bare.path().display()),
+    )
+    .expect("plant .git file");
+
+    assert!(pre_commit_plane_missing(repo.path()));
+}
+
+#[test]
+fn a_git_file_pointing_at_another_checkout_linked_worktree_does_not_borrow_its_hook() {
+    let main = git_fixture_repo();
+    write_hook(&main.path().join(".git/hooks/pre-commit"));
+    let linked_parent = tempfile::tempdir().expect("linked worktree parent");
+    let linked = linked_parent.path().join("linked");
     git(
-        repo.path(),
+        main.path(),
         &[
-            "config",
-            "core.worktree",
-            repo.path().to_str().expect("utf-8 path"),
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "linked",
+            linked.to_str().expect("utf-8 path"),
         ],
     );
-    assert!(!pre_commit_plane_missing(repo.path()));
+    let repo = fixture_repo();
+    std::fs::write(
+        repo.path().join(".git"),
+        format!(
+            "gitdir: {}\n",
+            main.path().join(".git/worktrees/linked").display()
+        ),
+    )
+    .expect("plant .git file");
+
+    assert!(pre_commit_plane_missing(repo.path()));
 }
 
 #[test]

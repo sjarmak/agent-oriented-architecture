@@ -78,22 +78,37 @@ fn names_worktree(git_dir: &Path, repo: &Path) -> bool {
                 .is_ok_and(|expected| named == expected)
         })
     };
-    let linked_worktree = std::fs::read_to_string(git_dir.join("gitdir"))
-        .is_ok_and(|registered| resolves_to(registered.trim_end().into(), &repo.join(".git")));
-    linked_worktree
-        || configured_worktree(repo, git_dir)
-            .is_some_and(|worktree| resolves_to(git_dir.join(worktree), repo))
+    match std::fs::read_to_string(git_dir.join("gitdir")) {
+        Ok(registered) => resolves_to(registered.trim_end().into(), &repo.join(".git")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            match config_value(repo, git_dir, &["--get", "core.worktree"]) {
+                Some(worktree) => resolves_to(git_dir.join(worktree), repo),
+                None => names_no_worktree(git_dir, repo),
+            }
+        }
+        Err(_) => false,
+    }
 }
 
-fn configured_worktree(repo: &Path, git_dir: &Path) -> Option<PathBuf> {
+fn names_no_worktree(git_dir: &Path, repo: &Path) -> bool {
+    let inside_another_checkout = git_dir.canonicalize().map_or(true, |git_dir| {
+        git_dir.file_name().is_some_and(|name| name == ".git")
+    });
+    !inside_another_checkout
+        && git_dir.join("config").is_file()
+        && config_value(repo, git_dir, &["--type=bool", "--get", "core.bare"]).as_deref()
+            != Some("true")
+}
+
+fn config_value(repo: &Path, git_dir: &Path, query: &[&str]) -> Option<String> {
     let output = git(repo)
         .args(["config", "--file"])
         .arg(git_dir.join("config"))
-        .args(["--get", "core.worktree"])
+        .args(query)
         .output()
         .ok()?;
-    let worktree = std::str::from_utf8(&output.stdout).ok()?.trim_end();
-    (output.status.success() && !worktree.is_empty()).then(|| PathBuf::from(worktree))
+    let value = std::str::from_utf8(&output.stdout).ok()?.trim_end();
+    (output.status.success() && !value.is_empty()).then(|| value.to_string())
 }
 
 fn git(repo: &Path) -> Command {

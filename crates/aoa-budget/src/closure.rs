@@ -113,7 +113,16 @@ pub fn resolve_closure_within(root: &Path, boundary: &Path) -> Result<Closure, B
             let resolved = match path.canonicalize() {
                 Ok(resolved) => resolved,
                 Err(_) => {
-                    unread.extend(unresolved_link(&path));
+                    let first_inside_boundary = match directory_resolved(&path) {
+                        Some(member) => {
+                            member.starts_with(&boundary) && resolved_members.insert(member)
+                        }
+                        None => std::path::absolute(&path)
+                            .is_ok_and(|absolute| absolute.starts_with(&boundary)),
+                    };
+                    if first_inside_boundary {
+                        unread.extend(unresolved_link(&path));
+                    }
                     continue;
                 }
             };
@@ -235,8 +244,8 @@ fn open_without_blocking(path: &Path, last: FinalComponent) -> std::io::Result<s
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(match last {
-            FinalComponent::Follow => libc::O_NONBLOCK,
-            FinalComponent::NoFollow => libc::O_NONBLOCK | libc::O_NOFOLLOW,
+            FinalComponent::Follow => libc::O_NONBLOCK | libc::O_NOCTTY,
+            FinalComponent::NoFollow => libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_NOFOLLOW,
         });
     }
     #[cfg(not(unix))]
