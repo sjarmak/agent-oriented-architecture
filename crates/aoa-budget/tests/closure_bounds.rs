@@ -359,3 +359,92 @@ fn a_root_that_is_not_a_regular_file_is_an_error() {
 
     assert!(matches!(err, BudgetError::Io { .. }), "{err}");
 }
+
+#[cfg(unix)]
+const SWAP_RACE_ROUNDS: usize = 20_000;
+
+#[cfg(unix)]
+fn leaks_while_a_directory_is_swapped_for_a_symlink(
+    scratch: &Path,
+    directory: &Path,
+    resolves_outside_text: impl Fn() -> bool,
+) -> bool {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let spare = scratch.join("repo/spare");
+    let held = scratch.join("held");
+    std::os::unix::fs::symlink("../outside", &spare).unwrap();
+    let stop = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            while !stop.load(Ordering::Relaxed) {
+                fs::rename(directory, &held).unwrap();
+                fs::rename(&spare, directory).unwrap();
+                fs::rename(directory, &spare).unwrap();
+                fs::rename(&held, directory).unwrap();
+            }
+        });
+        let leaked = (0..SWAP_RACE_ROUNDS).any(|_| resolves_outside_text());
+        stop.store(true, Ordering::Relaxed);
+        leaked
+    })
+}
+
+#[cfg(unix)]
+#[test]
+fn a_member_whose_directory_is_swapped_for_a_symlink_is_never_read_from_outside() {
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path().join("repo");
+    write(dir.path(), "outside/member.md", "outside the repository\n");
+    let root = write(dir.path(), "repo/AGENTS.md", "[member](docs/member.md)\n");
+    write(dir.path(), "repo/docs/member.md", "inside\n");
+
+    let leaked =
+        leaks_while_a_directory_is_swapped_for_a_symlink(dir.path(), &repo.join("docs"), || {
+            resolve_closure_within(&root, &repo)
+                .unwrap()
+                .files
+                .iter()
+                .any(|file| file.text.contains("outside"))
+        });
+
+    assert!(!leaked, "a member was read from outside the boundary");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_contained_root_whose_directory_is_swapped_for_a_symlink_is_never_read_from_outside() {
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path().join("repo");
+    write(dir.path(), "outside/AGENTS.md", "outside the repository\n");
+    let root = write(dir.path(), "repo/docs/AGENTS.md", "inside\n");
+
+    let leaked =
+        leaks_while_a_directory_is_swapped_for_a_symlink(dir.path(), &repo.join("docs"), || {
+            resolve_contained_closure(&root, &repo).is_ok_and(|closure| {
+                closure
+                    .files
+                    .iter()
+                    .any(|file| file.text.contains("outside"))
+            })
+        });
+
+    assert!(!leaked, "the root was read from outside the boundary");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_member_under_a_directory_that_may_only_be_searched_is_counted() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    let root = write(dir.path(), "AGENTS.md", "[member](sealed/member.md)\n");
+    write(dir.path(), "sealed/member.md", "rules\n");
+    let sealed = dir.path().join("sealed");
+    fs::set_permissions(&sealed, fs::Permissions::from_mode(0o111)).unwrap();
+
+    let names = member_names(&root, dir.path());
+    fs::set_permissions(&sealed, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(names, ["AGENTS.md", "sealed/member.md"]);
+}

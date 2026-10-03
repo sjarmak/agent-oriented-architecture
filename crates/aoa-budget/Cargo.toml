@@ -13,7 +13,10 @@ thiserror = { workspace = true }
 tiktoken-rs = "0.12.0"
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2.186"
+rustix = { version = "1.1.4", features = ["fs"] }
 
 [dev-dependencies]
 tempfile = "3.10.1"
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2.186"

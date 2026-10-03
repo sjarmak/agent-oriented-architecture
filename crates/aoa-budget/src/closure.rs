@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::boundary::{open_following_links, Boundary};
 use crate::error::BudgetError;
 use crate::normalize_path;
 use crate::reference::extract_references;
@@ -72,27 +73,48 @@ pub fn resolve_closure(root: &Path) -> Result<Closure, BudgetError> {
 }
 
 pub fn resolve_contained_closure(root: &Path, boundary: &Path) -> Result<Closure, BudgetError> {
-    let canonical = |path: &Path| {
-        path.canonicalize().map_err(|source| BudgetError::Io {
-            path: path.to_path_buf(),
+    let opened = open_boundary(boundary)?;
+    let normalized = normalize_path(root);
+    let resolved = normalized
+        .canonicalize()
+        .map_err(|source| BudgetError::Io {
+            path: normalized.clone(),
             source,
-        })
-    };
-    if !canonical(&normalize_path(root))?.starts_with(canonical(boundary)?) {
+        })?;
+    if !opened.contains(&resolved) {
         return Err(BudgetError::OutsideBoundary {
             path: root.to_path_buf(),
             boundary: boundary.to_path_buf(),
         });
     }
-    resolve_closure_within(root, boundary)
+    resolve(normalized, &opened, RootRead::Beneath(resolved))
 }
 
 pub fn resolve_closure_within(root: &Path, boundary: &Path) -> Result<Closure, BudgetError> {
-    let boundary = boundary.canonicalize().map_err(|source| BudgetError::Io {
+    resolve(
+        normalize_path(root),
+        &open_boundary(boundary)?,
+        RootRead::FollowingLinks,
+    )
+}
+
+fn open_boundary(boundary: &Path) -> Result<Boundary, BudgetError> {
+    Boundary::open(boundary).map_err(|source| BudgetError::Io {
         path: boundary.to_path_buf(),
         source,
-    })?;
-    let root = normalize_path(root);
+    })
+}
+
+enum RootRead {
+    FollowingLinks,
+    Beneath(PathBuf),
+}
+
+fn resolve(
+    root: PathBuf,
+    boundary: &Boundary,
+    root_read: RootRead,
+) -> Result<Closure, BudgetError> {
     let mut visited: BTreeSet<PathBuf> = BTreeSet::new();
     let mut resolved_members: BTreeSet<PathBuf> = BTreeSet::new();
     let mut files: Vec<ContextFile> = Vec::new();
@@ -105,8 +127,11 @@ pub fn resolve_closure_within(root: &Path, boundary: &Path) -> Result<Closure, B
             continue;
         }
         let text = if path == root {
-            let text = read_regular_file(&path, FinalComponent::Follow)
-                .map_err(|failure| failure.into_error(&path))?;
+            let opened = match &root_read {
+                RootRead::FollowingLinks => open_following_links(&path),
+                RootRead::Beneath(resolved) => boundary.open_member(resolved),
+            };
+            let text = read_regular_file(opened).map_err(|failure| failure.into_error(&path))?;
             resolved_members.extend(directory_resolved(&path));
             text
         } else {
@@ -115,10 +140,10 @@ pub fn resolve_closure_within(root: &Path, boundary: &Path) -> Result<Closure, B
                 Err(_) => {
                     let first_inside_boundary = match directory_resolved(&path) {
                         Some(member) => {
-                            member.starts_with(&boundary) && resolved_members.insert(member)
+                            boundary.contains(&member) && resolved_members.insert(member)
                         }
                         None => std::path::absolute(&path)
-                            .is_ok_and(|absolute| absolute.starts_with(&boundary)),
+                            .is_ok_and(|absolute| boundary.contains(&absolute)),
                     };
                     if first_inside_boundary {
                         unread.extend(unresolved_link(&path));
@@ -126,7 +151,7 @@ pub fn resolve_closure_within(root: &Path, boundary: &Path) -> Result<Closure, B
                     continue;
                 }
             };
-            if !resolved.starts_with(&boundary) {
+            if !boundary.contains(&resolved) {
                 if resolved.is_file() {
                     outside_boundary.push(path);
                 }
@@ -135,7 +160,7 @@ pub fn resolve_closure_within(root: &Path, boundary: &Path) -> Result<Closure, B
             if !directory_resolved(&path).is_some_and(|member| resolved_members.insert(member)) {
                 continue;
             }
-            match read_regular_file(&resolved, FinalComponent::NoFollow) {
+            match read_regular_file(boundary.open_member(&resolved)) {
                 Ok(text) => text,
                 Err(ReadFailure::Oversized) => return Err(ReadFailure::Oversized.into_error(&path)),
                 Err(failure) => {
@@ -194,12 +219,6 @@ fn directory_resolved(path: &Path) -> Option<PathBuf> {
     Some(parent.canonicalize().ok()?.join(path.file_name()?))
 }
 
-#[derive(Clone, Copy)]
-enum FinalComponent {
-    Follow,
-    NoFollow,
-}
-
 enum ReadFailure {
     Io(std::io::Error),
     Directory,
@@ -237,24 +256,8 @@ impl ReadFailure {
     }
 }
 
-fn open_without_blocking(path: &Path, last: FinalComponent) -> std::io::Result<std::fs::File> {
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(match last {
-            FinalComponent::Follow => libc::O_NONBLOCK | libc::O_NOCTTY,
-            FinalComponent::NoFollow => libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_NOFOLLOW,
-        });
-    }
-    #[cfg(not(unix))]
-    let _ = last;
-    options.open(path)
-}
-
-fn read_regular_file(path: &Path, last: FinalComponent) -> Result<String, ReadFailure> {
-    let file = open_without_blocking(path, last).map_err(ReadFailure::Io)?;
+fn read_regular_file(opened: std::io::Result<std::fs::File>) -> Result<String, ReadFailure> {
+    let file = opened.map_err(ReadFailure::Io)?;
     let kind = file.metadata().map_err(ReadFailure::Io)?.file_type();
     if kind.is_dir() {
         return Err(ReadFailure::Directory);

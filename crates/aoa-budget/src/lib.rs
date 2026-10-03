@@ -15,6 +15,7 @@
 //! Downstream crates (aoa-lint, aoa-audit) drive this through
 //! [`resolve_closure`] + [`count_budget`].
 
+mod boundary;
 mod budget;
 mod closure;
 mod error;
