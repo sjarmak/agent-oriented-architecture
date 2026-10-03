@@ -58,6 +58,16 @@ aoa eval compare baseline.json migrated.json # prints the visible-vs-hidden succ
 
 The toolkit does not run the agent itself. That job belongs to [codeprobe](https://github.com/sjarmak/codeprobe), a companion project that mines contamination-free tasks from a repository's history (which is what makes the hidden test set genuinely hidden), drives the agent, and scores the outcomes. The AOA Toolkit reads codeprobe's transcript of each run, reconstructs the trace, and computes everything above. codeprobe supplies the tasks and the runs; this toolkit supplies the trace-level metrics and the gate.
 
+### What codeprobe needs from a repository
+
+Every behavioral metric here is computed from a codeprobe run, so a repository codeprobe cannot mine or run has no held-out behavioral signal. Check these before planning an evaluation:
+
+- **A task source.** `codeprobe mine` finds merged changes through the GitHub API, and without it falls back to `git log --merges`. A history made only of squash merges has no merge commits, so mining it without API access returns zero tasks. It still exits 0, with a `MINE_SHORTFALL` warning; read the task count, not the exit status.
+- **Probe tasks are a partial substitute.** `codeprobe probe` generates question tasks from symbols instead of history. Its TypeScript extractor does not see exported arrow functions, and probes generated from a subdirectory carry answers relative to that subdirectory, so score them against an agent started in the same directory.
+- **An execution environment.** `codeprobe run` refuses to start outside a container. Where none is available the only mode is `--uncontained`, which runs the agent and the mined test scripts on the host with the invoking user's access.
+
+When these are not met there is no run for `aoa eval run` to read. It fails with `no task trials found` on an empty run directory, and `aoa audit` reports the behavioral metrics as `InsufficientData` with the observation count rather than a score. The structural half of the audit, `lint-context` and `gap checkbox-baseline` read the repository tree and are unaffected.
+
 ## Commands
 
 ```text
@@ -136,5 +146,3 @@ The workspace is split so each crate owns one responsibility.
 ## Status
 
 The read-only instrument is built and tested. The machinery for the deciding experiment is in place; running it at scale across several real repositories with live agents is the next milestone, and an `inconclusive` verdict is an expected result there, not a defect. This is early software at version 0.1.0; the metric definitions and the gate are the parts most likely to move as that experiment runs.
-</content>
-</invoke>

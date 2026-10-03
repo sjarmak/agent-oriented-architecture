@@ -128,7 +128,9 @@ pub enum BenchError {
     /// The run dir held no recognizable trial subdirectories.
     #[error(
         "no task trials found under {}: expected <task_id>/ subdirs with scoring.json \
-         or agent_output.txt (point the run dir at a run's config-label directory)",
+         or agent_output.txt (point the run dir at a run's config-label directory). A run \
+         with no trials is also what is left when codeprobe mined zero tasks from the \
+         repository: see \"What codeprobe needs from a repository\" in README.md",
         raw_path(.run_dir)
     )]
     NoTaskTrials { run_dir: PathBuf },

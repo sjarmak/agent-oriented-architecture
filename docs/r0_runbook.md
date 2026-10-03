@@ -33,6 +33,13 @@ relative value would resolve somewhere else. Those blocks each re-assert the
 variable with `:?` so that skipping this step stops them, rather than letting
 `"$CODEPROBE_ROOT/runs/r0/tasks"` quietly become `/runs/r0/tasks`.
 
+A repository only belongs in the campaign if codeprobe can mine it. Mining needs
+either GitHub API access or true merge commits in the local history; a
+squash-merge-only history read offline mines zero tasks and still exits 0.
+Confirm the mined task count for each candidate repository before Step 0. The
+README section "What codeprobe needs from a repository" lists the full set of
+preconditions.
+
 ## The two deltas
 
 | Delta | Codeprobe arm | What is varied | Fixed | Held-out source |

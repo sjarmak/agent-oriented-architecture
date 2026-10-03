@@ -469,6 +469,41 @@ fn eval_run_human_renders_text() {
         .stdout(predicate::str::contains("external-filelist-000"));
 }
 
+const TASK_SOURCE_HEADING: &str = "What codeprobe needs from a repository";
+
+#[test]
+fn eval_run_names_an_empty_task_source_when_the_run_holds_no_trials() {
+    let dir = TempDir::new().expect("tempdir");
+    let output = aoa()
+        .args(["eval", "run", "--codeprobe-run"])
+        .arg(dir.path())
+        .output()
+        .expect("run");
+    assert!(
+        !output.status.success(),
+        "a run with no trials must not exit clean"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "a run with no trials must not print a report"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("no task trials found"), "{stderr}");
+    assert!(stderr.contains("mined zero tasks"), "{stderr}");
+    assert!(stderr.contains(TASK_SOURCE_HEADING), "{stderr}");
+}
+
+#[test]
+fn the_readme_section_the_empty_run_error_points_at_exists() {
+    let readme = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md");
+    let text = std::fs::read_to_string(&readme).expect("read README.md");
+    assert!(
+        text.lines()
+            .any(|line| line == format!("### {TASK_SOURCE_HEADING}")),
+        "README.md must keep the section the empty-run error names"
+    );
+}
+
 // --- aoa-d6t.26: per-subtree metric scoping in monorepos -----------------------
 
 // A multi-member Cargo workspace repo enables automatic per-subtree metrics:
