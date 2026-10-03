@@ -329,6 +329,22 @@ fn lint_context_explicit_root_also_lints_nested_context_files() {
 }
 
 #[test]
+fn lint_context_root_above_the_working_directory_lints_the_named_file() {
+    let dir = TempDir::new().expect("tempdir");
+    std::fs::write(dir.path().join("AGENTS.md"), LINT_DUPLICATED_HEADING).unwrap();
+    std::fs::create_dir_all(dir.path().join("pkg")).unwrap();
+    std::fs::write(dir.path().join("pkg/AGENTS.md"), "# Pkg\n\nplain\n").unwrap();
+
+    let parsed = lint_json(&dir.path().join("pkg"), &["--root", "../AGENTS.md"]);
+
+    assert_eq!(
+        json_strings(&parsed["roots"]),
+        ["../AGENTS.md", "../pkg/AGENTS.md"]
+    );
+    assert_eq!(finding_files(&parsed), ["../AGENTS.md"]);
+}
+
+#[test]
 fn lint_context_human_reports_how_many_roots_were_linted() {
     let dir = TempDir::new().expect("tempdir");
     std::fs::write(dir.path().join("AGENTS.md"), "# Root\n").unwrap();
