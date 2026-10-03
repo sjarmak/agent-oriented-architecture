@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use aoa_lint::{discover_context_roots, lint_context_roots, LintError, SmellCategory};
+use aoa_lint::{
+    discover_context_roots, lint_context_roots, ClosureBudget, LintError, SmellCategory,
+};
 use tempfile::TempDir;
 
 const DUPLICATED_HEADING: &str = "# Rules\n\nfirst\n\n# Rules\n\nsecond\n";
@@ -93,6 +95,85 @@ fn every_root_is_linted_and_a_shared_file_is_linted_once() {
         [PathBuf::from("shared.md"), PathBuf::from("pkg/CLAUDE.md")]
     );
     assert_eq!(report.budget.files.len(), 3);
+}
+
+#[test]
+fn each_root_reports_its_own_closure_tokens_and_a_shared_file_counts_in_both() {
+    let dir = TempDir::new().expect("tempdir");
+    let root = write(
+        dir.path(),
+        "CLAUDE.md",
+        "# Root\n\nSee [shared](shared.md).\n",
+    );
+    let nested = write(
+        dir.path(),
+        "pkg/CLAUDE.md",
+        "# Member\n\nSee [shared](../shared.md) and nothing else at all.\n",
+    );
+    let shared = write(dir.path(), "shared.md", "# Shared\n\nalpha beta gamma\n");
+
+    let report =
+        lint_context_roots(&[root.clone(), nested.clone()], "o200k_base").expect("lint succeeds");
+
+    let counted = |path: &PathBuf| {
+        report
+            .budget
+            .files
+            .iter()
+            .find(|file| &file.path == path)
+            .expect("file counted")
+            .clone()
+    };
+    let tokens = |path: &PathBuf| counted(path).target_tokens;
+    assert_eq!(
+        report.closures,
+        [
+            ClosureBudget {
+                root: root.clone(),
+                o200k_tokens: tokens(&root) + tokens(&shared),
+                target_tokens: tokens(&root) + tokens(&shared),
+                gating_target_tokens: tokens(&root) + tokens(&shared),
+                files: vec![counted(&root), counted(&shared)],
+            },
+            ClosureBudget {
+                root: nested.clone(),
+                o200k_tokens: tokens(&nested) + tokens(&shared),
+                target_tokens: tokens(&nested) + tokens(&shared),
+                gating_target_tokens: tokens(&nested) + tokens(&shared),
+                files: vec![counted(&nested), counted(&shared)],
+            },
+        ]
+    );
+    assert!(tokens(&root) > 0 && tokens(&nested) > 0 && tokens(&shared) > 0);
+    assert_eq!(
+        report.budget.target_tokens,
+        tokens(&root) + tokens(&nested) + tokens(&shared)
+    );
+}
+
+#[test]
+fn a_suppressed_file_is_reported_but_left_out_of_the_closure_gating_tokens() {
+    let dir = TempDir::new().expect("tempdir");
+    let root = write(dir.path(), "AGENTS.md", "# Root\n\nSee [big](big.md).\n");
+    write(
+        dir.path(),
+        "big.md",
+        "# aoa-allow: oversized-context generated reference\n\n# Big\n\nalpha beta\n",
+    );
+
+    let report = lint_context_roots(std::slice::from_ref(&root), "o200k_base").expect("lint");
+
+    let closure = &report.closures[0];
+    let [root_file, big] = closure.files.as_slice() else {
+        panic!("expected two files, got {:?}", closure.files);
+    };
+    assert!(root_file.gating);
+    assert!(!big.gating);
+    assert_eq!(
+        closure.target_tokens,
+        root_file.target_tokens + big.target_tokens
+    );
+    assert_eq!(closure.gating_target_tokens, root_file.target_tokens);
 }
 
 #[test]

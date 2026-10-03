@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use aoa_budget::normalize_path;
+use aoa_lint::ClosureBudget;
 use serde::Serialize;
 
 use crate::cli::LintArgs;
@@ -17,13 +18,63 @@ struct FindingView {
     message: String,
 }
 
-/// The CLI lint result: smell findings (optionally restricted to changed files)
-/// plus the suppression reasons captured from the composed budget report.
 #[derive(Debug, Serialize)]
 struct LintView {
     roots: Vec<PathBuf>,
+    budget: BudgetView,
     findings: Vec<FindingView>,
     suppressed: Vec<SuppressionView>,
+}
+
+#[derive(Debug, Serialize)]
+struct BudgetView {
+    tokenizer: String,
+    reference_encoding: String,
+    ceiling: usize,
+    distinct_files: usize,
+    target_tokens: usize,
+    o200k_tokens: usize,
+    closures: Vec<ClosureView>,
+}
+
+#[derive(Debug, Serialize)]
+struct ClosureView {
+    root: PathBuf,
+    target_tokens: usize,
+    o200k_tokens: usize,
+    gating_target_tokens: usize,
+    over_ceiling_by: usize,
+    files: Vec<FileView>,
+}
+
+#[derive(Debug, Serialize)]
+struct FileView {
+    file: PathBuf,
+    target_tokens: usize,
+    o200k_tokens: usize,
+    gating: bool,
+}
+
+impl ClosureView {
+    fn new(closure: ClosureBudget, ceiling: usize) -> Self {
+        Self {
+            root: closure.root,
+            target_tokens: closure.target_tokens,
+            o200k_tokens: closure.o200k_tokens,
+            gating_target_tokens: closure.gating_target_tokens,
+            over_ceiling_by: closure.gating_target_tokens.saturating_sub(ceiling),
+            files: closure
+                .files
+                .into_iter()
+                .map(|file| FileView {
+                    file: file.path,
+                    target_tokens: file.target_tokens,
+                    o200k_tokens: file.o200k_tokens,
+                    gating: file.gating,
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -64,8 +115,23 @@ pub fn run(args: &LintArgs) -> Result<i32> {
         .map(|(file, reason)| SuppressionView { file, reason })
         .collect();
 
+    let budget = BudgetView {
+        tokenizer: report.budget.target_model,
+        reference_encoding: report.budget.reference_encoding,
+        ceiling: args.ceiling,
+        distinct_files: report.budget.files.len(),
+        target_tokens: report.budget.target_tokens,
+        o200k_tokens: report.budget.o200k_tokens,
+        closures: report
+            .closures
+            .into_iter()
+            .map(|closure| ClosureView::new(closure, args.ceiling))
+            .collect(),
+    };
+
     let view = LintView {
         roots,
+        budget,
         findings,
         suppressed,
     };
@@ -113,6 +179,42 @@ fn render_human(view: &LintView) -> String {
         view.findings.len(),
         view.roots.len(),
     );
+    let _ = writeln!(
+        out,
+        "  context budget ({}): {} tokens across {} file(s), ceiling {} per closure",
+        view.budget.tokenizer,
+        view.budget.target_tokens,
+        view.budget.distinct_files,
+        view.budget.ceiling,
+    );
+    for closure in &view.budget.closures {
+        let breach = match closure.over_ceiling_by {
+            0 => String::new(),
+            over => format!(" [OVER CEILING by {over}]"),
+        };
+        let _ = writeln!(
+            out,
+            "    {}: {} tokens across {} file(s){}",
+            closure.root.display(),
+            closure.target_tokens,
+            closure.files.len(),
+            breach,
+        );
+        for file in &closure.files {
+            let uncounted = if file.gating {
+                ""
+            } else {
+                " (suppressed, not counted against the ceiling)"
+            };
+            let _ = writeln!(
+                out,
+                "      {}: {} tokens{}",
+                file.file.display(),
+                file.target_tokens,
+                uncounted,
+            );
+        }
+    }
     for finding in &view.findings {
         let _ = writeln!(
             out,

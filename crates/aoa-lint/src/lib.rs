@@ -26,4 +26,4 @@ pub use discover::discover_context_roots;
 pub use error::LintError;
 pub use finding::Finding;
 pub use lint::{lint_context, lint_context_roots};
-pub use report::LintReport;
+pub use report::{ClosureBudget, LintReport};

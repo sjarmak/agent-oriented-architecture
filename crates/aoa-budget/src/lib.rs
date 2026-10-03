@@ -24,7 +24,9 @@ mod reference;
 mod suppress;
 mod tokenizer;
 
-pub use budget::{count_budget, BudgetReport, Config, FileBudget, Verdict};
+pub use budget::{
+    count_budget, BudgetReport, Config, FileBudget, Verdict, DEFAULT_CONTEXT_CEILING,
+};
 pub use closure::{resolve_closure, Closure, ContextFile};
 pub use error::BudgetError;
 pub use fix::{fix_oversized, FixOutcome};

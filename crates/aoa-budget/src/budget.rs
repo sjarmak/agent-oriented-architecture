@@ -8,6 +8,8 @@ use crate::error::BudgetError;
 use crate::suppress::find_suppression;
 use crate::tokenizer::{count_tokens, reference_encoder, target_encoder, REFERENCE_ENCODING};
 
+pub const DEFAULT_CONTEXT_CEILING: usize = 2_000;
+
 /// Configuration for a budget evaluation.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -54,7 +56,7 @@ pub enum Verdict {
 }
 
 /// Per-file token breakdown within a budget report.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileBudget {
     pub path: PathBuf,
     pub o200k_tokens: usize,

@@ -213,6 +213,11 @@ pub struct LintArgs {
     #[arg(long, default_value = DEFAULT_TOKENIZER)]
     pub tokenizer: String,
 
+    /// Token ceiling each root's closure is marked against. A closure over it
+    /// is reported as a breach; the exit status does not change.
+    #[arg(long, default_value_t = aoa_budget::DEFAULT_CONTEXT_CEILING)]
+    pub ceiling: usize,
+
     /// Emit the structured JSON rendering instead of human text.
     #[arg(long)]
     pub json: bool,

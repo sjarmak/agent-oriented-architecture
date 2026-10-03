@@ -345,6 +345,210 @@ fn lint_context_human_reports_how_many_roots_were_linted() {
         ));
 }
 
+const LINT_BUDGET_ROOT: &str = "# Root\n\nSee [shared](shared.md).\n";
+const LINT_BUDGET_MEMBER: &str = "# Member\n\nSee [shared](../shared.md) for the member rules.\n";
+const LINT_BUDGET_SHARED: &str = "# Shared\n\nalpha beta gamma delta epsilon\n";
+
+fn lint_budget_tree() -> TempDir {
+    let dir = TempDir::new().expect("tempdir");
+    std::fs::write(dir.path().join("CLAUDE.md"), LINT_BUDGET_ROOT).unwrap();
+    std::fs::write(dir.path().join("shared.md"), LINT_BUDGET_SHARED).unwrap();
+    std::fs::create_dir_all(dir.path().join("pkg")).unwrap();
+    std::fs::write(dir.path().join("pkg/AGENTS.md"), LINT_BUDGET_MEMBER).unwrap();
+    dir
+}
+
+fn lint_budget_tokens(encoding: &str, texts: &[&str]) -> u64 {
+    let encoder = aoa_budget::target_encoder(encoding).expect("encoder");
+    texts
+        .iter()
+        .map(|text| aoa_budget::count_tokens(&encoder, text) as u64)
+        .sum()
+}
+
+#[test]
+fn lint_context_json_reports_tokens_for_the_root_closure_and_each_member() {
+    let dir = lint_budget_tree();
+
+    let parsed = lint_json(dir.path(), &[]);
+
+    let root = lint_budget_tokens("o200k_base", &[LINT_BUDGET_ROOT, LINT_BUDGET_SHARED]);
+    let member = lint_budget_tokens("o200k_base", &[LINT_BUDGET_MEMBER, LINT_BUDGET_SHARED]);
+    let distinct = lint_budget_tokens(
+        "o200k_base",
+        &[LINT_BUDGET_ROOT, LINT_BUDGET_SHARED, LINT_BUDGET_MEMBER],
+    );
+    let file = |path: &str, text: &str| {
+        let tokens = lint_budget_tokens("o200k_base", &[text]);
+        serde_json::json!({
+            "file": path,
+            "target_tokens": tokens,
+            "o200k_tokens": tokens,
+            "gating": true,
+        })
+    };
+    assert!(root > 0 && member > 0);
+    assert_eq!(
+        parsed["budget"],
+        serde_json::json!({
+            "tokenizer": "o200k_base",
+            "reference_encoding": "o200k_base",
+            "ceiling": 2000,
+            "distinct_files": 3,
+            "target_tokens": distinct,
+            "o200k_tokens": distinct,
+            "closures": [
+                {
+                    "root": "CLAUDE.md",
+                    "target_tokens": root,
+                    "o200k_tokens": root,
+                    "gating_target_tokens": root,
+                    "over_ceiling_by": 0,
+                    "files": [
+                        file("CLAUDE.md", LINT_BUDGET_ROOT),
+                        file("shared.md", LINT_BUDGET_SHARED),
+                    ],
+                },
+                {
+                    "root": "pkg/AGENTS.md",
+                    "target_tokens": member,
+                    "o200k_tokens": member,
+                    "gating_target_tokens": member,
+                    "over_ceiling_by": 0,
+                    "files": [
+                        file("pkg/AGENTS.md", LINT_BUDGET_MEMBER),
+                        file("shared.md", LINT_BUDGET_SHARED),
+                    ],
+                },
+            ],
+        })
+    );
+}
+
+#[test]
+fn lint_context_marks_only_the_closure_that_breaches_the_ceiling() {
+    let dir = lint_budget_tree();
+    let root = lint_budget_tokens("o200k_base", &[LINT_BUDGET_ROOT, LINT_BUDGET_SHARED]);
+    let member = lint_budget_tokens("o200k_base", &[LINT_BUDGET_MEMBER, LINT_BUDGET_SHARED]);
+    assert!(member > root);
+    let ceiling = root.to_string();
+
+    let parsed = lint_json(dir.path(), &["--ceiling", &ceiling]);
+
+    assert_eq!(parsed["budget"]["ceiling"], root);
+    assert_eq!(parsed["budget"]["closures"][0]["over_ceiling_by"], 0);
+    assert_eq!(
+        parsed["budget"]["closures"][1]["over_ceiling_by"],
+        member - root
+    );
+
+    let human = aoa()
+        .current_dir(dir.path())
+        .args(["lint-context", "--ceiling", &ceiling])
+        .assert()
+        .success();
+    human
+        .stdout(predicate::str::contains(format!(
+            "    CLAUDE.md: {root} tokens across 2 file(s)\n"
+        )))
+        .stdout(predicate::str::contains(format!(
+            "    pkg/AGENTS.md: {member} tokens across 2 file(s) [OVER CEILING by {}]\n",
+            member - root
+        )));
+}
+
+#[test]
+fn lint_context_leaves_a_suppressed_file_out_of_the_breach_but_still_reports_it() {
+    let dir = TempDir::new().expect("tempdir");
+    let root_text = "# Root\n\nSee [big](big.md).\n";
+    let big_text = format!(
+        "# aoa-allow: oversized-context generated reference\n\n{}",
+        "alpha beta gamma ".repeat(50)
+    );
+    std::fs::write(dir.path().join("AGENTS.md"), root_text).unwrap();
+    std::fs::write(dir.path().join("big.md"), &big_text).unwrap();
+    let root = lint_budget_tokens("o200k_base", &[root_text]);
+    let big = lint_budget_tokens("o200k_base", &[&big_text]);
+    let ceiling = root.to_string();
+
+    let parsed = lint_json(dir.path(), &["--ceiling", &ceiling]);
+
+    let closure = &parsed["budget"]["closures"][0];
+    assert_eq!(closure["target_tokens"], root + big);
+    assert_eq!(closure["gating_target_tokens"], root);
+    assert_eq!(closure["over_ceiling_by"], 0);
+    assert_eq!(closure["files"][1]["gating"], false);
+
+    aoa()
+        .current_dir(dir.path())
+        .args(["lint-context", "--ceiling", &ceiling])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "      big.md: {big} tokens (suppressed, not counted against the ceiling)\n"
+        )))
+        .stdout(predicate::str::contains("OVER CEILING").not());
+}
+
+#[test]
+fn lint_context_budget_counts_under_the_requested_tokenizer() {
+    let dir = TempDir::new().expect("tempdir");
+    let text = format!("# Root\n\n{}", "naïve café déjà-vu 日本語 ".repeat(40));
+    std::fs::write(dir.path().join("AGENTS.md"), &text).unwrap();
+
+    let parsed = lint_json(dir.path(), &["--tokenizer", "cl100k_base"]);
+
+    let target = lint_budget_tokens("cl100k_base", &[&text]);
+    let reference = lint_budget_tokens("o200k_base", &[&text]);
+    assert_ne!(target, reference);
+    assert_eq!(parsed["budget"]["tokenizer"], "cl100k_base");
+    assert_eq!(parsed["budget"]["target_tokens"], target);
+    assert_eq!(parsed["budget"]["o200k_tokens"], reference);
+    assert_eq!(parsed["budget"]["closures"][0]["target_tokens"], target);
+    assert_eq!(parsed["budget"]["closures"][0]["o200k_tokens"], reference);
+}
+
+#[test]
+fn lint_context_budget_is_not_narrowed_by_changed() {
+    let dir = lint_budget_tree();
+
+    let whole = lint_json(dir.path(), &[]);
+    let narrowed = lint_json(dir.path(), &["--changed", "pkg/AGENTS.md"]);
+
+    assert_eq!(narrowed["budget"], whole["budget"]);
+}
+
+#[test]
+fn lint_context_human_prints_tokens_for_the_root_closure_and_each_member() {
+    let dir = lint_budget_tree();
+
+    let root = lint_budget_tokens("o200k_base", &[LINT_BUDGET_ROOT, LINT_BUDGET_SHARED]);
+    let member = lint_budget_tokens("o200k_base", &[LINT_BUDGET_MEMBER, LINT_BUDGET_SHARED]);
+    let distinct = lint_budget_tokens(
+        "o200k_base",
+        &[LINT_BUDGET_ROOT, LINT_BUDGET_SHARED, LINT_BUDGET_MEMBER],
+    );
+
+    aoa()
+        .current_dir(dir.path())
+        .arg("lint-context")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "  context budget (o200k_base): {distinct} tokens across 3 file(s), ceiling 2000 per closure\n"
+        )))
+        .stdout(predicate::str::contains(format!(
+            "    CLAUDE.md: {root} tokens across 2 file(s)\n"
+        )))
+        .stdout(predicate::str::contains(format!(
+            "    pkg/AGENTS.md: {member} tokens across 2 file(s)\n"
+        )))
+        .stdout(predicate::str::contains(format!(
+            "      shared.md: {} tokens\n",
+            lint_budget_tokens("o200k_base", &[LINT_BUDGET_SHARED])
+        )));
+}
+
 #[test]
 fn lint_context_without_any_context_file_says_how_to_name_one() {
     let dir = TempDir::new().expect("tempdir");

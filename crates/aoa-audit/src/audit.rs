@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use aoa_budget::{count_budget, resolve_closure, Config};
+use aoa_budget::{count_budget, resolve_closure, Config, DEFAULT_CONTEXT_CEILING};
 use aoa_construct::BehavioralSignal;
 use aoa_metrics::{
     compute_metrics, discover_partition, IndexQuality, MetricInput, MetricRecord, SubtreePartition,
@@ -22,10 +22,6 @@ use crate::tier::{EnforcementPlane, Tier};
 /// The reference encoding used for the context-budget probe. o200k_base loads
 /// without network access and is the pinned reference encoding of aoa-budget.
 const AUDIT_TARGET_TOKENIZER: &str = "o200k_base";
-
-/// Default context-file token ceiling. Closures over this contribute an
-/// oversized-context punch item whose cost is the measured overflow.
-const DEFAULT_CONTEXT_CEILING: usize = 2_000;
 
 /// Default mutation-surface reachability depth.
 const DEFAULT_MUTATION_K: u32 = 2;

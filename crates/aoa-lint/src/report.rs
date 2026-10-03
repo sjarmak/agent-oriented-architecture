@@ -1,4 +1,6 @@
-use aoa_budget::BudgetReport;
+use std::path::PathBuf;
+
+use aoa_budget::{BudgetReport, FileBudget};
 use serde::{Deserialize, Serialize};
 
 use crate::finding::Finding;
@@ -12,6 +14,16 @@ use crate::finding::Finding;
 pub struct LintReport {
     /// The composed aoa-budget report: resolved closure file set + token budget.
     pub budget: BudgetReport,
+    pub closures: Vec<ClosureBudget>,
     /// Context-file smell findings over the closure's files.
     pub findings: Vec<Finding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClosureBudget {
+    pub root: PathBuf,
+    pub o200k_tokens: usize,
+    pub target_tokens: usize,
+    pub gating_target_tokens: usize,
+    pub files: Vec<FileBudget>,
 }
