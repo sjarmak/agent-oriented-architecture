@@ -181,3 +181,20 @@ fn linting_no_roots_fails() {
     let result = lint_context_roots(&[], "o200k_base");
     assert!(matches!(result, Err(LintError::NoRoots)));
 }
+
+#[test]
+fn ignore_file_above_the_linted_directory_does_not_hide_context_roots() {
+    let outer = TempDir::new().expect("tempdir");
+    write(outer.path(), ".gitignore", "CLAUDE.md\nservices/\n");
+    let repo = outer.path().join("snapshot");
+    write(&repo, "CLAUDE.md", "# Root\n");
+    write(&repo, "services/api/AGENTS.md", "# Api\n");
+
+    assert_eq!(
+        relative_roots(&repo),
+        [
+            PathBuf::from("CLAUDE.md"),
+            PathBuf::from("services/api/AGENTS.md"),
+        ]
+    );
+}

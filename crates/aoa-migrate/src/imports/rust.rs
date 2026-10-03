@@ -67,9 +67,10 @@ impl ImportAdapter for RustImportAdapter {
     }
 
     fn subtract_imports(&self, work: &Path) -> Result<Subtraction, MigrateError> {
+        let examined = collect_files(work, &is_rust_file)?.len();
         let diagnostics = run_cargo_check(work)?;
         Ok(Subtraction {
-            examined: collect_files(work, &is_rust_file)?.len(),
+            examined,
             files: compute_subtracted(&diagnostics, work)?,
         })
     }

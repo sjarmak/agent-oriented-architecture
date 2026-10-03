@@ -94,7 +94,9 @@ fn collect_source_files(
 ) -> Result<Vec<PathBuf>, ScipGraphError> {
     let walker = WalkBuilder::new(dir)
         .require_git(false)
+        .parents(false)
         .git_global(false)
+        .git_exclude(false)
         .ignore(false)
         .filter_entry(|entry| !is_dependency_or_build_dir(entry))
         .build();

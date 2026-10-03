@@ -44,6 +44,12 @@ pub enum AuditError {
     )]
     UnsafeInstallPath { path: PathBuf },
 
+    #[error(
+        "generated-file attributes at {path} exceed the audit's limit of {limit}; \
+         the size-outlier measure cannot tell generated files from source"
+    )]
+    GeneratedAttributesOverLimit { path: PathBuf, limit: &'static str },
+
     /// A trace produced through the observe-installed path failed validation.
     #[error(transparent)]
     Trace(#[from] aoa_trace::TraceError),

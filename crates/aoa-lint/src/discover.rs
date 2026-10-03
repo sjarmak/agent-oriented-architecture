@@ -11,6 +11,9 @@ pub fn discover_context_roots(dir: &Path) -> Result<Vec<PathBuf>, LintError> {
     let walker = WalkBuilder::new(dir)
         .hidden(false)
         .require_git(false)
+        .parents(false)
+        .git_global(false)
+        .git_exclude(false)
         .filter_entry(|entry| entry.file_name() != ".git")
         .sort_by_file_path(Path::cmp)
         .build();

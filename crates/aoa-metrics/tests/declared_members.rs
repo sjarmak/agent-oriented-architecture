@@ -116,3 +116,12 @@ fn a_malformed_manifest_fails_member_discovery() {
     write(dir.path(), "settings.gradle", "include ':tools'\n");
     assert!(declared_member_dirs(dir.path()).is_err());
 }
+
+#[test]
+fn gradle_block_comment_holding_a_url_does_not_swallow_the_includes() {
+    let members = declared(
+        "settings.gradle",
+        "/* See https://example.test/docs */\ninclude ':services:api'\n// include ':commented'\ninclude ':tools' /* trailing */\n",
+    );
+    assert_eq!(members, ["services/api", "tools"]);
+}

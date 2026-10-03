@@ -182,3 +182,28 @@ fn ignored_and_dependency_sources_are_not_counted_as_unindexed() {
         BTreeMap::from([("TypeScript".to_string(), 1)])
     );
 }
+
+#[test]
+fn ignore_file_above_the_indexed_directory_does_not_hide_its_sources() {
+    let outer = TempDir::new().unwrap();
+    write(outer.path(), ".gitignore", "*.ts\n*.py\n");
+    let repo = outer.path().join("snapshot");
+    write(&repo, "src/a.py", "def own():\n    pass\n");
+    write(&repo, "web/app.ts", "export const a = 1;\n");
+
+    let indexed = index_best_effort(&repo).expect("index repo");
+
+    assert_eq!(indexed.graph.nodes, vec!["src.a.own".to_string()]);
+    let coverage = indexed.coverage.expect("best-effort coverage");
+    assert_eq!(coverage.source_files(), 2);
+}
+
+#[test]
+fn ignore_line_the_matcher_cannot_parse_leaves_the_other_rules_in_force() {
+    let repo = TempDir::new().unwrap();
+    write(repo.path(), ".gitignore", "{foo\ngenerated/\n");
+    write(repo.path(), "src/a.py", "def own():\n    pass\n");
+    write(repo.path(), "generated/client.py", &functions(4));
+
+    assert_eq!(indexed_nodes(repo.path()), vec!["src.a.own".to_string()]);
+}

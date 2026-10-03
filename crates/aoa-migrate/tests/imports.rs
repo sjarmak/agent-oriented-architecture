@@ -162,3 +162,18 @@ fn feature_gated_import_is_preserved_under_all_features() {
         plan.changes
     );
 }
+
+#[test]
+fn examined_count_leaves_out_sources_the_build_itself_generates() {
+    let dir = crate_with_unused_import();
+    let repo = dir.path();
+    fs::write(
+        repo.join("build.rs"),
+        "fn main() {\n    let out = std::env::var(\"OUT_DIR\").unwrap();\n    std::fs::write(format!(\"{out}/made.rs\"), \"pub fn made() {}\\n\").unwrap();\n}\n",
+    )
+    .unwrap();
+
+    let plan = MigrationPlan::build(repo, &[&DeadImportFix::rust()]).unwrap();
+
+    assert_eq!(plan.reports[0].examined, 2);
+}

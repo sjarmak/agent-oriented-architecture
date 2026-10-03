@@ -375,20 +375,40 @@ fn is_identifier_char(c: char) -> bool {
 }
 
 fn strip_gradle_comments(raw: &str) -> String {
-    let without_line_comments = raw
-        .lines()
-        .map(|line| line.split("//").next().unwrap_or_default())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let mut out = String::with_capacity(without_line_comments.len());
-    let mut rest = without_line_comments.as_str();
-    while let Some(start) = rest.find("/*") {
-        out.push_str(&rest[..start]);
-        rest = rest[start + 2..]
-            .split_once("*/")
-            .map_or("", |(_, tail)| tail);
+    let mut out = String::with_capacity(raw.len());
+    let mut quote = None;
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        match (quote, c, chars.peek().copied()) {
+            (Some(open), _, _) => {
+                out.push(c);
+                if c == open || c == '\n' {
+                    quote = None;
+                }
+            }
+            (None, '/', Some('/')) => {
+                if chars.by_ref().any(|skipped| skipped == '\n') {
+                    out.push('\n');
+                }
+            }
+            (None, '/', Some('*')) => {
+                chars.next();
+                let mut previous = ' ';
+                for skipped in chars.by_ref() {
+                    if previous == '*' && skipped == '/' {
+                        break;
+                    }
+                    previous = skipped;
+                }
+                out.push(' ');
+            }
+            (None, '\'' | '"', _) => {
+                quote = Some(c);
+                out.push(c);
+            }
+            (None, _, _) => out.push(c),
+        }
     }
-    out.push_str(rest);
     out
 }
 
