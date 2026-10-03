@@ -1276,6 +1276,55 @@ fn a_linked_worktree_registered_by_a_relative_path_inherits_the_hook() {
     assert!(!pre_commit_plane_missing(&linked));
 }
 
+fn linked_worktree_with_main_hook() -> (TempDir, TempDir, std::path::PathBuf) {
+    let main = git_fixture_repo();
+    write_hook(&main.path().join(".git/hooks/pre-commit"));
+    let linked_parent = tempfile::tempdir().expect("linked worktree parent");
+    let linked = linked_parent.path().join("linked");
+    git(
+        main.path(),
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "linked",
+            linked.to_str().expect("utf-8 path"),
+        ],
+    );
+    assert!(!pre_commit_plane_missing(&linked));
+    (main, linked_parent, linked)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_back_pointer_that_is_a_fifo_is_refused_without_hanging() {
+    let (main, _linked_parent, linked) = linked_worktree_with_main_hook();
+    let back_pointer = main.path().join(".git/worktrees/linked/gitdir");
+    std::fs::remove_file(&back_pointer).expect("remove the back-pointer");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&back_pointer)
+        .status()
+        .expect("mkfifo is available");
+    assert!(made.success(), "mkfifo failed");
+
+    assert!(pre_commit_plane_missing(&linked));
+}
+
+#[test]
+fn an_oversized_back_pointer_is_refused() {
+    let (main, _linked_parent, linked) = linked_worktree_with_main_hook();
+    let back_pointer = main.path().join(".git/worktrees/linked/gitdir");
+    let registered = std::fs::read_to_string(&back_pointer).expect("read the back-pointer");
+    std::fs::write(
+        &back_pointer,
+        format!("{}{}", registered.trim_end(), "\n".repeat(8192)),
+    )
+    .expect("pad the back-pointer");
+
+    assert!(pre_commit_plane_missing(&linked));
+}
+
 #[test]
 fn a_git_file_pointing_at_another_repository_does_not_borrow_its_hook() {
     let other = git_fixture_repo();

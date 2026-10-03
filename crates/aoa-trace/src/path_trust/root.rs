@@ -337,7 +337,7 @@ pub fn linked_worktree_points_back(
     const MAX_BACKLINK_BYTES: u64 = 4096;
     let backlink_path = git_dir.join("gitdir");
     let mut raw = Vec::new();
-    File::open(&backlink_path)
+    open_regular_file(&backlink_path)
         .and_then(|file| file.take(MAX_BACKLINK_BYTES + 1).read_to_end(&mut raw))
         .map_err(|source| RepositoryRootError::Backlink {
             path: backlink_path.clone(),
@@ -367,6 +367,34 @@ pub fn linked_worktree_points_back(
         return Ok(false);
     };
     Ok(resolved_backlink == marker)
+}
+
+fn open_regular_file(path: &Path) -> std::io::Result<File> {
+    let file = open_without_blocking(path)?;
+    if file.metadata()?.is_file() {
+        Ok(file)
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn open_without_blocking(path: &Path) -> std::io::Result<File> {
+    use rustix::fs::{Mode, OFlags};
+    let descriptor = rustix::fs::open(
+        path,
+        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    Ok(File::from(descriptor))
+}
+
+#[cfg(not(unix))]
+fn open_without_blocking(path: &Path) -> std::io::Result<File> {
+    File::open(path)
 }
 
 #[cfg(test)]
@@ -603,6 +631,25 @@ mod tests {
             ],
         );
         assert!(message.contains("backlink"), "{message}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_a_backlink_that_is_a_fifo_without_hanging() {
+        let (_fixture, candidate) = candidate_fixture();
+        let git_dir = candidate.join("admin/worktrees/fixture");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let made = Command::new("mkfifo")
+            .arg(git_dir.join("gitdir"))
+            .status()
+            .unwrap();
+        assert!(made.success(), "mkfifo failed");
+
+        let refusal = linked_worktree_points_back(&candidate, &git_dir).unwrap_err();
+        assert!(
+            matches!(refusal, RepositoryRootError::Backlink { .. }),
+            "{refusal}"
+        );
     }
 
     /// A `.git` that Git itself disowns is not a trust root, and asking must not
