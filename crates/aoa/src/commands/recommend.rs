@@ -48,7 +48,7 @@ pub fn run(args: &RecommendArgs) -> Result<i32> {
             graph: &graph,
         })?;
     } else {
-        print_human(&(report.render_human() + &graph.render_human()));
+        print_human(&(report.render_human() + &graph.render_human()))?;
     }
 
     Ok(0)

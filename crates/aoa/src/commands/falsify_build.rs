@@ -52,7 +52,7 @@ pub(crate) fn run(args: &ExperimentArgs) -> Result<i32> {
     if args.json {
         print_json(&report)?;
     } else {
-        print_human(&render_human(&report, &report_path));
+        print_human(&render_human(&report, &report_path))?;
     }
     enforce_pair_yield(args.min_pair_yield, &report)?;
     Ok(0)

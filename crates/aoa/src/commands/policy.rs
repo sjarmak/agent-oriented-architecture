@@ -90,7 +90,7 @@ fn compile(repo: &Path, forge: &str, json: bool) -> Result<i32> {
         for path in &view.planes_written {
             message.push_str(&format!("  wrote {path}\n"));
         }
-        print_human(&message);
+        print_human(&message)?;
     }
     Ok(0)
 }
@@ -194,7 +194,7 @@ fn infer_owners_cmd(repo: &Path, write: bool, json: bool) -> Result<i32> {
     if json {
         print_json(&view)?;
     } else {
-        print_human(&render_infer_owners_human(&view));
+        print_human(&render_infer_owners_human(&view))?;
     }
     Ok(0)
 }

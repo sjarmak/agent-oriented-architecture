@@ -296,7 +296,7 @@ pub fn run(args: &R0bArgs) -> Result<i32> {
     if args.json {
         print_json(&report)?;
     } else {
-        print_human(&render_human(&report));
+        print_human(&render_human(&report))?;
     }
     Ok(code)
 }

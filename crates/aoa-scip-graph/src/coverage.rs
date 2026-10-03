@@ -84,7 +84,11 @@ impl GraphCoverage {
 }
 
 pub(crate) fn language_of(extension: &OsStr) -> Option<&'static str> {
-    let language = match extension.to_str()?.to_ascii_lowercase().as_str() {
+    let extension = extension.to_str()?;
+    if extension == "C" {
+        return Some("C++");
+    }
+    let language = match extension.to_ascii_lowercase().as_str() {
         "py" => INDEXED_LANGUAGE,
         "ts" | "tsx" | "mts" | "cts" => "TypeScript",
         "js" | "jsx" | "mjs" | "cjs" => "JavaScript",
@@ -176,5 +180,8 @@ mod tests {
         assert_eq!(language_of(OsStr::new("tsx")), Some("TypeScript"));
         assert_eq!(language_of(OsStr::new("kt")), Some("Kotlin"));
         assert_eq!(language_of(OsStr::new("md")), None);
+        assert_eq!(language_of(OsStr::new("c")), Some("C"));
+        assert_eq!(language_of(OsStr::new("C")), Some("C++"));
+        assert_eq!(language_of(OsStr::new("H")), Some("C"));
     }
 }

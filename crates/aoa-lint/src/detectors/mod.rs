@@ -14,13 +14,13 @@ pub struct LintedFile {
     pub text: String,
 }
 
-pub fn run_all(file: &LintedFile) -> Vec<Finding> {
+pub fn run_all(file: &LintedFile, boundary: &Path) -> Vec<Finding> {
     if !is_markdown(file) {
         return Vec::new();
     }
     let mut findings = duplication::detect(file);
     findings.extend(verbosity::detect(file));
-    findings.extend(stale_reference::detect(file));
+    findings.extend(stale_reference::detect(file, boundary));
     findings.extend(overbroad_glob::detect(file));
     findings.extend(contradiction::detect(file));
     findings
@@ -32,9 +32,31 @@ fn is_markdown(file: &LintedFile) -> bool {
     has_markdown_name(&file.path) && !file.text.starts_with("#!")
 }
 
+const BUILD_FILE_NAMES: [&str; 15] = [
+    "BUILD",
+    "Brewfile",
+    "Containerfile",
+    "Dockerfile",
+    "Earthfile",
+    "GNUmakefile",
+    "Gemfile",
+    "Jenkinsfile",
+    "Justfile",
+    "Makefile",
+    "Procfile",
+    "Rakefile",
+    "Tiltfile",
+    "Vagrantfile",
+    "WORKSPACE",
+];
+
 fn has_markdown_name(path: &Path) -> bool {
     match path.extension() {
-        None => true,
+        None => !path.file_name().is_some_and(|name| {
+            BUILD_FILE_NAMES
+                .iter()
+                .any(|build| name.eq_ignore_ascii_case(build))
+        }),
         Some(extension) => MARKDOWN_EXTENSIONS
             .iter()
             .any(|markdown| extension.eq_ignore_ascii_case(markdown)),
@@ -63,6 +85,13 @@ mod tests {
     fn extensionless_context_files_are_markdown() {
         for path in [".cursorrules", "AGENTS"] {
             assert!(has_markdown_name(Path::new(path)), "{path}");
+        }
+    }
+
+    #[test]
+    fn extensionless_build_files_are_not_markdown() {
+        for path in ["Dockerfile", "docker/dockerfile", "Makefile", "BUILD"] {
+            assert!(!has_markdown_name(Path::new(path)), "{path}");
         }
     }
 

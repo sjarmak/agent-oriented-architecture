@@ -1,5 +1,8 @@
 use std::fmt::Write as _;
 
+use std::path::PathBuf;
+
+use aoa_budget::UnreadLink;
 use serde::{Deserialize, Serialize};
 
 use aoa_construct::{BehavioralSignal, ConstructValidityReport, InsufficientDataNote};
@@ -27,6 +30,10 @@ pub struct AuditReport {
     /// a failure. Omitted from the wire form when `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtree_discovery_warning: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_outside_boundary: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_unread: Vec<UnreadLink>,
     /// The repo's held-out behavioral signal (fully measured live-session
     /// observations counted against
     /// [`aoa_construct::MIN_HELD_OUT_OBSERVATIONS`]).
@@ -55,6 +62,10 @@ struct AuditReportWire {
     #[serde(default)]
     subtree_discovery_warning: Option<String>,
     #[serde(default)]
+    context_outside_boundary: Vec<PathBuf>,
+    #[serde(default)]
+    context_unread: Vec<UnreadLink>,
+    #[serde(default)]
     behavioral_signal: BehavioralSignal,
     // Accepted for wire compatibility, but this is a projection of
     // `behavioral_signal`, never independent input.
@@ -72,6 +83,8 @@ impl<'de> Deserialize<'de> for AuditReport {
         Ok(Self {
             items: wire.items,
             subtree_discovery_warning: wire.subtree_discovery_warning,
+            context_outside_boundary: wire.context_outside_boundary,
+            context_unread: wire.context_unread,
             insufficient_data: wire.behavioral_signal.insufficient_data(),
             behavioral_signal: wire.behavioral_signal,
             live_observations: wire.live_observations,
@@ -95,6 +108,8 @@ impl AuditReport {
         Self {
             items,
             subtree_discovery_warning: None,
+            context_outside_boundary: Vec::new(),
+            context_unread: Vec::new(),
             insufficient_data: behavioral_signal.insufficient_data(),
             behavioral_signal,
             live_observations: Vec::new(),
@@ -127,6 +142,21 @@ impl AuditReport {
         let _ = writeln!(out, "AOA audit punch-list ({} item(s))", self.items.len());
         if let Some(warning) = &self.subtree_discovery_warning {
             let _ = writeln!(out, "warning: {warning}");
+        }
+        for link in &self.context_outside_boundary {
+            let _ = writeln!(
+                out,
+                "context link not counted, it resolves outside the repository: {}",
+                link.display()
+            );
+        }
+        for link in &self.context_unread {
+            let _ = writeln!(
+                out,
+                "context link not counted, it is {}: {}",
+                link.reason.label(),
+                link.path.display()
+            );
         }
         for (index, item) in self.items.iter().enumerate() {
             let _ = writeln!(

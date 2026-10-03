@@ -357,7 +357,7 @@ ground_truth_commit skipped)",
             let n = m.correlations.first().map_or(0, |c| c.n);
             let _ = writeln!(s, "  {:<42} {:?} (n={n})", m.metric, m.mode);
         }
-        print_human(&s);
+        print_human(&s)?;
     }
     Ok(0)
 }

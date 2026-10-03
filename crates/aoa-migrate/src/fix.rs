@@ -80,9 +80,37 @@ pub enum Coverage {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FixRun {
-    pub changes: Vec<PlannedChange>,
-    pub coverage: Coverage,
-    pub warning: Option<String>,
+    pub(crate) changes: Vec<PlannedChange>,
+    pub(crate) coverage: Coverage,
+    pub(crate) warning: Option<String>,
+}
+
+impl FixRun {
+    pub fn examined(changes: Vec<PlannedChange>, count: usize) -> Self {
+        Self {
+            changes,
+            coverage: Coverage::Examined { count },
+            warning: None,
+        }
+    }
+
+    pub fn skipped(reason: impl Into<String>) -> Self {
+        Self {
+            changes: Vec::new(),
+            coverage: Coverage::Skipped {
+                reason: reason.into(),
+            },
+            warning: None,
+        }
+    }
+
+    pub fn into_changes(self) -> Vec<PlannedChange> {
+        self.changes
+    }
+
+    pub fn with_warning(self, warning: Option<String>) -> Self {
+        Self { warning, ..self }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -219,7 +247,7 @@ impl CodeFix for NavigabilityAnchorFix {
 
     fn plan(&self, repo: &Path) -> Result<FixRun, MigrateError> {
         let package_roots = aoa_audit::PackageRoots::discover(repo)?;
-        let examined = package_roots.roots.len();
+        let examined = package_roots.roots().len();
         let mut sites = package_roots.navigability_sites();
         sites.sort();
 
@@ -234,11 +262,7 @@ impl CodeFix for NavigabilityAnchorFix {
                 })
             })
             .collect::<Result<Vec<_>, MigrateError>>()?;
-        Ok(FixRun {
-            changes,
-            coverage: Coverage::Examined { count: examined },
-            warning: package_roots.warning(),
-        })
+        Ok(FixRun::examined(changes, examined).with_warning(package_roots.warning()))
     }
 }
 

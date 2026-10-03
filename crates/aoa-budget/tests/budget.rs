@@ -252,7 +252,7 @@ fn fix_oversized_file_rechecks_green() {
     .unwrap();
     assert_eq!(before.verdict, Verdict::Block, "fixture starts over budget");
 
-    let outcome = fix_oversized(&root, 200, "gpt-4o").unwrap();
+    let outcome = fix_oversized(&root, &dir, 200, "gpt-4o").unwrap();
     assert!(outcome.archive.exists(), "full body archived");
     assert!(outcome.target_tokens < 200, "fix reported under ceiling");
 
@@ -304,4 +304,24 @@ fn angle_bracket_destinations_are_unwrapped_before_classification() {
         .map(|f| f.path.file_name().unwrap().to_string_lossy().into_owned())
         .collect();
     assert_eq!(names, ["AGENTS.md", "present (v2).md"]);
+}
+
+#[test]
+fn fix_recheck_counts_what_the_root_links_in_a_sibling_directory() {
+    let dir = scratch("fix-sibling");
+    let body = "A paragraph of shared guidance that every package must follow.\n\n".repeat(200);
+    std::fs::create_dir_all(dir.join("docs")).unwrap();
+    std::fs::create_dir_all(dir.join("pkg")).unwrap();
+    std::fs::write(dir.join("docs/shared.md"), &body).unwrap();
+    let root = dir.join("pkg/AGENTS.md");
+    std::fs::write(
+        &root,
+        format!("# Package\n\n[shared](../docs/shared.md)\n\n{body}"),
+    )
+    .unwrap();
+
+    let err = fix_oversized(&root, &dir, 200, "gpt-4o").unwrap_err();
+
+    assert!(matches!(err, BudgetError::FixFailed { .. }), "{err}");
+    std::fs::remove_dir_all(&dir).ok();
 }

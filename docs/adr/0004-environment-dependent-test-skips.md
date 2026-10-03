@@ -57,7 +57,20 @@ than an accident:
   can hold that input, so the test is `#[ignore]`d and names
   `AOA_R0_CAMPAIGN_RUNS` in its reason string.
 
-That test also prints a SKIP notice, which is not a third convention: the notice
+- `crates/aoa-scip-graph/tests/walk_scope.rs` and
+  `crates/aoa-budget/tests/closure_bounds.rs` each hold one test that needs the
+  kernel to refuse the process a read: an unlistable directory in the first, a
+  mode-000 file in the second. A process running as root is refused neither, so
+  each test probes whether the seal took and prints the notice when it did not.
+  CI satisfies the precondition without an install step, because the hosted
+  runner executes the suite as an unprivileged user; the notice is for a
+  developer running the tests as root in a container. Before aoa-wxfoc the
+  first of these returned `ok` without a notice when the seal did not take.
+  Moving the CI jobs into a root container would turn both into the forbidden
+  case, and nothing in the workspace would notice: the registry test checks the
+  tool installs, not the user the suite runs as.
+
+The `exposure_scan.rs` test also prints a SKIP notice, which is not a third convention: the notice
 sits *inside* the ignored test and reports an unset `AOA_R0_CAMPAIGN_RUNS` to
 somebody who asked for the test by name with `--ignored`. `#[ignore]` has
 already made the CI-honesty decision by then. A variable that *is* set must name

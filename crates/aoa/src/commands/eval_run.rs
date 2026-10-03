@@ -232,7 +232,7 @@ pub fn run(args: &EvalRunArgs) -> Result<i32> {
     if args.json {
         print_json(&report)?;
     } else {
-        print_human(&render_human(&report));
+        print_human(&render_human(&report))?;
     }
 
     // Any failed trial makes the command exit non-zero so CI / downstream R0

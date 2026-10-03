@@ -284,3 +284,61 @@ fn no_prose_rule_runs_on_a_non_markdown_closure_member() {
     assert_eq!(report.budget.files.len(), 3);
     assert!(report.findings.is_empty(), "{:?}", report.findings);
 }
+
+#[test]
+fn a_missing_link_that_leaves_the_linted_directory_is_not_probed() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join("repo")).unwrap();
+    let root = dir.path().join("repo/AGENTS.md");
+    std::fs::write(&root, "[out](../absent.md) [gone](absent.md)\n").unwrap();
+
+    let report =
+        aoa_lint::lint_context_roots(&[root], &dir.path().join("repo"), "o200k_base").unwrap();
+
+    let stale: Vec<&str> = report
+        .findings
+        .iter()
+        .filter(|finding| finding.category == SmellCategory::StaleReference)
+        .map(|finding| finding.message.as_str())
+        .collect();
+    assert_eq!(
+        stale,
+        ["stale reference: linked file 'absent.md' does not exist"]
+    );
+}
+
+#[test]
+fn a_linked_build_file_is_counted_but_not_linted_as_prose() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let step = "RUN make every single target in the tree and then some more\n";
+    std::fs::write(
+        dir.path().join("Dockerfile"),
+        format!("{step}\n{step}\n{step}\n[gone](absent.md)\n"),
+    )
+    .unwrap();
+    let root = dir.path().join("AGENTS.md");
+    std::fs::write(&root, "[image](Dockerfile)\n").unwrap();
+
+    let report = aoa_lint::lint_context_roots(&[root], dir.path(), "o200k_base").unwrap();
+
+    assert_eq!(report.closures[0].files.len(), 2);
+    assert!(report.findings.is_empty(), "{:?}", report.findings);
+}
+
+#[test]
+fn a_member_that_cannot_be_counted_is_named_on_its_closure() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(dir.path().join("binary.md"), b"rules\n\xff\n").unwrap();
+    let root = dir.path().join("AGENTS.md");
+    std::fs::write(&root, "[binary](binary.md)\n").unwrap();
+
+    let report = aoa_lint::lint_context_roots(&[root], dir.path(), "o200k_base").unwrap();
+
+    assert_eq!(
+        report.closures[0].unread,
+        [aoa_budget::UnreadLink {
+            path: dir.path().join("binary.md"),
+            reason: aoa_budget::UnreadReason::NotUtf8,
+        }]
+    );
+}

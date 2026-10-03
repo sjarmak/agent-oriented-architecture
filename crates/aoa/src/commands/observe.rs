@@ -52,7 +52,7 @@ pub fn run(args: &ObserveArgs) -> Result<i32> {
         if let Some(warning) = &view.enforce_hook_warning {
             message.push_str(&format!("  warning: {warning}\n"));
         }
-        print_human(&message);
+        print_human(&message)?;
     }
     Ok(0)
 }

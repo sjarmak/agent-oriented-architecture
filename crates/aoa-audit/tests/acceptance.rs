@@ -1169,7 +1169,7 @@ fn git(repo: &Path, args: &[&str]) {
 
 fn git_fixture_repo() -> TempDir {
     let repo = fixture_repo();
-    git(repo.path(), &["init", "--quiet"]);
+    git(repo.path(), &["init", "--quiet", "--template="]);
     git(repo.path(), &["add", "."]);
     git(repo.path(), &["commit", "--quiet", "-m", "fixture"]);
     repo
@@ -1249,6 +1249,20 @@ fn a_linked_worktree_inherits_the_main_checkout_pre_commit_hook() {
     write_hook(&main.path().join(".git/hooks/pre-commit"));
     assert!(!pre_commit_plane_missing(main.path()));
     assert!(!pre_commit_plane_missing(&linked));
+}
+
+#[test]
+fn a_git_file_pointing_at_another_repository_does_not_borrow_its_hook() {
+    let other = git_fixture_repo();
+    write_hook(&other.path().join(".git/hooks/pre-commit"));
+    let repo = fixture_repo();
+    std::fs::write(
+        repo.path().join(".git"),
+        format!("gitdir: {}\n", other.path().join(".git").display()),
+    )
+    .expect("plant .git file");
+
+    assert!(pre_commit_plane_missing(repo.path()));
 }
 
 #[test]

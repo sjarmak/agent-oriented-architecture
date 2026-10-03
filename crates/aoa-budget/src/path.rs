@@ -14,8 +14,8 @@ pub fn normalize_path(path: &Path) -> PathBuf {
                 Some(Normal(_)) => {
                     out.pop();
                 }
-                Some(RootDir | Prefix(_)) => {}
-                Some(ParentDir | CurDir) | None => out.push(component.as_os_str()),
+                Some(RootDir) => {}
+                Some(Prefix(_) | ParentDir | CurDir) | None => out.push(component.as_os_str()),
             },
             other => out.push(other.as_os_str()),
         }
@@ -56,6 +56,19 @@ mod tests {
         assert_eq!(
             normalize_path(Path::new("/../etc/rules.md")),
             PathBuf::from("/etc/rules.md")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_parent_step_on_a_drive_relative_path_is_kept() {
+        assert_eq!(
+            normalize_path(Path::new(r"C:..\rules.md")),
+            PathBuf::from(r"C:..\rules.md")
+        );
+        assert_eq!(
+            normalize_path(Path::new(r"C:\..\rules.md")),
+            PathBuf::from(r"C:\rules.md")
         );
     }
 }

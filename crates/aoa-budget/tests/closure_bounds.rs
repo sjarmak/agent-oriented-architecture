@@ -2,8 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use aoa_budget::{
-    resolve_closure, resolve_closure_within, resolve_contained_closure, BudgetError,
-    MAX_CONTEXT_FILE_BYTES,
+    resolve_closure, resolve_closure_within, resolve_contained_closure, BudgetError, UnreadLink,
+    UnreadReason, MAX_CONTEXT_FILE_BYTES,
 };
 use tempfile::TempDir;
 
@@ -182,23 +182,118 @@ fn a_linked_symlink_counts_only_when_its_target_is_inside_the_boundary() {
 }
 
 #[cfg(unix)]
+fn make_fifo(path: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+
+    let raw = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0, "mkfifo");
+}
+
+fn unread(path: PathBuf, reason: UnreadReason) -> UnreadLink {
+    UnreadLink { path, reason }
+}
+
+#[cfg(unix)]
 #[test]
-fn a_link_to_a_device_or_a_directory_is_skipped_without_being_read() {
+fn a_link_to_a_pipe_is_reported_and_a_directory_is_skipped_without_being_read() {
+    let dir = TempDir::new().unwrap();
+    let root = write(dir.path(), "AGENTS.md", "[pipe](pipe.md) [dir](docs)\n");
+    fs::create_dir(dir.path().join("docs")).unwrap();
+    make_fifo(&dir.path().join("pipe.md"));
+
+    let closure = resolve_closure_within(&root, dir.path()).unwrap();
+
+    assert_eq!(closure.files.len(), 1);
+    assert_eq!(
+        closure.unread,
+        [unread(
+            dir.path().join("pipe.md"),
+            UnreadReason::NotRegularFile
+        )]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_device_inside_the_boundary_is_refused_by_its_file_type() {
+    let dir = TempDir::new().unwrap();
+    let root = write(dir.path(), "AGENTS.md", "[zero](zero.md)\n");
+    std::os::unix::fs::symlink("/dev/zero", dir.path().join("zero.md")).unwrap();
+
+    let closure = resolve_closure_within(&root, Path::new("/")).unwrap();
+
+    assert_eq!(closure.files.len(), 1);
+    assert_eq!(
+        closure.unread,
+        [unread(
+            dir.path().join("zero.md"),
+            UnreadReason::NotRegularFile
+        )]
+    );
+    assert!(closure.outside_boundary.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_member_that_cannot_be_counted_is_reported_with_the_reason() {
     let dir = TempDir::new().unwrap();
     let root = write(
         dir.path(),
         "AGENTS.md",
-        "[zero](zero.md) [pipe](pipe.md) [dir](docs)\n",
+        "[gone](gone.md) [loop](loop.md) [binary](binary.md) [absent](absent.md) @mention\n",
     );
-    fs::create_dir(dir.path().join("docs")).unwrap();
-    std::os::unix::fs::symlink("/dev/zero", dir.path().join("zero.md")).unwrap();
-    let made = std::process::Command::new("mkfifo")
-        .arg(dir.path().join("pipe.md"))
-        .status()
-        .expect("mkfifo available");
-    assert!(made.success());
+    std::os::unix::fs::symlink("removed.md", dir.path().join("gone.md")).unwrap();
+    std::os::unix::fs::symlink("loop.md", dir.path().join("loop.md")).unwrap();
+    fs::write(dir.path().join("binary.md"), b"rules\n\xff\xfe\n").unwrap();
 
-    assert_eq!(member_names(&root, dir.path()), ["AGENTS.md"]);
+    let closure = resolve_closure_within(&root, dir.path()).unwrap();
+
+    assert_eq!(closure.files.len(), 1);
+    assert_eq!(
+        closure.unread,
+        [
+            unread(dir.path().join("gone.md"), UnreadReason::BrokenSymlink),
+            unread(dir.path().join("loop.md"), UnreadReason::BrokenSymlink),
+            unread(dir.path().join("binary.md"), UnreadReason::NotUtf8),
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_member_the_process_may_not_open_is_reported_as_unreadable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    let root = write(dir.path(), "AGENTS.md", "[sealed](sealed.md)\n");
+    let sealed = write(dir.path(), "sealed.md", "rules\n");
+    fs::set_permissions(&sealed, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::File::open(&sealed).is_ok() {
+        eprintln!(
+            "SKIP (docs/adr/0004-environment-dependent-test-skips.md): this process opens a \
+             mode-000 file, so it cannot be denied a read"
+        );
+        return;
+    }
+
+    let closure = resolve_closure_within(&root, dir.path()).unwrap();
+
+    assert_eq!(closure.files.len(), 1);
+    assert_eq!(closure.unread, [unread(sealed, UnreadReason::Unreadable)]);
+}
+
+#[test]
+fn a_member_of_exactly_the_size_limit_is_counted() {
+    let dir = TempDir::new().unwrap();
+    let root = write(dir.path(), "AGENTS.md", "[big](big.md)\n");
+    let big = fs::File::create(dir.path().join("big.md")).unwrap();
+    big.set_len(MAX_CONTEXT_FILE_BYTES).unwrap();
+
+    let closure = resolve_closure(&root).unwrap();
+
+    assert_eq!(closure.files.len(), 2);
+    assert_eq!(closure.files[1].text.len() as u64, MAX_CONTEXT_FILE_BYTES);
+    assert!(closure.unread.is_empty());
 }
 
 #[test]

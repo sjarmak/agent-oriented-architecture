@@ -377,6 +377,28 @@ fn lint_context_counts_a_sibling_directory_for_the_only_nested_root() {
 }
 
 #[test]
+fn lint_context_names_a_member_it_could_not_count() {
+    let dir = TempDir::new().expect("tempdir");
+    std::fs::write(dir.path().join("AGENTS.md"), "[binary](binary.md)\n").expect("write root");
+    std::fs::write(dir.path().join("binary.md"), b"rules\n\xff\n").expect("write member");
+
+    let parsed = lint_json(dir.path(), &[]);
+
+    assert_eq!(
+        parsed["budget"]["closures"][0]["unread"],
+        serde_json::json!([{ "path": "binary.md", "reason": "not_utf8" }])
+    );
+    aoa()
+        .current_dir(dir.path())
+        .arg("lint-context")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "binary.md: not counted, it is not UTF-8 text",
+        ));
+}
+
+#[test]
 fn lint_context_names_a_link_that_leaves_the_directory_of_an_explicit_root() {
     let dir = TempDir::new().expect("tempdir");
     write_package_linking_shared_docs(dir.path());
@@ -480,6 +502,7 @@ fn lint_context_json_reports_tokens_for_the_root_closure_and_each_member() {
                         file("shared.md", LINT_BUDGET_SHARED),
                     ],
                     "outside_boundary": [],
+                    "unread": [],
                 },
                 {
                     "root": "pkg/AGENTS.md",
@@ -492,6 +515,7 @@ fn lint_context_json_reports_tokens_for_the_root_closure_and_each_member() {
                         file("shared.md", LINT_BUDGET_SHARED),
                     ],
                     "outside_boundary": [],
+                    "unread": [],
                 },
             ],
         })

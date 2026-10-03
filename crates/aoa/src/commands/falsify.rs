@@ -233,7 +233,7 @@ pub fn run(args: &FalsifyArgs) -> Result<i32> {
     if args.json {
         print_json(&output)?;
     } else {
-        print_human(&render_human(&output, &args.out));
+        print_human(&render_human(&output, &args.out))?;
     }
     Ok(exit)
 }

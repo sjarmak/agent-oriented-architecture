@@ -33,7 +33,7 @@ mod typescript;
 use std::path::{Path, PathBuf};
 
 use crate::error::MigrateError;
-use crate::fix::{ChangeAction, CodeFix, Coverage, FixProvenance, FixRun, PlannedChange};
+use crate::fix::{ChangeAction, CodeFix, FixProvenance, FixRun, PlannedChange};
 
 /// Directory basenames excluded from the isolated copy, at any nesting depth:
 /// build output (`target`, `build`, `dist`), VCS metadata (`.git`), this tool's
@@ -157,13 +157,7 @@ impl CodeFix for DeadImportFix {
 
     fn plan(&self, repo: &Path) -> Result<FixRun, MigrateError> {
         if !self.adapter.is_eligible(repo) {
-            return Ok(FixRun {
-                changes: Vec::new(),
-                coverage: Coverage::Skipped {
-                    reason: self.adapter.ineligible_reason().to_string(),
-                },
-                warning: None,
-            });
+            return Ok(FixRun::skipped(self.adapter.ineligible_reason()));
         }
 
         // (2) Isolate: copy to a throwaway tree so the tool never writes the real
@@ -179,13 +173,10 @@ impl CodeFix for DeadImportFix {
 
         let subtraction = self.adapter.subtract_imports(work.path())?;
 
-        Ok(FixRun {
-            changes: finalize_changes(subtraction.files, work.path(), repo)?,
-            coverage: Coverage::Examined {
-                count: subtraction.examined,
-            },
-            warning: None,
-        })
+        Ok(FixRun::examined(
+            finalize_changes(subtraction.files, work.path(), repo)?,
+            subtraction.examined,
+        ))
     }
 
     fn provenance(&self, repo: &Path) -> Result<Option<FixProvenance>, MigrateError> {

@@ -138,7 +138,11 @@ fn failing_path(error: &ignore::Error) -> Option<&Path> {
         ignore::Error::WithDepth { err, .. } | ignore::Error::WithLineNumber { err, .. } => {
             failing_path(err)
         }
-        _ => None,
+        ignore::Error::Partial(errors) => errors.iter().find_map(failing_path),
+        ignore::Error::Io(_)
+        | ignore::Error::Glob { .. }
+        | ignore::Error::UnrecognizedFileType(_)
+        | ignore::Error::InvalidDefinition => None,
     }
 }
 

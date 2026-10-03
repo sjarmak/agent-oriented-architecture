@@ -58,7 +58,7 @@ pub fn scan(args: &ExposureScanArgs) -> Result<i32> {
                 );
             }
         }
-        print_human(&out);
+        print_human(&out)?;
     }
     Ok(0)
 }

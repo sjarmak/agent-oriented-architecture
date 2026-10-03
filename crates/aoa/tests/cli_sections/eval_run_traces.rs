@@ -303,3 +303,26 @@ fn emitted_traces_are_readable_by_their_owner_only() {
         assert_eq!(mode & 0o777, 0o600, "{task_id}");
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn a_trace_destination_that_already_exists_with_a_wider_mode_is_narrowed() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().expect("tempdir");
+    let run = two_trial_run(&dir);
+    let traces = dir.path().join("traces");
+    let stale = traces.join("busy-task.trace.json");
+    std::fs::create_dir_all(&traces).expect("traces dir");
+    std::fs::write(&stale, "{}").expect("stale trace");
+    std::fs::set_permissions(&stale, std::fs::Permissions::from_mode(0o644)).expect("widen");
+
+    eval_run_json(&run, &["--emit-traces".as_ref(), traces.as_os_str()]);
+
+    let mode = std::fs::metadata(&stale)
+        .expect("trace file")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+    assert_ne!(std::fs::read_to_string(&stale).expect("trace"), "{}");
+}

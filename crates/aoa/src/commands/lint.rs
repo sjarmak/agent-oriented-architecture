@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use aoa_budget::normalize_path;
+use aoa_budget::{normalize_path, UnreadLink};
 use aoa_lint::ClosureBudget;
 use serde::Serialize;
 
@@ -46,6 +46,7 @@ struct ClosureView {
     over_ceiling_by: usize,
     files: Vec<FileView>,
     outside_boundary: Vec<PathBuf>,
+    unread: Vec<UnreadLink>,
 }
 
 #[derive(Debug, Serialize)]
@@ -75,6 +76,7 @@ impl ClosureView {
                 })
                 .collect(),
             outside_boundary: closure.outside_boundary,
+            unread: closure.unread,
         }
     }
 }
@@ -142,7 +144,7 @@ pub fn run(args: &LintArgs) -> Result<i32> {
     if args.json {
         print_json(&view)?;
     } else {
-        print_human(&render_human(&view));
+        print_human(&render_human(&view))?;
     }
     Ok(0)
 }
@@ -224,6 +226,14 @@ fn render_human(view: &LintView) -> String {
                 out,
                 "      {}: not counted, it resolves outside the linted directory",
                 link.display(),
+            );
+        }
+        for link in &closure.unread {
+            let _ = writeln!(
+                out,
+                "      {}: not counted, it is {}",
+                link.path.display(),
+                link.reason.label(),
             );
         }
     }

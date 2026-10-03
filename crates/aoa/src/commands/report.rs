@@ -126,7 +126,7 @@ pub fn run(args: &ReportArgs) -> Result<i32> {
     if args.json {
         print_json(&view)?;
     } else {
-        print_human(&render_human(&view, &args.repo));
+        print_human(&render_human(&view, &args.repo))?;
     }
     Ok(0)
 }

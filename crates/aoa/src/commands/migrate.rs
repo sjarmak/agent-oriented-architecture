@@ -70,7 +70,7 @@ fn run_preview(args: &MigrateArgs, plan: MigrationPlan) -> Result<i32> {
         out.push_str(&render_fix_reports(&plan.reports));
         out.push_str(&render_eligibility(&plan.eligibility_notes));
         out.push_str(&render_provenance(&plan.provenance));
-        print_human(&out);
+        print_human(&out)?;
     }
     Ok(0)
 }
@@ -99,7 +99,7 @@ fn run_apply(args: &MigrateArgs, plan: MigrationPlan) -> Result<i32> {
             print_human(&format!(
                 "AOA migrate: no fix planned a change; nothing to apply.\n{}",
                 render_fix_reports(&plan.reports)
-            ));
+            ))?;
         }
         return Ok(0);
     }
@@ -138,7 +138,7 @@ fn run_apply(args: &MigrateArgs, plan: MigrationPlan) -> Result<i32> {
         out.push_str(&render_fix_reports(&plan.reports));
         out.push_str(&render_eligibility(&manifest.eligibility_notes));
         out.push_str(&render_provenance(&manifest.provenance));
-        print_human(&out);
+        print_human(&out)?;
     }
     Ok(0)
 }
@@ -197,7 +197,7 @@ fn run_rollback(args: &MigrateArgs) -> Result<i32> {
     } else {
         print_human(&format!(
             "AOA migrate (rolled back): reverted {reverted} file(s) to baseline.\n"
-        ));
+        ))?;
     }
     Ok(0)
 }

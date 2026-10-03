@@ -2,7 +2,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use aoa_budget::{
-    count_budget, normalize_path, resolve_closure_within, BudgetReport, Closure, Config, FileBudget,
+    count_budget, normalize_path, resolve_closure_within, BudgetReport, Closure, Config,
+    FileBudget, UnreadLink,
 };
 
 use crate::detectors::{self, LintedFile};
@@ -44,10 +45,13 @@ pub fn lint_context_roots(
         .files
         .iter()
         .flat_map(|file| {
-            detectors::run_all(&LintedFile {
-                path: file.path.clone(),
-                text: file.text.clone(),
-            })
+            detectors::run_all(
+                &LintedFile {
+                    path: file.path.clone(),
+                    text: file.text.clone(),
+                },
+                boundary,
+            )
         })
         .collect();
 
@@ -67,6 +71,7 @@ struct Member {
     root: PathBuf,
     paths: Vec<PathBuf>,
     outside_boundary: Vec<PathBuf>,
+    unread: Vec<UnreadLink>,
 }
 
 fn resolve_members(
@@ -83,6 +88,7 @@ fn resolve_members(
             root: closure.root,
             paths: closure.files.iter().map(|file| file.path.clone()).collect(),
             outside_boundary: closure.outside_boundary,
+            unread: closure.unread,
         });
         for file in closure.files {
             if seen.insert(file.path.clone()) {
@@ -94,6 +100,7 @@ fn resolve_members(
         root: normalize_path(first),
         files,
         outside_boundary: Vec::new(),
+        unread: Vec::new(),
     };
     Ok((merged, members))
 }
@@ -113,5 +120,6 @@ fn closure_budget(member: Member, budget: &BudgetReport) -> ClosureBudget {
         gating_target_tokens: sum(|file| if file.gating { file.target_tokens } else { 0 }),
         files,
         outside_boundary: member.outside_boundary,
+        unread: member.unread,
     }
 }

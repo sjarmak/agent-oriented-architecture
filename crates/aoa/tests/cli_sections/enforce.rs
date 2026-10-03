@@ -39,7 +39,7 @@ pub(super) fn hook_payload(tool: &str, command: Option<&str>, cwd: &Path) -> Str
 
 fn mark_git_repo(path: &Path) {
     let status = Command::new("git")
-        .args(["init", "--quiet"])
+        .args(["init", "--quiet", "--template="])
         .arg(path)
         .status()
         .expect("git is available for repository-boundary tests");

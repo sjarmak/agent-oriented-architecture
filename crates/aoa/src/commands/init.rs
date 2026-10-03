@@ -114,7 +114,7 @@ pub fn run(args: &InitArgs) -> Result<i32> {
     if args.json {
         print_json(&view)?;
     } else {
-        print_human(&render_human(&view));
+        print_human(&render_human(&view))?;
     }
     Ok(0)
 }

@@ -45,7 +45,7 @@ pub fn run(args: &AuditArgs) -> Result<i32> {
         if let Some(warning) = &hook_warning {
             rendered.push_str(&format!("warning: {warning}\n"));
         }
-        print_human(&rendered);
+        print_human(&rendered)?;
     }
 
     let fail_on_tier1 = args.fail_on.as_deref() == Some("tier1");

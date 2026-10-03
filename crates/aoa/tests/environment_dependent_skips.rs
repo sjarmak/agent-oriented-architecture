@@ -89,6 +89,11 @@ const CLASSIFIED: &[Classified] = &[
         ignored: 1,
     },
     Classified {
+        path: "crates/aoa-budget/tests/closure_bounds.rs",
+        notices: 1,
+        ignored: 0,
+    },
+    Classified {
         path: "crates/aoa-migrate/tests/imports_python.rs",
         notices: 1,
         ignored: 0,
@@ -96,6 +101,11 @@ const CLASSIFIED: &[Classified] = &[
     Classified {
         path: "crates/aoa-migrate/tests/imports_typescript.rs",
         notices: 2,
+        ignored: 0,
+    },
+    Classified {
+        path: "crates/aoa-scip-graph/tests/walk_scope.rs",
+        notices: 1,
         ignored: 0,
     },
 ];

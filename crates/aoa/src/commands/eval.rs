@@ -72,7 +72,7 @@ fn validate_trace(path: &Path, json: bool) -> Result<i32> {
             let _ = writeln!(out, "  {:<16} {}", entry.span_type, entry.count);
         }
         let _ = writeln!(out, "  has_reconstructed: {}", view.has_reconstructed);
-        print_human(&out);
+        print_human(&out)?;
     }
     Ok(0)
 }
@@ -96,7 +96,7 @@ fn compare(baseline_path: &Path, migrated_path: &Path, json: bool) -> Result<i32
         print_human(&format!(
             "reward-hacking gap delta: {:+.4}\nheld-out delta: {:+.4}\nlabel: {:?}\n",
             outcome.gap_delta, outcome.held_out_delta, outcome.label,
-        ));
+        ))?;
     }
     Ok(0)
 }

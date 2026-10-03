@@ -91,7 +91,7 @@ fn policy_compile_without_policy_file_fails_loud() {
 }
 
 pub(super) fn init_git_repo(path: &Path) {
-    run_git(path, &["init", "-q"]);
+    run_git(path, &["init", "-q", "--template="]);
     run_git(path, &["config", "user.email", "test@example.com"]);
     run_git(path, &["config", "user.name", "test"]);
 }

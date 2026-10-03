@@ -84,8 +84,8 @@ fn applied_anchor_is_idempotent_and_reproducible() {
     .unwrap();
     fs::write(b.path().join("src/lib.rs"), "// nothing here\n").unwrap();
 
-    let plan_a = NavigabilityAnchorFix.plan(a.path()).unwrap().changes;
-    let plan_b = NavigabilityAnchorFix.plan(b.path()).unwrap().changes;
+    let plan_a = NavigabilityAnchorFix.plan(a.path()).unwrap().into_changes();
+    let plan_b = NavigabilityAnchorFix.plan(b.path()).unwrap().into_changes();
     assert_eq!(plan_a.len(), plan_b.len());
     // Compare the generated bodies (skip the title line, which is the temp dir
     // name and legitimately differs between the two fixtures).

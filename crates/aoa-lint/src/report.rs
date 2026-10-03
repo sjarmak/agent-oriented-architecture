@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use aoa_budget::{BudgetReport, FileBudget};
+use aoa_budget::{BudgetReport, FileBudget, UnreadLink};
 use serde::{Deserialize, Serialize};
 
 use crate::finding::Finding;
@@ -27,4 +27,5 @@ pub struct ClosureBudget {
     pub gating_target_tokens: usize,
     pub files: Vec<FileBudget>,
     pub outside_boundary: Vec<PathBuf>,
+    pub unread: Vec<UnreadLink>,
 }

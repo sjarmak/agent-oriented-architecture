@@ -213,3 +213,18 @@ fn a_malformed_manifest_keeps_the_members_other_ecosystems_declare() {
         .expect("the member discovery failure must be surfaced");
     assert!(warning.contains("package.json"), "{warning}");
 }
+
+#[test]
+fn both_discovery_failures_are_surfaced_together() {
+    let repo = repo_with_readme();
+    write(repo.path(), "Cargo.toml", "[workspace\n");
+    write(repo.path(), "settings.gradle", "include '../outside'\n");
+
+    let report = audit(repo.path(), &AuditConfig::default()).unwrap();
+    let warning = report
+        .subtree_discovery_warning
+        .as_deref()
+        .expect("both discovery failures must be surfaced");
+    assert!(warning.contains("subtree discovery failed"), "{warning}");
+    assert!(warning.contains("settings.gradle"), "{warning}");
+}

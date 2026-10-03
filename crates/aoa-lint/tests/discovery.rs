@@ -136,6 +136,7 @@ fn each_root_reports_its_own_closure_tokens_and_a_shared_file_counts_in_both() {
                 gating_target_tokens: tokens(&root) + tokens(&shared),
                 files: vec![counted(&root), counted(&shared)],
                 outside_boundary: Vec::new(),
+                unread: Vec::new(),
             },
             ClosureBudget {
                 root: nested.clone(),
@@ -144,6 +145,7 @@ fn each_root_reports_its_own_closure_tokens_and_a_shared_file_counts_in_both() {
                 gating_target_tokens: tokens(&nested) + tokens(&shared),
                 files: vec![counted(&nested), counted(&shared)],
                 outside_boundary: Vec::new(),
+                unread: Vec::new(),
             },
         ]
     );

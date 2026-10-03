@@ -55,22 +55,38 @@ fn installed_pre_commit_hook(repo: &Path) -> bool {
     }
     let location = git_hook_location(&repo).unwrap_or_else(|| HookLocation {
         hook: git_dir.join(DEFAULT_PRE_COMMIT_HOOK),
-        common_dir: git_dir,
+        common_dir: git_dir.clone(),
+        git_dir: git_dir.clone(),
     });
     let Ok(hook) = location.hook.canonicalize() else {
         return false;
     };
     let contained = hook.starts_with(&repo)
-        || location
+        || (location
             .common_dir
             .canonicalize()
-            .is_ok_and(|common_dir| hook.starts_with(common_dir));
+            .is_ok_and(|common_dir| hook.starts_with(common_dir))
+            && registers_worktree(&location.git_dir, &git_dir));
     contained && std::fs::metadata(&hook).is_ok_and(|meta| meta.is_file() && is_executable(&meta))
+}
+
+fn registers_worktree(git_dir: &Path, worktree_git_file: &Path) -> bool {
+    let Ok(registered) = std::fs::read_to_string(git_dir.join("gitdir")) else {
+        return false;
+    };
+    match (
+        Path::new(registered.trim_end()).canonicalize(),
+        worktree_git_file.canonicalize(),
+    ) {
+        (Ok(registered), Ok(expected)) => registered == expected,
+        _ => false,
+    }
 }
 
 struct HookLocation {
     hook: PathBuf,
     common_dir: PathBuf,
+    git_dir: PathBuf,
 }
 
 fn git_hook_location(repo: &Path) -> Option<HookLocation> {
@@ -91,6 +107,7 @@ fn git_hook_location(repo: &Path) -> Option<HookLocation> {
         .args([
             "rev-parse",
             "--git-common-dir",
+            "--git-dir",
             "--git-path",
             DEFAULT_PRE_COMMIT_HOOK,
         ])
@@ -101,13 +118,14 @@ fn git_hook_location(repo: &Path) -> Option<HookLocation> {
     }
     let reported = std::str::from_utf8(&output.stdout).ok()?;
     let mut lines = reported.lines();
-    let (common_dir, hook) = (lines.next()?, lines.next()?);
-    if common_dir.is_empty() || hook.is_empty() || lines.next().is_some() {
+    let (common_dir, git_dir, hook) = (lines.next()?, lines.next()?, lines.next()?);
+    if common_dir.is_empty() || git_dir.is_empty() || hook.is_empty() || lines.next().is_some() {
         return None;
     }
     Some(HookLocation {
         hook: repo.join(hook),
         common_dir: repo.join(common_dir),
+        git_dir: repo.join(git_dir),
     })
 }
 

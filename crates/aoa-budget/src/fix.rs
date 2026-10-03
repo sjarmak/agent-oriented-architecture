@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::budget::{count_budget, Config, Verdict};
-use crate::closure::resolve_closure;
+use crate::closure::resolve_closure_within;
 use crate::error::BudgetError;
 use crate::tokenizer::{count_tokens, target_encoder};
 
@@ -29,7 +29,12 @@ pub struct FixOutcome {
 /// After writing, the closure rooted at `path` is re-resolved and re-counted;
 /// if it is still at or over the ceiling, [`BudgetError::FixFailed`] is
 /// returned rather than reporting a false green.
-pub fn fix_oversized(path: &Path, ceiling: usize, target: &str) -> Result<FixOutcome, BudgetError> {
+pub fn fix_oversized(
+    path: &Path,
+    boundary: &Path,
+    ceiling: usize,
+    target: &str,
+) -> Result<FixOutcome, BudgetError> {
     let original = std::fs::read_to_string(path).map_err(|source| BudgetError::Io {
         path: path.to_path_buf(),
         source,
@@ -57,7 +62,7 @@ pub fn fix_oversized(path: &Path, ceiling: usize, target: &str) -> Result<FixOut
         source,
     })?;
 
-    let closure = resolve_closure(path)?;
+    let closure = resolve_closure_within(path, boundary)?;
     let report = count_budget(&closure, target, &Config::blocking(ceiling))?;
     if report.verdict != Verdict::Pass {
         return Err(BudgetError::FixFailed {

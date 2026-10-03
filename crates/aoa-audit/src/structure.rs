@@ -134,103 +134,103 @@ struct Probe {
     item: ItemFn,
 }
 
-/// A probe's corpus register: the repo and the module-size multiplier in, one
-/// [`StructureMeasure`] out.
-type MeasureFn = fn(&Path, f64, &[PathBuf]) -> Result<StructureMeasure, AuditError>;
+struct ProbeInput<'a> {
+    repo: &'a Path,
+    size_outlier_k: f64,
+    package_roots: &'a [PathBuf],
+}
 
-/// A probe's punch-list register: the same inputs plus the subtree partition that
-/// scopes path-carrying findings.
-type ItemFn =
-    fn(&Path, f64, &SubtreePartition, &[PathBuf]) -> Result<Option<PunchItem>, AuditError>;
+type MeasureFn = fn(&ProbeInput<'_>) -> Result<StructureMeasure, AuditError>;
+
+type ItemFn = fn(&ProbeInput<'_>, &SubtreePartition) -> Result<Option<PunchItem>, AuditError>;
 
 /// Every code-structure probe, in punch-list order. The single list both public
 /// entry points read; see [`Probe`].
 const PROBES: &[Probe] = &[
     Probe {
         kind: FindingKind::NavigabilityAnchor,
-        measure: Some(|_repo, _k, roots| {
+        measure: Some(|input| {
             Ok(StructureMeasure::Measured(
-                roots_without_readme(roots).len() as u64,
+                roots_without_readme(input.package_roots).len() as u64,
             ))
         }),
-        item: |_repo, _k, partition, roots| Ok(navigability_anchor_item(roots, partition)),
+        item: |input, partition| Ok(navigability_anchor_item(input.package_roots, partition)),
     },
     Probe {
         kind: FindingKind::ModuleSizeOutlier,
-        measure: Some(|repo, k, _roots| {
-            Ok(
-                module_size_outliers(repo, k)?.map_or(StructureMeasure::Unmeasurable, |outliers| {
+        measure: Some(|input| {
+            Ok(module_size_outliers(input.repo, input.size_outlier_k)?
+                .map_or(StructureMeasure::Unmeasurable, |outliers| {
                     StructureMeasure::Measured(outliers.count())
-                }),
-            )
+                }))
         }),
-        item: |repo, k, partition, _roots| module_size_outlier_item(repo, k, partition),
+        item: |input, partition| {
+            module_size_outlier_item(input.repo, input.size_outlier_k, partition)
+        },
     },
     Probe {
         kind: FindingKind::UnusedImportProxy,
-        measure: Some(|repo, _k, _roots| unused_imports::unused_import_measure(repo)),
-        item: |repo, _k, partition, _roots| {
-            unused_imports::unused_import_proxy_item(repo, partition)
-        },
+        measure: Some(|input| unused_imports::unused_import_measure(input.repo)),
+        item: |input, partition| unused_imports::unused_import_proxy_item(input.repo, partition),
     },
     Probe {
         kind: FindingKind::VerificationReachability,
         measure: None,
-        item: |repo, _k, partition, roots| {
-            verification::verification_reachability_item(repo, partition, roots)
+        item: |input, partition| {
+            verification::verification_reachability_item(input.repo, partition, input.package_roots)
         },
     },
     Probe {
         kind: FindingKind::InvariantDiscoverability,
         measure: None,
-        item: |repo, _k, partition, roots| {
-            invariants::invariant_discoverability_item(repo, partition, roots)
+        item: |input, partition| {
+            invariants::invariant_discoverability_item(input.repo, partition, input.package_roots)
         },
     },
     Probe {
         kind: FindingKind::BuildDeterminism,
-        measure: Some(|repo, _k, _roots| {
+        measure: Some(|input| {
             Ok(StructureMeasure::Measured(
-                declarations::build_determinism_absent_count(repo),
+                declarations::build_determinism_absent_count(input.repo),
             ))
         }),
-        item: |repo, _k, _partition, _roots| Ok(declarations::build_determinism_item(repo)),
+        item: |input, _partition| Ok(declarations::build_determinism_item(input.repo)),
     },
     Probe {
         kind: FindingKind::DevEnvironmentDeclaration,
-        measure: Some(|repo, _k, _roots| {
+        measure: Some(|input| {
             Ok(StructureMeasure::Measured(
-                declarations::dev_environment_absent_count(repo),
+                declarations::dev_environment_absent_count(input.repo),
             ))
         }),
-        item: |repo, _k, _partition, _roots| Ok(declarations::dev_environment_item(repo)),
+        item: |input, _partition| Ok(declarations::dev_environment_item(input.repo)),
     },
     Probe {
         kind: FindingKind::TaskDiscoverySurface,
-        measure: Some(|repo, _k, _roots| {
+        measure: Some(|input| {
             Ok(StructureMeasure::Measured(
-                declarations::task_discovery_absent_count(repo),
+                declarations::task_discovery_absent_count(input.repo),
             ))
         }),
-        item: |repo, _k, _partition, _roots| Ok(declarations::task_discovery_item(repo)),
+        item: |input, _partition| Ok(declarations::task_discovery_item(input.repo)),
     },
     Probe {
         kind: FindingKind::GeneratedArtifactProtection,
-        measure: Some(|repo, _k, _roots| {
+        measure: Some(|input| {
             Ok(StructureMeasure::Measured(
-                declarations::generated_artifact_protection_absent_count(repo)?,
+                declarations::generated_artifact_protection_absent_count(input.repo)?,
             ))
         }),
-        item: |repo, _k, _partition, _roots| declarations::generated_artifact_protection_item(repo),
+        item: |input, _partition| declarations::generated_artifact_protection_item(input.repo),
     },
     Probe {
         kind: FindingKind::WriteSafetyZone,
-        measure: Some(|repo, _k, _roots| {
+        measure: Some(|input| {
             Ok(StructureMeasure::Measured(
-                declarations::write_boundary_absent_count(repo),
+                declarations::write_boundary_absent_count(input.repo),
             ))
         }),
-        item: |repo, _k, _partition, _roots| Ok(declarations::write_safety_zone_item(repo)),
+        item: |input, _partition| Ok(declarations::write_safety_zone_item(input.repo)),
     },
 ];
 
@@ -244,9 +244,14 @@ pub(crate) fn structure_items(
     partition: &SubtreePartition,
     package_roots: &[PathBuf],
 ) -> Result<Vec<PunchItem>, AuditError> {
+    let input = ProbeInput {
+        repo,
+        size_outlier_k,
+        package_roots,
+    };
     let mut items = Vec::new();
     for probe in PROBES {
-        if let Some(item) = (probe.item)(repo, size_outlier_k, partition, package_roots)? {
+        if let Some(item) = (probe.item)(&input, partition)? {
             items.push(item);
         }
     }
@@ -280,11 +285,16 @@ pub fn structure_measurements(
     repo: &Path,
     size_outlier_k: f64,
 ) -> Result<BTreeMap<FindingKind, StructureMeasure>, AuditError> {
-    let package_roots = PackageRoots::discover(repo)?.roots;
+    let package_roots = PackageRoots::discover(repo)?;
+    let input = ProbeInput {
+        repo,
+        size_outlier_k,
+        package_roots: package_roots.roots(),
+    };
     let mut m = BTreeMap::new();
     for probe in PROBES {
         if let Some(measure) = probe.measure {
-            m.insert(probe.kind, measure(repo, size_outlier_k, &package_roots)?);
+            m.insert(probe.kind, measure(&input)?);
         }
     }
     Ok(m)
@@ -330,10 +340,10 @@ fn roots_without_readme(roots: &[PathBuf]) -> Vec<PathBuf> {
         .collect()
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct PackageRoots {
-    pub roots: Vec<PathBuf>,
-    pub member_discovery_failures: Vec<String>,
+    roots: Vec<PathBuf>,
+    member_discovery_failures: Vec<String>,
 }
 
 impl PackageRoots {
@@ -343,6 +353,10 @@ impl PackageRoots {
             roots: collect_package_roots(repo, &declared.dirs)?,
             member_discovery_failures: declared.failures.iter().map(ToString::to_string).collect(),
         })
+    }
+
+    pub fn roots(&self) -> &[PathBuf] {
+        &self.roots
     }
 
     pub fn navigability_sites(&self) -> Vec<PathBuf> {
@@ -663,10 +677,14 @@ mod tests {
         let dir = tmp("item-register");
         fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
         let partition = implicit(&dir);
+        let package_roots = package_roots(&dir).unwrap();
+        let input = ProbeInput {
+            repo: &dir,
+            size_outlier_k: 4.0,
+            package_roots: &package_roots,
+        };
         for probe in PROBES {
-            if let Some(item) =
-                (probe.item)(&dir, 4.0, &partition, &package_roots(&dir).unwrap()).unwrap()
-            {
+            if let Some(item) = (probe.item)(&input, &partition).unwrap() {
                 assert_eq!(item.kind, probe.kind);
             }
         }

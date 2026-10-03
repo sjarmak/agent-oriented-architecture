@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use aoa_budget::{count_budget, resolve_contained_closure, Config, DEFAULT_CONTEXT_CEILING};
+use aoa_budget::{
+    count_budget, resolve_contained_closure, Config, UnreadLink, DEFAULT_CONTEXT_CEILING,
+};
 use aoa_construct::BehavioralSignal;
 use aoa_metrics::{
     compute_metrics, discover_partition, IndexQuality, MetricInput, MetricRecord, SubtreePartition,
@@ -164,11 +166,11 @@ pub fn audit(repo: &Path, cfg: &AuditConfig) -> Result<AuditReport, AuditError> 
         ),
     };
     let package_roots = PackageRoots::discover(repo)?;
-    let subtree_discovery_warning = subtree_discovery_warning.or_else(|| package_roots.warning());
+    let subtree_discovery_warning =
+        join_warnings([subtree_discovery_warning, package_roots.warning()]);
 
-    if let Some(item) = context_budget_item(repo, cfg)? {
-        items.push(item);
-    }
+    let context = context_closure_probe(repo, cfg)?;
+    items.extend(context.item);
     if signal.is_sufficient() {
         items.extend(mutation_surface_item(&measured));
     }
@@ -178,12 +180,14 @@ pub fn audit(repo: &Path, cfg: &AuditConfig) -> Result<AuditReport, AuditError> 
         repo,
         cfg.size_outlier_k,
         &partition,
-        &package_roots.roots,
+        package_roots.roots(),
     )?);
 
     rank(&mut items);
     Ok(AuditReport {
         subtree_discovery_warning,
+        context_outside_boundary: context.outside_boundary,
+        context_unread: context.unread,
         live_observations,
         enforcement_liveness: liveness,
         ..AuditReport::with_signal(items, signal)
@@ -273,25 +277,42 @@ fn trace_before_first_write(trace: &Trace) -> Trace {
     }
 }
 
-/// Measure the context-file token closure and, when over the ceiling, emit an
-/// oversized-context punch item whose cost is the token overflow.
-fn context_budget_item(repo: &Path, cfg: &AuditConfig) -> Result<Option<PunchItem>, AuditError> {
+fn join_warnings(warnings: [Option<String>; 2]) -> Option<String> {
+    let present: Vec<String> = warnings.into_iter().flatten().collect();
+    (!present.is_empty()).then(|| present.join("; "))
+}
+
+#[derive(Default)]
+struct ContextClosureProbe {
+    item: Option<PunchItem>,
+    outside_boundary: Vec<PathBuf>,
+    unread: Vec<UnreadLink>,
+}
+
+fn context_closure_probe(
+    repo: &Path,
+    cfg: &AuditConfig,
+) -> Result<ContextClosureProbe, AuditError> {
     let Some(root_rel) = &cfg.context_root else {
-        return Ok(None);
+        return Ok(ContextClosureProbe::default());
     };
     let root = repo.join(root_rel);
     if !root.exists() {
-        return Ok(None);
+        return Ok(ContextClosureProbe::default());
     }
 
     let closure = resolve_contained_closure(&root, repo)?;
     let report = count_budget(&closure, &cfg.target, &Config::warn_first(cfg.ceiling))?;
     let overflow = report.gating_target_tokens.saturating_sub(cfg.ceiling);
-    if overflow == 0 {
-        return Ok(None);
-    }
+    Ok(ContextClosureProbe {
+        item: (overflow > 0).then(|| oversized_context_item(root_rel, overflow)),
+        outside_boundary: closure.outside_boundary,
+        unread: closure.unread,
+    })
+}
 
-    Ok(Some(PunchItem {
+fn oversized_context_item(root_rel: &Path, overflow: usize) -> PunchItem {
+    PunchItem {
         title: format!(
             "context closure from {} exceeds the token ceiling",
             root_rel.display()
@@ -302,7 +323,7 @@ fn context_budget_item(repo: &Path, cfg: &AuditConfig) -> Result<Option<PunchIte
         plane: None,
         subtree: None,
         size_outliers: None,
-    }))
+    }
 }
 
 /// Emit the conservative maximum mutation surface across fully measured live

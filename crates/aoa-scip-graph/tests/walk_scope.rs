@@ -292,15 +292,19 @@ fn directory_that_cannot_be_listed_fails_the_index_and_names_the_directory() {
     let sealed = repo.path().join("svc/private");
     std::fs::create_dir(&sealed).unwrap();
     std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o100)).unwrap();
-    let seal_took = std::fs::read_dir(&sealed).is_err();
+    if std::fs::read_dir(&sealed).is_ok() {
+        eprintln!(
+            "SKIP (docs/adr/0004-environment-dependent-test-skips.md): this process lists a \
+             directory it has no read permission on"
+        );
+        return;
+    }
 
     let result = index_best_effort(repo.path());
 
     std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).unwrap();
-    if seal_took {
-        match result.expect_err("unlistable directory") {
-            ScipGraphError::Io { path, .. } => assert_eq!(path, sealed),
-            other => panic!("expected an io error naming the directory, got {other}"),
-        }
+    match result.expect_err("unlistable directory") {
+        ScipGraphError::Io { path, .. } => assert_eq!(path, sealed),
+        other => panic!("expected an io error naming the directory, got {other}"),
     }
 }

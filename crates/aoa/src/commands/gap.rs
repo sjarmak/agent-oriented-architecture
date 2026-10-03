@@ -40,7 +40,7 @@ fn determination(json: bool) -> Result<i32> {
     if json {
         print_json(&report)?;
     } else {
-        print_human(&report.render_human());
+        print_human(&report.render_human())?;
     }
 
     Ok(0)
@@ -58,7 +58,7 @@ fn checkbox_baseline(args: &CheckboxBaselineArgs, json: bool) -> Result<i32> {
     if json {
         print_json(&baseline)?;
     } else {
-        print_human(&render_baseline(&baseline, args.show_excluded));
+        print_human(&render_baseline(&baseline, args.show_excluded))?;
     }
 
     Ok(0)

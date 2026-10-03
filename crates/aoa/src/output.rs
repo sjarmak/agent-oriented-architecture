@@ -33,18 +33,18 @@ pub fn print_json<T: Serialize>(value: &T) -> Result<()> {
 
 /// Print human-facing text to stdout (the human register). Kept distinct from
 /// [`print_json`] so every audit/eval command exposes both registers (R17).
-pub fn print_human(text: &str) {
+pub fn print_human(text: &str) -> Result<()> {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
-    tolerate_departed_reader(write_human(&mut out, text)).expect("failed to write human output");
+    tolerate_departed_reader(write_human(&mut out, text))?;
+    Ok(())
 }
 
 /// Print human-facing text to stderr through the same terminal-safe boundary.
 pub fn eprint_human(text: &str) {
     let stderr = std::io::stderr();
     let mut out = stderr.lock();
-    tolerate_departed_reader(write_terminal(&mut out, text, false).and_then(|()| writeln!(out)))
-        .expect("failed to write human error output");
+    let _ = write_terminal(&mut out, text, false).and_then(|()| writeln!(out));
 }
 
 /// Print an anyhow error chain to stderr without allowing terminal controls
