@@ -1,4 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use aoa_trace::{IndexQuality, SymbolGraph};
@@ -113,7 +115,7 @@ fn collect_source_files(
                 source: std::io::Error::other(unapplied.to_string()),
             });
         }
-        if entry.file_type().is_some_and(|kind| kind.is_dir()) {
+        if is_walked_dir(&entry) {
             require_readable_ignore_file(entry.path())?;
         }
         if !entry.file_type().is_some_and(|kind| kind.is_file()) {
@@ -129,13 +131,29 @@ fn collect_source_files(
     Ok(files)
 }
 
+fn is_walked_dir(entry: &DirEntry) -> bool {
+    entry.file_type().is_some_and(|kind| kind.is_dir())
+        || (entry.depth() == 0 && entry.path().is_dir())
+}
+
 fn require_readable_ignore_file(dir: &Path) -> Result<(), ScipGraphError> {
     let path = dir.join(".gitignore");
-    match std::fs::read_to_string(&path) {
-        Ok(_) => Ok(()),
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+    match read_through(&path) {
+        Ok(()) => Ok(()),
         Err(source) => Err(ScipGraphError::Io { path, source }),
     }
+}
+
+fn read_through(path: &Path) -> std::io::Result<()> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => return Err(source),
+    };
+    for line in BufReader::new(file).lines() {
+        line?;
+    }
+    Ok(())
 }
 
 fn is_dependency_or_build_dir(entry: &DirEntry) -> bool {

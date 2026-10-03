@@ -227,3 +227,34 @@ fn ignore_file_that_cannot_be_read_fails_discovery_and_names_the_file() {
         );
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn unreadable_ignore_file_under_a_symlinked_root_fails_discovery_and_names_the_file() {
+    let dir = TempDir::new().expect("tempdir");
+    write(dir.path(), "repo/AGENTS.md", "# Root\n");
+    fs::create_dir(dir.path().join("repo/.gitignore")).expect("ignore dir");
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(dir.path().join("repo"), &link).expect("symlink");
+
+    let err = discover_context_roots(&link).expect_err("unreadable ignore file");
+
+    assert!(
+        matches!(&err, LintError::Walk { dir, .. } if dir.ends_with(".gitignore")),
+        "{err}"
+    );
+}
+
+#[test]
+fn ignore_file_that_is_not_text_fails_discovery_and_names_the_file() {
+    let dir = TempDir::new().expect("tempdir");
+    write(dir.path(), "services/api/AGENTS.md", "# Api\n");
+    fs::write(dir.path().join("services/.gitignore"), b"api/\n\xff\xfe\n").expect("write ignore");
+
+    let err = discover_context_roots(dir.path()).expect_err("ignore file is not text");
+
+    assert!(
+        matches!(&err, LintError::Walk { dir, .. } if dir.ends_with(".gitignore")),
+        "{err}"
+    );
+}

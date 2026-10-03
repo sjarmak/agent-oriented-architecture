@@ -232,3 +232,32 @@ fn ignore_file_that_cannot_be_read_fails_the_index_and_names_the_file() {
     assert_eq!(degraded.graph.quality, IndexQuality::Degraded);
     assert!(degraded.degrade_reason.is_some());
 }
+
+#[cfg(unix)]
+#[test]
+fn unreadable_ignore_file_under_a_symlinked_root_fails_the_index_and_names_the_file() {
+    let dir = TempDir::new().unwrap();
+    write(dir.path(), "repo/a.py", "def own():\n    pass\n");
+    std::fs::create_dir(dir.path().join("repo/.gitignore")).unwrap();
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(dir.path().join("repo"), &link).unwrap();
+
+    let err = index_best_effort(&link).expect_err("unreadable ignore file");
+
+    assert!(err.to_string().contains("link/.gitignore"), "{err}");
+}
+
+#[test]
+fn ignore_file_that_is_not_text_fails_the_index_and_names_the_file() {
+    let repo = TempDir::new().unwrap();
+    write(repo.path(), "svc/a.py", "def own():\n    pass\n");
+    std::fs::write(
+        repo.path().join("svc/.gitignore"),
+        b"generated/\n\xff\xfe\n",
+    )
+    .unwrap();
+
+    let err = index_best_effort(repo.path()).expect_err("ignore file is not text");
+
+    assert!(err.to_string().contains("svc/.gitignore"), "{err}");
+}

@@ -1,7 +1,9 @@
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use aoa_budget::normalize_path;
-use ignore::WalkBuilder;
+use ignore::{DirEntry, WalkBuilder};
 
 use crate::error::LintError;
 
@@ -31,7 +33,7 @@ pub fn discover_context_roots(dir: &Path) -> Result<Vec<PathBuf>, LintError> {
                 source: std::io::Error::other(unapplied.to_string()).into(),
             });
         }
-        if entry.file_type().is_some_and(|kind| kind.is_dir()) {
+        if is_walked_dir(&entry) {
             require_readable_ignore_files(entry.path())?;
         }
         let is_file = entry.file_type().is_some_and(|kind| kind.is_file());
@@ -42,19 +44,32 @@ pub fn discover_context_roots(dir: &Path) -> Result<Vec<PathBuf>, LintError> {
     Ok(roots)
 }
 
+fn is_walked_dir(entry: &DirEntry) -> bool {
+    entry.file_type().is_some_and(|kind| kind.is_dir())
+        || (entry.depth() == 0 && entry.path().is_dir())
+}
+
 fn require_readable_ignore_files(dir: &Path) -> Result<(), LintError> {
     for name in IGNORE_FILE_NAMES {
         let path = dir.join(name);
-        match std::fs::read_to_string(&path) {
-            Ok(_) => {}
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
-            Err(source) => {
-                return Err(LintError::Walk {
-                    dir: path,
-                    source: source.into(),
-                })
-            }
+        if let Err(source) = read_through(&path) {
+            return Err(LintError::Walk {
+                dir: path,
+                source: source.into(),
+            });
         }
+    }
+    Ok(())
+}
+
+fn read_through(path: &Path) -> std::io::Result<()> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => return Err(source),
+    };
+    for line in BufReader::new(file).lines() {
+        line?;
     }
     Ok(())
 }
