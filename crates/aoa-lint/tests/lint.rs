@@ -258,3 +258,28 @@ fn nested_roots_share_the_directory_that_holds_them_all_as_their_boundary() {
         [Path::new("pkg/AGENTS.md"), Path::new("docs/shared.md")]
     );
 }
+
+#[test]
+fn no_prose_rule_runs_on_a_non_markdown_closure_member() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("AGENTS.md"),
+        "[config](build.toml) [script](sync.ts)\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("build.toml"),
+        "include = [ \"**\" ]\n# always run the formatter\n# never run the formatter\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("sync.ts"),
+        "const next = handlers[index](gone.md);\n",
+    )
+    .unwrap();
+
+    let report = lint_context(&dir.path().join("AGENTS.md"), "o200k_base").unwrap();
+
+    assert_eq!(report.budget.files.len(), 3);
+    assert!(report.findings.is_empty(), "{:?}", report.findings);
+}

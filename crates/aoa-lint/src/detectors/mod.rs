@@ -14,14 +14,12 @@ pub struct LintedFile {
     pub text: String,
 }
 
-/// Run every mechanical detector over `file`, returning all findings in a
-/// stable order (detector order, then in-file order).
 pub fn run_all(file: &LintedFile) -> Vec<Finding> {
-    let mut findings = Vec::new();
-    if is_markdown(file) {
-        findings.extend(duplication::detect(file));
-        findings.extend(verbosity::detect(file));
+    if !is_markdown(file) {
+        return Vec::new();
     }
+    let mut findings = duplication::detect(file);
+    findings.extend(verbosity::detect(file));
     findings.extend(stale_reference::detect(file));
     findings.extend(overbroad_glob::detect(file));
     findings.extend(contradiction::detect(file));
