@@ -260,6 +260,34 @@ fn a_lone_nested_root_is_bounded_by_the_linted_directory_and_names_the_link_that
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_link_through_a_directory_symlink_that_leaves_the_linted_directory_is_not_probed() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let outside = tempfile::TempDir::new().unwrap();
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("docs")).unwrap();
+    std::fs::write(
+        dir.path().join("AGENTS.md"),
+        "[through](docs/absent.md) [deeper](docs/absent/notes.md) [inside](absent.md)\n",
+    )
+    .unwrap();
+
+    let report =
+        aoa_lint::lint_context_roots(&[dir.path().join("AGENTS.md")], dir.path(), "o200k_base")
+            .unwrap();
+
+    let stale: Vec<&str> = report
+        .findings
+        .iter()
+        .filter(|finding| finding.category == SmellCategory::StaleReference)
+        .map(|finding| finding.message.as_str())
+        .collect();
+    assert_eq!(
+        stale,
+        ["stale reference: linked file 'absent.md' does not exist"]
+    );
+}
+
 #[test]
 fn no_prose_rule_runs_on_a_non_markdown_closure_member() {
     let dir = tempfile::TempDir::new().unwrap();

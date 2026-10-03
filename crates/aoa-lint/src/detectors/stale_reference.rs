@@ -29,10 +29,11 @@ pub fn detect(file: &LintedFile, boundary: &Path) -> Vec<Finding> {
 }
 
 fn leaves(target: &Path, boundary: &Path) -> bool {
-    match (std::path::absolute(target), std::path::absolute(boundary)) {
-        (Ok(target), Ok(boundary)) => {
-            !normalize_path(&target).starts_with(normalize_path(&boundary))
-        }
-        _ => true,
-    }
+    let (Ok(target), Ok(boundary)) = (std::path::absolute(target), boundary.canonicalize()) else {
+        return true;
+    };
+    !normalize_path(&target)
+        .ancestors()
+        .find_map(|ancestor| ancestor.canonicalize().ok())
+        .is_some_and(|resolved| resolved.starts_with(&boundary))
 }
