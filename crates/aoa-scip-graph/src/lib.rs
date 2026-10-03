@@ -21,10 +21,12 @@
 
 mod best_effort;
 mod bounded;
+mod coverage;
 mod error;
 mod index;
 mod scip;
 
+pub use coverage::GraphCoverage;
 pub use error::ScipGraphError;
 pub use index::{build_symbol_graph, degraded, IndexSource, IndexedRepo};
 

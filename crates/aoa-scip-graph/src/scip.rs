@@ -135,6 +135,7 @@ pub fn index_with_scip(index_path: &Path) -> Result<IndexedRepo, ScipGraphError>
         gold_set: index.aoa.gold.into_iter().collect(),
         invariant_set: index.aoa.invariants.into_iter().collect(),
         degrade_reason: None,
+        coverage: None,
     })
 }
 

@@ -58,7 +58,7 @@ use aoa_metrics::{
     MutationSurface, RetrievalLocality, SubtreeMetrics, SubtreePartition, TransformMap,
     WorkspaceSource,
 };
-use aoa_scip_graph::{build_symbol_graph, degraded, IndexSource, IndexedRepo};
+use aoa_scip_graph::{build_symbol_graph, degraded, GraphCoverage, IndexSource, IndexedRepo};
 use aoa_trace::Trace;
 
 use crate::cli::EvalRunArgs;
@@ -87,6 +87,8 @@ struct EvalRunReport {
     /// aoa-d6t.32). Additive: absent, the schema is unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
     subtree_partition: Option<SubtreePartitionInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    graph_coverage: Option<GraphCoverage>,
     records: Vec<TaskRecord>,
     errors: Vec<TaskError>,
 }
@@ -194,6 +196,7 @@ pub fn run(args: &EvalRunArgs) -> Result<i32> {
                 members,
             }
         }),
+        graph_coverage: indexed.coverage.clone(),
         records,
         errors,
     };
@@ -436,6 +439,9 @@ fn render_human(report: &EvalRunReport) -> String {
         "aoa eval run: {} record(s), {} error(s) from {}",
         report.record_count, report.error_count, report.run_dir
     );
+    if let Some(coverage) = &report.graph_coverage {
+        let _ = writeln!(out, "graph coverage: {}", coverage.summary());
+    }
     for r in &report.records {
         let gap = match r.gap.gap() {
             Some(g) => format!("{g:+.4}"),

@@ -34,6 +34,8 @@ mod enforce;
 mod enforce_liveness;
 #[path = "cli_sections/eval_run.rs"]
 mod eval_run;
+#[path = "cli_sections/eval_run_graph_coverage.rs"]
+mod eval_run_graph_coverage;
 #[path = "cli_sections/experiment.rs"]
 mod experiment;
 #[path = "cli_sections/exposure.rs"]

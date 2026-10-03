@@ -1,7 +1,8 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use aoa_scip_graph::index_best_effort;
+use aoa_scip_graph::{build_symbol_graph, index_best_effort, IndexSource};
+use aoa_trace::IndexQuality;
 use tempfile::TempDir;
 
 fn write(root: &Path, rel: &str, contents: &str) {
@@ -113,4 +114,71 @@ fn repo_root_named_like_a_skipped_directory_is_still_indexed() {
     write(&repo, "a.py", "def own():\n    pass\n");
 
     assert_eq!(indexed_nodes(&repo), vec!["a.own".to_string()]);
+}
+
+#[test]
+fn python_repo_with_a_checked_in_dependency_install_is_not_degraded() {
+    let repo = TempDir::new().unwrap();
+    write(repo.path(), "src/a.py", "def own():\n    pass\n");
+    write(repo.path(), "src/b.py", "def other():\n    pass\n");
+    for n in 0..40 {
+        write(
+            repo.path(),
+            &format!("node_modules/dep/lib/m{n}.js"),
+            "module.exports = 1;\n",
+        );
+    }
+    write(repo.path(), "node_modules/dep/gyp/tool.py", &functions(3));
+
+    let indexed = build_symbol_graph(IndexSource::BestEffort {
+        repo_dir: repo.path(),
+    });
+
+    assert_eq!(indexed.graph.quality, IndexQuality::BestEffort);
+    assert_eq!(indexed.degrade_reason, None);
+    assert_eq!(
+        indexed.graph.nodes,
+        vec!["src.a.own".to_string(), "src.b.other".to_string()]
+    );
+    let coverage = indexed.coverage.expect("coverage");
+    assert_eq!(
+        coverage.indexed,
+        BTreeMap::from([("Python".to_string(), 2)])
+    );
+    assert_eq!(coverage.unindexed, BTreeMap::new());
+}
+
+#[test]
+fn ignored_and_dependency_sources_are_not_counted_as_unindexed() {
+    let repo = TempDir::new().unwrap();
+    write(repo.path(), ".gitignore", "generated/\n");
+    write(repo.path(), "src/a.py", "def own():\n    pass\n");
+    write(repo.path(), "web/app.ts", "export const app = 1;\n");
+    for n in 0..30 {
+        write(
+            repo.path(),
+            &format!("generated/client{n}.ts"),
+            "export const c = 1;\n",
+        );
+    }
+    for dir in ["venv", "site-packages", "vendor", "target", "build"] {
+        for n in 0..10 {
+            write(repo.path(), &format!("{dir}/pkg/f{n}.go"), "package pkg\n");
+        }
+    }
+
+    let indexed = build_symbol_graph(IndexSource::BestEffort {
+        repo_dir: repo.path(),
+    });
+
+    assert_eq!(indexed.graph.quality, IndexQuality::BestEffort);
+    let coverage = indexed.coverage.expect("coverage");
+    assert_eq!(
+        coverage.indexed,
+        BTreeMap::from([("Python".to_string(), 1)])
+    );
+    assert_eq!(
+        coverage.unindexed,
+        BTreeMap::from([("TypeScript".to_string(), 1)])
+    );
 }

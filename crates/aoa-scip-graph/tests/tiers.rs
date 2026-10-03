@@ -181,6 +181,29 @@ fn build_symbol_graph_degrades_on_an_empty_repo() {
 }
 
 #[test]
+fn build_symbol_graph_degrades_when_the_main_language_was_not_indexed() {
+    let repo = std::env::temp_dir().join(format!("aoa-scip-coverage-{}", std::process::id()));
+    std::fs::create_dir_all(repo.join("src")).expect("create temp repo");
+    std::fs::write(repo.join("x.py"), "def helper():\n    return 1\n").expect("write py");
+    for i in 0..20 {
+        std::fs::write(repo.join(format!("src/m{i}.ts")), "export const a = 1;\n")
+            .expect("write ts");
+    }
+
+    let indexed = build_symbol_graph(IndexSource::BestEffort { repo_dir: &repo });
+    std::fs::remove_dir_all(&repo).ok();
+
+    assert_eq!(indexed.graph.quality, IndexQuality::Degraded);
+    assert!(indexed.graph.nodes.is_empty());
+    let reason = indexed.degrade_reason.expect("reason");
+    assert!(reason.contains("TypeScript (20 files)"), "got: {reason}");
+    assert!(reason.contains("--scip-index"), "got: {reason}");
+    let coverage = indexed.coverage.expect("coverage");
+    assert_eq!(coverage.indexed.get("Python"), Some(&1));
+    assert_eq!(coverage.unindexed.get("TypeScript"), Some(&20));
+}
+
+#[test]
 fn build_symbol_graph_returns_real_graph_for_a_valid_source() {
     let indexed = build_symbol_graph(IndexSource::Scip {
         index_path: &scip_index_path(),

@@ -5,6 +5,7 @@ use aoa_trace::{IndexQuality, SymbolGraph};
 use ignore::{DirEntry, WalkBuilder};
 
 use crate::bounded::{read_capped, MAX_SOURCE_BYTES};
+use crate::coverage::{language_of, GraphCoverage, INDEXED_LANGUAGE};
 use crate::error::ScipGraphError;
 use crate::index::IndexedRepo;
 
@@ -25,7 +26,8 @@ pub fn index_best_effort(repo_dir: &Path) -> Result<IndexedRepo, ScipGraphError>
     let mut edges: BTreeSet<(String, String)> = BTreeSet::new();
     let mut node_paths: BTreeMap<String, String> = BTreeMap::new();
 
-    for file in &collect_py_files(repo_dir)? {
+    let mut coverage = GraphCoverage::default();
+    for file in &collect_source_files(repo_dir, &mut coverage)? {
         let rel = file.strip_prefix(repo_dir).unwrap_or(file);
         let module = module_name(rel);
         let rel_path = rel_path_string(rel);
@@ -36,14 +38,19 @@ pub fn index_best_effort(repo_dir: &Path) -> Result<IndexedRepo, ScipGraphError>
         // repository rather than only unsupported source contents.
         let source = match read_capped(file, MAX_SOURCE_BYTES) {
             Ok(source) => source,
-            Err(ScipGraphError::TooLarge { .. }) => continue,
+            Err(ScipGraphError::TooLarge { .. }) => {
+                coverage.record_unindexed(INDEXED_LANGUAGE);
+                continue;
+            }
             Err(ScipGraphError::Io { source, .. })
                 if source.kind() == std::io::ErrorKind::InvalidData =>
             {
+                coverage.record_unindexed(INDEXED_LANGUAGE);
                 continue;
             }
             Err(other) => return Err(other),
         };
+        coverage.record_indexed(INDEXED_LANGUAGE);
         scan_module(
             &module,
             &rel_path,
@@ -68,6 +75,7 @@ pub fn index_best_effort(repo_dir: &Path) -> Result<IndexedRepo, ScipGraphError>
         gold_set: BTreeSet::new(),
         invariant_set: BTreeSet::new(),
         degrade_reason: None,
+        coverage: Some(coverage),
     })
 }
 
@@ -80,7 +88,10 @@ const DEPENDENCY_AND_BUILD_DIRS: [&str; 6] = [
     "build",
 ];
 
-fn collect_py_files(dir: &Path) -> Result<Vec<PathBuf>, ScipGraphError> {
+fn collect_source_files(
+    dir: &Path,
+    coverage: &mut GraphCoverage,
+) -> Result<Vec<PathBuf>, ScipGraphError> {
     let walker = WalkBuilder::new(dir)
         .require_git(false)
         .git_global(false)
@@ -94,9 +105,13 @@ fn collect_py_files(dir: &Path) -> Result<Vec<PathBuf>, ScipGraphError> {
             path: dir.to_path_buf(),
             source: std::io::Error::other(source),
         })?;
-        let is_file = entry.file_type().is_some_and(|kind| kind.is_file());
-        if is_file && entry.path().extension().is_some_and(|ext| ext == "py") {
-            files.push(entry.into_path());
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        match entry.path().extension().and_then(language_of) {
+            Some(INDEXED_LANGUAGE) => files.push(entry.into_path()),
+            Some(language) => coverage.record_unindexed(language),
+            None => {}
         }
     }
     files.sort();
@@ -330,6 +345,9 @@ mod tests {
 
         let indexed = index_best_effort(&repo).unwrap();
         assert_eq!(indexed.graph.nodes, vec!["good.good".to_string()]);
+        let coverage = indexed.coverage.unwrap();
+        assert_eq!(coverage.indexed.get("Python"), Some(&1));
+        assert_eq!(coverage.unindexed.get("Python"), Some(&1));
         std::fs::remove_dir_all(&repo).ok();
     }
 
@@ -345,13 +363,16 @@ mod tests {
         std::fs::create_dir_all(&outside).unwrap();
         std::fs::write(repo.join("inside.py"), "def a():\n    pass\n").unwrap();
         std::fs::write(outside.join("escaped.py"), "def b():\n    pass\n").unwrap();
+        std::fs::write(outside.join("escaped.ts"), "export const c = 1;\n").unwrap();
         // A symlink inside the repo pointing at the outside tree must NOT be
         // followed — otherwise a link to `/` would recurse the filesystem.
         symlink(&outside, repo.join("link")).unwrap();
 
-        let files = collect_py_files(&repo).unwrap();
+        let mut coverage = GraphCoverage::default();
+        let files = collect_source_files(&repo, &mut coverage).unwrap();
 
         assert_eq!(files, vec![repo.join("inside.py")]);
+        assert_eq!(coverage, GraphCoverage::default());
         std::fs::remove_dir_all(&base).ok();
     }
 }

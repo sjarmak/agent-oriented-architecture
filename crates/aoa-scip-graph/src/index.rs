@@ -4,6 +4,7 @@ use std::path::Path;
 use aoa_trace::{IndexQuality, SymbolGraph};
 
 use crate::best_effort::index_best_effort;
+use crate::coverage::GraphCoverage;
 use crate::scip::index_with_scip;
 
 /// A real target repo indexed into the artifacts the metric extractors consume.
@@ -22,6 +23,7 @@ pub struct IndexedRepo {
     /// nodes. Lets a caller distinguish a misconfigured index from a legitimately
     /// empty repo without re-running the source-specific entry point.
     pub degrade_reason: Option<String>,
+    pub coverage: Option<GraphCoverage>,
 }
 
 /// Which index source to read for a repo.
@@ -51,9 +53,21 @@ pub fn build_symbol_graph(source: IndexSource<'_>) -> IndexedRepo {
     };
 
     match indexed {
+        Ok(IndexedRepo {
+            coverage: Some(coverage),
+            ..
+        }) if coverage.is_negligible() => {
+            let reason = coverage.degrade_reason();
+            IndexedRepo {
+                coverage: Some(coverage),
+                ..degraded(Some(reason))
+            }
+        }
         Ok(repo) if !repo.graph.nodes.is_empty() => repo,
-        // Empty graph from a source that read cleanly: degraded, but no error.
-        Ok(_) => degraded(None),
+        Ok(repo) => IndexedRepo {
+            coverage: repo.coverage,
+            ..degraded(None)
+        },
         // Read/parse failure: degrade, but preserve the root cause for diagnostics.
         Err(e) => degraded(Some(e.to_string())),
     }
@@ -77,5 +91,6 @@ pub fn degraded(reason: Option<String>) -> IndexedRepo {
         gold_set: BTreeSet::new(),
         invariant_set: BTreeSet::new(),
         degrade_reason: reason,
+        coverage: None,
     }
 }
