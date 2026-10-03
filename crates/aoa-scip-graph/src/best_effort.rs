@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use aoa_trace::{IndexQuality, SymbolGraph};
+use ignore::{DirEntry, WalkBuilder};
 
 use crate::bounded::{read_capped, MAX_SOURCE_BYTES};
 use crate::error::ScipGraphError;
@@ -24,11 +25,7 @@ pub fn index_best_effort(repo_dir: &Path) -> Result<IndexedRepo, ScipGraphError>
     let mut edges: BTreeSet<(String, String)> = BTreeSet::new();
     let mut node_paths: BTreeMap<String, String> = BTreeMap::new();
 
-    let mut files: Vec<std::path::PathBuf> = Vec::new();
-    collect_py_files(repo_dir, &mut files)?;
-    files.sort();
-
-    for file in &files {
+    for file in &collect_py_files(repo_dir)? {
         let rel = file.strip_prefix(repo_dir).unwrap_or(file);
         let module = module_name(rel);
         let rel_path = rel_path_string(rel);
@@ -74,40 +71,45 @@ pub fn index_best_effort(repo_dir: &Path) -> Result<IndexedRepo, ScipGraphError>
     })
 }
 
-/// Recursively collect `.py` files under `dir`, skipping hidden directories.
-///
-/// Directory entries are classified by [`std::fs::DirEntry::file_type`], which
-/// does NOT follow symlinks: a symlinked directory reports as a symlink (neither
-/// dir nor file) and is skipped, so a link pointing at `/` cannot recurse the
-/// whole filesystem. Symlinked `.py` files are likewise skipped — a best-effort
-/// scan trades that completeness for not following links out of the repo tree.
-fn collect_py_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<(), ScipGraphError> {
-    let entries = std::fs::read_dir(dir).map_err(|source| ScipGraphError::Io {
-        path: dir.to_path_buf(),
-        source,
-    })?;
-    for entry in entries {
+const DEPENDENCY_AND_BUILD_DIRS: [&str; 6] = [
+    "node_modules",
+    "venv",
+    "site-packages",
+    "vendor",
+    "target",
+    "build",
+];
+
+fn collect_py_files(dir: &Path) -> Result<Vec<PathBuf>, ScipGraphError> {
+    let walker = WalkBuilder::new(dir)
+        .require_git(false)
+        .git_global(false)
+        .ignore(false)
+        .filter_entry(|entry| !is_dependency_or_build_dir(entry))
+        .build();
+
+    let mut files = Vec::new();
+    for entry in walker {
         let entry = entry.map_err(|source| ScipGraphError::Io {
             path: dir.to_path_buf(),
-            source,
+            source: std::io::Error::other(source),
         })?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with('.') {
-            continue;
-        }
-        let file_type = entry.file_type().map_err(|source| ScipGraphError::Io {
-            path: entry.path(),
-            source,
-        })?;
-        let path = entry.path();
-        if file_type.is_dir() {
-            collect_py_files(&path, out)?;
-        } else if file_type.is_file() && path.extension().is_some_and(|e| e == "py") {
-            out.push(path);
+        let is_file = entry.file_type().is_some_and(|kind| kind.is_file());
+        if is_file && entry.path().extension().is_some_and(|ext| ext == "py") {
+            files.push(entry.into_path());
         }
     }
-    Ok(())
+    files.sort();
+    Ok(files)
+}
+
+fn is_dependency_or_build_dir(entry: &DirEntry) -> bool {
+    entry.depth() > 0
+        && entry.file_type().is_some_and(|kind| kind.is_dir())
+        && entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| DEPENDENCY_AND_BUILD_DIRS.contains(&name))
 }
 
 /// Map a relative file path `pkg/auth.py` to its module name `pkg.auth`.
@@ -347,9 +349,7 @@ mod tests {
         // followed — otherwise a link to `/` would recurse the filesystem.
         symlink(&outside, repo.join("link")).unwrap();
 
-        let mut files = Vec::new();
-        collect_py_files(&repo, &mut files).unwrap();
-        files.sort();
+        let files = collect_py_files(&repo).unwrap();
 
         assert_eq!(files, vec![repo.join("inside.py")]);
         std::fs::remove_dir_all(&base).ok();

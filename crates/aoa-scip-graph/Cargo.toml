@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 aoa-trace = { path = "../aoa-trace" }
+ignore = "0.4.23"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -17,3 +18,4 @@ thiserror = { workspace = true }
 # crate produces a SymbolGraph, it doesn't score one) depends on aoa-trace
 # alone (aoa-00f).
 aoa-metrics = { path = "../aoa-metrics" }
+tempfile = "3.10.1"

@@ -677,3 +677,35 @@ fn eval_run_subtree_root_overrides_repo_partition_source() {
     let rows = rec["subtree_metrics"].as_array().expect("subtree rows");
     assert_eq!(rows.len(), 2, "partition sourced from --subtree-root");
 }
+
+#[test]
+fn eval_run_keeps_dependency_install_code_out_of_the_mutation_surface() {
+    let repo = TempDir::new().unwrap();
+    let own = repo.path().join("src");
+    let installed = repo.path().join("node_modules/dep/gyp");
+    std::fs::create_dir_all(&own).unwrap();
+    std::fs::create_dir_all(&installed).unwrap();
+    std::fs::write(own.join("a.py"), "def own():\n    pass\n").unwrap();
+    let shipped: String = (0..10)
+        .map(|n| format!("def shipped_{n}():\n    pass\n\n"))
+        .collect();
+    std::fs::write(installed.join("b.py"), &shipped).unwrap();
+
+    let output = aoa()
+        .args(["eval", "run", "--json", "--codeprobe-run"])
+        .arg(fixture("subtree_run"))
+        .arg("--repo")
+        .arg(repo.path())
+        .output()
+        .expect("run");
+    assert!(output.status.success());
+
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    let surface = &parsed["records"].as_array().expect("records")[0]["mutation_surface"];
+    assert_eq!(surface["writable_reachable"], 1);
+    assert_eq!(surface["reachable"], serde_json::json!(["src.a.own"]));
+    assert_eq!(
+        std::fs::read_to_string(installed.join("b.py")).unwrap(),
+        shipped
+    );
+}
