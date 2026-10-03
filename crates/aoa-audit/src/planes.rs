@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use aoa_corpus::PRECOMMIT_HOOK_MARKERS;
@@ -22,6 +22,15 @@ const AMBIENT_REPOSITORY_ENV: [&str; 6] = [
     "GIT_CONFIG_COUNT",
 ];
 
+const MACHINE_CONFIG_ENV: [&str; 2] = ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"];
+
+#[cfg(unix)]
+const NULL_DEVICE: &str = "/dev/null";
+#[cfg(not(unix))]
+const NULL_DEVICE: &str = "NUL";
+
+const DEFAULT_PRE_COMMIT_HOOK: &str = "hooks/pre-commit";
+
 fn present(repo: &Path, plane: EnforcementPlane) -> bool {
     match plane {
         EnforcementPlane::RuntimeHook => runtime_hooks(repo) == RuntimeHooks::Installed,
@@ -37,29 +46,80 @@ fn any_exists(repo: &Path, markers: &[&str]) -> bool {
 }
 
 fn installed_pre_commit_hook(repo: &Path) -> bool {
-    if !repo.join(".git").exists() {
+    let Ok(repo) = repo.canonicalize() else {
+        return false;
+    };
+    let git_dir = repo.join(".git");
+    if !git_dir.exists() {
         return false;
     }
+    let location = git_hook_location(&repo).unwrap_or_else(|| HookLocation {
+        hook: git_dir.join(DEFAULT_PRE_COMMIT_HOOK),
+        common_dir: git_dir,
+    });
+    let Ok(hook) = location.hook.canonicalize() else {
+        return false;
+    };
+    let contained = hook.starts_with(&repo)
+        || location
+            .common_dir
+            .canonicalize()
+            .is_ok_and(|common_dir| hook.starts_with(common_dir));
+    contained && std::fs::metadata(&hook).is_ok_and(|meta| meta.is_file() && is_executable(&meta))
+}
+
+struct HookLocation {
+    hook: PathBuf,
+    common_dir: PathBuf,
+}
+
+fn git_hook_location(repo: &Path) -> Option<HookLocation> {
     let mut command = Command::new("git");
     for variable in AMBIENT_REPOSITORY_ENV {
         command.env_remove(variable);
     }
-    let Ok(output) = command
+    for variable in MACHINE_CONFIG_ENV {
+        command.env(variable, NULL_DEVICE);
+    }
+    command.env("GIT_CONFIG_NOSYSTEM", "1");
+    if let Some(parent) = repo.parent() {
+        command.env("GIT_CEILING_DIRECTORIES", parent);
+    }
+    let output = command
         .arg("-C")
         .arg(repo)
-        .args(["rev-parse", "--git-path", "hooks/pre-commit"])
+        .args([
+            "rev-parse",
+            "--git-common-dir",
+            "--git-path",
+            DEFAULT_PRE_COMMIT_HOOK,
+        ])
         .output()
-    else {
-        return false;
-    };
+        .ok()?;
     if !output.status.success() {
-        return false;
+        return None;
     }
-    let Ok(reported) = std::str::from_utf8(&output.stdout) else {
-        return false;
-    };
-    let hook = reported.trim_end_matches(['\n', '\r']);
-    !hook.is_empty() && repo.join(hook).is_file()
+    let reported = std::str::from_utf8(&output.stdout).ok()?;
+    let mut lines = reported.lines();
+    let (common_dir, hook) = (lines.next()?, lines.next()?);
+    if common_dir.is_empty() || hook.is_empty() || lines.next().is_some() {
+        return None;
+    }
+    Some(HookLocation {
+        hook: repo.join(hook),
+        common_dir: repo.join(common_dir),
+    })
+}
+
+#[cfg(unix)]
+fn is_executable(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    meta.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn is_executable(_meta: &std::fs::Metadata) -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1178,7 +1178,17 @@ fn git_fixture_repo() -> TempDir {
 fn write_hook(path: &Path) {
     std::fs::create_dir_all(path.parent().expect("hook parent")).expect("create hooks dir");
     std::fs::write(path, "#!/bin/sh\nexit 0\n").expect("write hook");
+    set_mode(path, 0o755);
 }
+
+#[cfg(unix)]
+fn set_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("set mode");
+}
+
+#[cfg(not(unix))]
+fn set_mode(_path: &Path, _mode: u32) {}
 
 #[test]
 fn a_husky_tree_has_no_missing_pre_commit_plane() {
@@ -1252,5 +1262,75 @@ fn a_hook_under_core_hooks_path_satisfies_the_pre_commit_plane() {
     );
 
     write_hook(&repo.path().join(".githooks/pre-commit"));
+    assert!(!pre_commit_plane_missing(repo.path()));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_hook_git_would_not_run_for_lack_of_an_executable_bit_is_a_missing_plane() {
+    let repo = git_fixture_repo();
+    let hook = repo.path().join(".git/hooks/pre-commit");
+    write_hook(&hook);
+    set_mode(&hook, 0o644);
+    assert!(pre_commit_plane_missing(repo.path()));
+
+    set_mode(&hook, 0o755);
+    assert!(!pre_commit_plane_missing(repo.path()));
+}
+
+#[test]
+fn a_hooks_path_outside_the_repository_does_not_satisfy_the_pre_commit_plane() {
+    let outside = tempfile::tempdir().expect("outside hooks dir");
+    write_hook(&outside.path().join("pre-commit"));
+    let repo = git_fixture_repo();
+    git(
+        repo.path(),
+        &[
+            "config",
+            "core.hooksPath",
+            outside.path().to_str().expect("utf-8 path"),
+        ],
+    );
+    assert!(pre_commit_plane_missing(repo.path()));
+}
+
+#[test]
+fn a_hooks_path_escaping_through_the_parent_does_not_satisfy_the_pre_commit_plane() {
+    let parent = tempfile::tempdir().expect("parent dir");
+    let repo = parent.path().join("repo");
+    std::fs::create_dir_all(&repo).expect("create repo dir");
+    std::fs::write(repo.join("main.rs"), "fn main() {}\n").expect("write source");
+    git(&repo, &["init", "--quiet"]);
+    git(&repo, &["config", "core.hooksPath", "../shared-hooks"]);
+    write_hook(&parent.path().join("shared-hooks/pre-commit"));
+
+    assert!(pre_commit_plane_missing(&repo));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_hook_counts_only_when_its_target_is_inside_the_repository() {
+    let outside = tempfile::tempdir().expect("outside dir");
+    write_hook(&outside.path().join("pre-commit"));
+    let repo = git_fixture_repo();
+    let hook = repo.path().join(".git/hooks/pre-commit");
+    std::fs::create_dir_all(hook.parent().expect("hook parent")).expect("create hooks dir");
+
+    std::os::unix::fs::symlink(outside.path().join("pre-commit"), &hook).expect("link hook");
+    assert!(pre_commit_plane_missing(repo.path()));
+
+    std::fs::remove_file(&hook).expect("remove link");
+    write_hook(&repo.path().join("scripts/pre-commit"));
+    std::os::unix::fs::symlink("../../scripts/pre-commit", &hook).expect("link hook");
+    assert!(!pre_commit_plane_missing(repo.path()));
+}
+
+#[test]
+fn a_repository_git_cannot_answer_for_is_read_at_the_default_hook_location() {
+    let repo = fixture_repo();
+    std::fs::create_dir_all(repo.path().join(".git")).expect("create unreadable git dir");
+    assert!(pre_commit_plane_missing(repo.path()));
+
+    write_hook(&repo.path().join(".git/hooks/pre-commit"));
     assert!(!pre_commit_plane_missing(repo.path()));
 }

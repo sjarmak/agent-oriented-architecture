@@ -584,3 +584,41 @@ fn lint_context_missing_explicit_root_states_the_cause_once() {
     );
     assert_eq!(stderr.matches("os error").count(), 1, "{stderr}");
 }
+
+#[cfg(unix)]
+#[test]
+fn audit_reads_the_pre_commit_plane_from_the_repository_not_the_machine_git_config() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repo = TempDir::new().expect("tempdir");
+    init_git_repo(repo.path());
+    let machine_hooks = repo.path().join("machine-hooks");
+    std::fs::create_dir_all(&machine_hooks).unwrap();
+    let hook = machine_hooks.join("pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let machine_config = TempDir::new().expect("tempdir");
+    let global = machine_config.path().join("gitconfig");
+    std::fs::write(
+        &global,
+        format!("[core]\n\thooksPath = {}\n", machine_hooks.display()),
+    )
+    .unwrap();
+
+    let output = aoa()
+        .args(["audit", "--json", "--repo"])
+        .arg(repo.path())
+        .env("GIT_CONFIG_GLOBAL", &global)
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert!(
+        parsed["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .any(|item| item["plane"] == "pre-commit"),
+        "a hooks path set only in the machine's git config is not this repository's plane"
+    );
+}
