@@ -26,4 +26,5 @@ pub struct ClosureBudget {
     pub target_tokens: usize,
     pub gating_target_tokens: usize,
     pub files: Vec<FileBudget>,
+    pub outside_boundary: Vec<PathBuf>,
 }

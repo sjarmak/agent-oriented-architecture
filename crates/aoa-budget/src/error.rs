@@ -16,6 +16,9 @@ pub enum BudgetError {
     #[error("context file {path} exceeds {max_bytes} bytes")]
     Oversized { path: PathBuf, max_bytes: u64 },
 
+    #[error("context file {path} resolves outside {boundary}")]
+    OutsideBoundary { path: PathBuf, boundary: PathBuf },
+
     /// The requested target-model tokenizer name is not supported.
     ///
     /// This is raised loudly (never silently defaulted) so a misconfigured

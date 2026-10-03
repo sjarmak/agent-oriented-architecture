@@ -76,7 +76,8 @@ fn every_root_is_linted_and_a_shared_file_is_linted_once() {
     );
     write(dir.path(), "shared.md", DUPLICATED_HEADING);
 
-    let report = lint_context_roots(&[root, nested], "o200k_base").expect("lint succeeds");
+    let report =
+        lint_context_roots(&[root, nested], dir.path(), "o200k_base").expect("lint succeeds");
 
     let duplicated: Vec<PathBuf> = report
         .findings
@@ -112,8 +113,8 @@ fn each_root_reports_its_own_closure_tokens_and_a_shared_file_counts_in_both() {
     );
     let shared = write(dir.path(), "shared.md", "# Shared\n\nalpha beta gamma\n");
 
-    let report =
-        lint_context_roots(&[root.clone(), nested.clone()], "o200k_base").expect("lint succeeds");
+    let report = lint_context_roots(&[root.clone(), nested.clone()], dir.path(), "o200k_base")
+        .expect("lint succeeds");
 
     let counted = |path: &PathBuf| {
         report
@@ -134,6 +135,7 @@ fn each_root_reports_its_own_closure_tokens_and_a_shared_file_counts_in_both() {
                 target_tokens: tokens(&root) + tokens(&shared),
                 gating_target_tokens: tokens(&root) + tokens(&shared),
                 files: vec![counted(&root), counted(&shared)],
+                outside_boundary: Vec::new(),
             },
             ClosureBudget {
                 root: nested.clone(),
@@ -141,6 +143,7 @@ fn each_root_reports_its_own_closure_tokens_and_a_shared_file_counts_in_both() {
                 target_tokens: tokens(&nested) + tokens(&shared),
                 gating_target_tokens: tokens(&nested) + tokens(&shared),
                 files: vec![counted(&nested), counted(&shared)],
+                outside_boundary: Vec::new(),
             },
         ]
     );
@@ -161,7 +164,8 @@ fn a_suppressed_file_is_reported_but_left_out_of_the_closure_gating_tokens() {
         "# aoa-allow: oversized-context generated reference\n\n# Big\n\nalpha beta\n",
     );
 
-    let report = lint_context_roots(std::slice::from_ref(&root), "o200k_base").expect("lint");
+    let report =
+        lint_context_roots(std::slice::from_ref(&root), dir.path(), "o200k_base").expect("lint");
 
     let closure = &report.closures[0];
     let [root_file, big] = closure.files.as_slice() else {
@@ -178,7 +182,7 @@ fn a_suppressed_file_is_reported_but_left_out_of_the_closure_gating_tokens() {
 
 #[test]
 fn linting_no_roots_fails() {
-    let result = lint_context_roots(&[], "o200k_base");
+    let result = lint_context_roots(&[], Path::new("."), "o200k_base");
     assert!(matches!(result, Err(LintError::NoRoots)));
 }
 

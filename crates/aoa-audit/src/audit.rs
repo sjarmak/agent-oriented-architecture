@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use aoa_budget::{count_budget, resolve_closure_within, Config, DEFAULT_CONTEXT_CEILING};
+use aoa_budget::{count_budget, resolve_contained_closure, Config, DEFAULT_CONTEXT_CEILING};
 use aoa_construct::BehavioralSignal;
 use aoa_metrics::{
     compute_metrics, discover_partition, IndexQuality, MetricInput, MetricRecord, SubtreePartition,
@@ -284,7 +284,7 @@ fn context_budget_item(repo: &Path, cfg: &AuditConfig) -> Result<Option<PunchIte
         return Ok(None);
     }
 
-    let closure = resolve_closure_within(&root, repo)?;
+    let closure = resolve_contained_closure(&root, repo)?;
     let report = count_budget(&closure, &cfg.target, &Config::warn_first(cfg.ceiling))?;
     let overflow = report.gating_target_tokens.saturating_sub(cfg.ceiling);
     if overflow == 0 {

@@ -45,6 +45,7 @@ struct ClosureView {
     gating_target_tokens: usize,
     over_ceiling_by: usize,
     files: Vec<FileView>,
+    outside_boundary: Vec<PathBuf>,
 }
 
 #[derive(Debug, Serialize)]
@@ -73,6 +74,7 @@ impl ClosureView {
                     gating: file.gating,
                 })
                 .collect(),
+            outside_boundary: closure.outside_boundary,
         }
     }
 }
@@ -87,9 +89,10 @@ struct SuppressionView {
 /// findings to that set; `# aoa-allow: oversized-context` suppressions surface
 /// from the composed budget report.
 pub fn run(args: &LintArgs) -> Result<i32> {
-    let roots = context_roots(args.root.as_deref())?;
-    let report =
-        aoa_lint::lint_context_roots(&roots, &args.tokenizer).context("failed to lint context")?;
+    let dir = linted_directory(args.root.as_deref());
+    let roots = context_roots(args.root.as_deref(), dir)?;
+    let report = aoa_lint::lint_context_roots(&roots, dir, &args.tokenizer)
+        .context("failed to lint context")?;
 
     let changed: Option<BTreeSet<PathBuf>> = if args.changed.is_empty() {
         None
@@ -144,11 +147,13 @@ pub fn run(args: &LintArgs) -> Result<i32> {
     Ok(0)
 }
 
-fn context_roots(root: Option<&Path>) -> Result<Vec<PathBuf>> {
-    let dir = root
-        .and_then(Path::parent)
+fn linted_directory(root: Option<&Path>) -> &Path {
+    root.and_then(Path::parent)
         .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
+        .unwrap_or(Path::new("."))
+}
+
+fn context_roots(root: Option<&Path>, dir: &Path) -> Result<Vec<PathBuf>> {
     let nested = aoa_lint::discover_context_roots(dir)
         .with_context(|| format!("failed to find context files under {}", dir.display()))?;
 
@@ -212,6 +217,13 @@ fn render_human(view: &LintView) -> String {
                 file.file.display(),
                 file.target_tokens,
                 uncounted,
+            );
+        }
+        for link in &closure.outside_boundary {
+            let _ = writeln!(
+                out,
+                "      {}: not counted, it resolves outside the linted directory",
+                link.display(),
             );
         }
     }

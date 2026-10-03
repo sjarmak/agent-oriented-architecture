@@ -22,6 +22,7 @@ pub struct ContextFile {
 pub struct Closure {
     pub root: PathBuf,
     pub files: Vec<ContextFile>,
+    pub outside_boundary: Vec<PathBuf>,
 }
 
 impl Closure {
@@ -41,6 +42,22 @@ pub fn resolve_closure(root: &Path) -> Result<Closure, BudgetError> {
     resolve_closure_within(root, boundary)
 }
 
+pub fn resolve_contained_closure(root: &Path, boundary: &Path) -> Result<Closure, BudgetError> {
+    let canonical = |path: &Path| {
+        path.canonicalize().map_err(|source| BudgetError::Io {
+            path: path.to_path_buf(),
+            source,
+        })
+    };
+    if !canonical(root)?.starts_with(canonical(boundary)?) {
+        return Err(BudgetError::OutsideBoundary {
+            path: root.to_path_buf(),
+            boundary: boundary.to_path_buf(),
+        });
+    }
+    resolve_closure_within(root, boundary)
+}
+
 pub fn resolve_closure_within(root: &Path, boundary: &Path) -> Result<Closure, BudgetError> {
     let boundary = boundary.canonicalize().map_err(|source| BudgetError::Io {
         path: boundary.to_path_buf(),
@@ -48,7 +65,9 @@ pub fn resolve_closure_within(root: &Path, boundary: &Path) -> Result<Closure, B
     })?;
     let root = normalize_path(root);
     let mut visited: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut resolved_members: BTreeSet<PathBuf> = BTreeSet::new();
     let mut files: Vec<ContextFile> = Vec::new();
+    let mut outside_boundary: Vec<PathBuf> = Vec::new();
     let mut stack: Vec<PathBuf> = vec![root.clone()];
 
     while let Some(path) = stack.pop() {
@@ -56,11 +75,26 @@ pub fn resolve_closure_within(root: &Path, boundary: &Path) -> Result<Closure, B
             continue;
         }
         let text = if path == root {
-            read_regular_file(&path, &path)?
+            let text = read_regular_file(&path, &path)?;
+            resolved_members.extend(path.canonicalize());
+            text
         } else {
-            match read_member(&path, &boundary)? {
-                Some(text) => text,
-                None => continue,
+            let Ok(resolved) = path.canonicalize() else {
+                continue;
+            };
+            if !resolved.starts_with(&boundary) {
+                if resolved.is_file() {
+                    outside_boundary.push(path);
+                }
+                continue;
+            }
+            if !resolved_members.insert(resolved.clone()) {
+                continue;
+            }
+            match read_regular_file(&resolved, &path) {
+                Ok(text) => text,
+                Err(oversized @ BudgetError::Oversized { .. }) => return Err(oversized),
+                Err(_) => continue,
             }
         };
         let base_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
@@ -74,21 +108,11 @@ pub fn resolve_closure_within(root: &Path, boundary: &Path) -> Result<Closure, B
         files.push(ContextFile { path, text });
     }
 
-    Ok(Closure { root, files })
-}
-
-fn read_member(path: &Path, boundary: &Path) -> Result<Option<String>, BudgetError> {
-    let Ok(resolved) = path.canonicalize() else {
-        return Ok(None);
-    };
-    if !resolved.starts_with(boundary) {
-        return Ok(None);
-    }
-    match read_regular_file(&resolved, path) {
-        Ok(text) => Ok(Some(text)),
-        Err(oversized @ BudgetError::Oversized { .. }) => Err(oversized),
-        Err(_) => Ok(None),
-    }
+    Ok(Closure {
+        root,
+        files,
+        outside_boundary,
+    })
 }
 
 fn read_regular_file(path: &Path, reported: &Path) -> Result<String, BudgetError> {

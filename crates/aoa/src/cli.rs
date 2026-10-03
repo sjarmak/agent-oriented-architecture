@@ -341,8 +341,9 @@ pub struct EvalRunArgs {
     /// `<DIR>/<task_id>.trace.json`, in the format `aoa eval validate-trace`
     /// reads. The directory is created when missing and an existing trace
     /// file for the same task is replaced. Tool targets are copied from the
-    /// transcript verbatim, so the files are written readable and writable by
-    /// their owner only; treat them as sensitively as the run.
+    /// transcript verbatim, so on Unix the files are written readable and
+    /// writable by their owner only; elsewhere they take the directory's
+    /// default permissions. Treat them as sensitively as the run.
     #[arg(long, value_name = "DIR")]
     pub emit_traces: Option<PathBuf>,
 

@@ -21,14 +21,19 @@ const LINT_BUDGET_CEILING: usize = usize::MAX;
 /// The closure resolved by aoa-budget defines WHICH files are linted: every file
 /// reachable from `root` is run through the mechanical detectors.
 pub fn lint_context(root: &Path, target_tokenizer: &str) -> Result<LintReport, LintError> {
-    lint_context_roots(&[root.to_path_buf()], target_tokenizer)
+    let boundary = root
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    lint_context_roots(&[root.to_path_buf()], boundary, target_tokenizer)
 }
 
 pub fn lint_context_roots(
     roots: &[PathBuf],
+    boundary: &Path,
     target_tokenizer: &str,
 ) -> Result<LintReport, LintError> {
-    let (merged, members) = resolve_members(roots)?;
+    let (merged, members) = resolve_members(roots, boundary)?;
     let budget = count_budget(
         &merged,
         target_tokenizer,
@@ -61,19 +66,23 @@ pub fn lint_context_roots(
 struct Member {
     root: PathBuf,
     paths: Vec<PathBuf>,
+    outside_boundary: Vec<PathBuf>,
 }
 
-fn resolve_members(roots: &[PathBuf]) -> Result<(Closure, Vec<Member>), LintError> {
+fn resolve_members(
+    roots: &[PathBuf],
+    boundary: &Path,
+) -> Result<(Closure, Vec<Member>), LintError> {
     let first = roots.first().ok_or(LintError::NoRoots)?;
     let mut seen = BTreeSet::new();
     let mut files = Vec::new();
     let mut members = Vec::with_capacity(roots.len());
-    let boundary = common_directory(roots);
     for root in roots {
-        let closure = resolve_closure_within(root, &boundary)?;
+        let closure = resolve_closure_within(root, boundary)?;
         members.push(Member {
             root: closure.root,
             paths: closure.files.iter().map(|file| file.path.clone()).collect(),
+            outside_boundary: closure.outside_boundary,
         });
         for file in closure.files {
             if seen.insert(file.path.clone()) {
@@ -84,31 +93,9 @@ fn resolve_members(roots: &[PathBuf]) -> Result<(Closure, Vec<Member>), LintErro
     let merged = Closure {
         root: normalize_path(first),
         files,
+        outside_boundary: Vec::new(),
     };
     Ok((merged, members))
-}
-
-fn common_directory(roots: &[PathBuf]) -> PathBuf {
-    let mut directories = roots.iter().map(|root| {
-        normalize_path(root)
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_default()
-    });
-    let first = directories.next().unwrap_or_default();
-    let common = directories.fold(first, |common, directory| {
-        common
-            .components()
-            .zip(directory.components())
-            .take_while(|(left, right)| left == right)
-            .map(|(component, _)| component)
-            .collect()
-    });
-    if common.as_os_str().is_empty() {
-        PathBuf::from(".")
-    } else {
-        common
-    }
 }
 
 fn closure_budget(member: Member, budget: &BudgetReport) -> ClosureBudget {
@@ -125,5 +112,6 @@ fn closure_budget(member: Member, budget: &BudgetReport) -> ClosureBudget {
         target_tokens: sum(|file| file.target_tokens),
         gating_target_tokens: sum(|file| if file.gating { file.target_tokens } else { 0 }),
         files,
+        outside_boundary: member.outside_boundary,
     }
 }

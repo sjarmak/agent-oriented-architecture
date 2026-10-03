@@ -1,7 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use aoa_budget::{resolve_closure, resolve_closure_within, BudgetError, MAX_CONTEXT_FILE_BYTES};
+use aoa_budget::{
+    resolve_closure, resolve_closure_within, resolve_contained_closure, BudgetError,
+    MAX_CONTEXT_FILE_BYTES,
+};
 use tempfile::TempDir;
 
 fn write(root: &Path, rel: &str, contents: &str) -> PathBuf {
@@ -40,6 +43,60 @@ fn a_link_leaving_the_boundary_is_not_a_closure_member() {
     let names = member_names(&root, &dir.path().join("repo"));
 
     assert_eq!(names, ["AGENTS.md", "docs/rules.md"]);
+}
+
+#[test]
+fn a_link_leaving_the_boundary_is_named_by_the_path_that_was_written() {
+    let dir = TempDir::new().unwrap();
+    write(dir.path(), "outside.md", "outside the repository\n");
+    let root = write(
+        dir.path(),
+        "repo/AGENTS.md",
+        "[out](../outside.md) [gone](../absent.md) [up](..)\n",
+    );
+
+    let closure = resolve_closure_within(&root, &dir.path().join("repo")).unwrap();
+
+    assert_eq!(closure.outside_boundary, [dir.path().join("outside.md")]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_file_reached_through_directory_aliases_is_a_member_once() {
+    let dir = TempDir::new().unwrap();
+    let hops = |prefix: &str| {
+        format!("[a]({prefix}s/AGENTS.md) [b]({prefix}t/AGENTS.md) [c]({prefix}s/t/more.md)\n")
+    };
+    let root = write(dir.path(), "AGENTS.md", &hops(""));
+    write(dir.path(), "more.md", &hops("s/t/"));
+    std::os::unix::fs::symlink(".", dir.path().join("s")).unwrap();
+    std::os::unix::fs::symlink(".", dir.path().join("t")).unwrap();
+
+    assert_eq!(
+        member_names(&root, dir.path()),
+        ["AGENTS.md", "s/t/more.md"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_contained_closure_refuses_a_root_that_resolves_outside_the_boundary() {
+    let dir = TempDir::new().unwrap();
+    let secret = write(dir.path(), "secret.md", "outside the repository\n");
+    fs::create_dir(dir.path().join("repo")).unwrap();
+    let root = dir.path().join("repo/AGENTS.md");
+    std::os::unix::fs::symlink(&secret, &root).unwrap();
+
+    let err = resolve_contained_closure(&root, &dir.path().join("repo")).unwrap_err();
+
+    assert!(matches!(err, BudgetError::OutsideBoundary { .. }), "{err}");
+    assert_eq!(
+        resolve_closure_within(&root, &dir.path().join("repo"))
+            .unwrap()
+            .files
+            .len(),
+        1
+    );
 }
 
 #[test]

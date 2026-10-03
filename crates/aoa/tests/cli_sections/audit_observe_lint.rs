@@ -344,6 +344,61 @@ fn lint_context_root_above_the_working_directory_lints_the_named_file() {
     assert_eq!(finding_files(&parsed), ["../AGENTS.md"]);
 }
 
+fn write_package_linking_shared_docs(dir: &Path) {
+    std::fs::create_dir_all(dir.join("pkg")).unwrap();
+    std::fs::create_dir_all(dir.join("docs")).unwrap();
+    std::fs::write(dir.join("docs/shared.md"), "# Shared\n\nplain\n").unwrap();
+    std::fs::write(
+        dir.join("pkg/AGENTS.md"),
+        "# Pkg\n\nSee [shared](../docs/shared.md).\n",
+    )
+    .unwrap();
+}
+
+fn closure_files(closure: &Value) -> Vec<&str> {
+    closure["files"]
+        .as_array()
+        .expect("files array")
+        .iter()
+        .map(|file| file["file"].as_str().expect("file"))
+        .collect()
+}
+
+#[test]
+fn lint_context_counts_a_sibling_directory_for_the_only_nested_root() {
+    let dir = TempDir::new().expect("tempdir");
+    write_package_linking_shared_docs(dir.path());
+
+    let parsed = lint_json(dir.path(), &[]);
+
+    let closure = &parsed["budget"]["closures"][0];
+    assert_eq!(closure_files(closure), ["pkg/AGENTS.md", "docs/shared.md"]);
+    assert!(json_strings(&closure["outside_boundary"]).is_empty());
+}
+
+#[test]
+fn lint_context_names_a_link_that_leaves_the_directory_of_an_explicit_root() {
+    let dir = TempDir::new().expect("tempdir");
+    write_package_linking_shared_docs(dir.path());
+
+    let parsed = lint_json(dir.path(), &["--root", "pkg/AGENTS.md"]);
+
+    let closure = &parsed["budget"]["closures"][0];
+    assert_eq!(closure_files(closure), ["pkg/AGENTS.md"]);
+    assert_eq!(
+        json_strings(&closure["outside_boundary"]),
+        ["docs/shared.md"]
+    );
+    aoa()
+        .current_dir(dir.path())
+        .args(["lint-context", "--root", "pkg/AGENTS.md"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "docs/shared.md: not counted, it resolves outside the linted directory",
+        ));
+}
+
 #[test]
 fn lint_context_human_reports_how_many_roots_were_linted() {
     let dir = TempDir::new().expect("tempdir");
@@ -424,6 +479,7 @@ fn lint_context_json_reports_tokens_for_the_root_closure_and_each_member() {
                         file("CLAUDE.md", LINT_BUDGET_ROOT),
                         file("shared.md", LINT_BUDGET_SHARED),
                     ],
+                    "outside_boundary": [],
                 },
                 {
                     "root": "pkg/AGENTS.md",
@@ -435,6 +491,7 @@ fn lint_context_json_reports_tokens_for_the_root_closure_and_each_member() {
                         file("pkg/AGENTS.md", LINT_BUDGET_MEMBER),
                         file("shared.md", LINT_BUDGET_SHARED),
                     ],
+                    "outside_boundary": [],
                 },
             ],
         })
