@@ -194,7 +194,7 @@ pub(crate) fn parse_transcript_bounded(raw: &str, limits: Limits) -> Result<Shim
     let mut seq: u64 = 0;
     let mut saw_write = false;
     let mut lines: usize = 0;
-    let mut agent_events: usize = 0;
+    let mut saw_agent_event = false;
 
     for line in raw.lines() {
         let line = line.trim();
@@ -216,7 +216,7 @@ pub(crate) fn parse_transcript_bounded(raw: &str, limits: Limits) -> Result<Shim
 
         match event.get("type").and_then(Value::as_str) {
             Some("assistant") => {
-                agent_events += 1;
+                saw_agent_event = true;
                 for block in content_blocks(&event) {
                     if block.get("type").and_then(Value::as_str) != Some("tool_use") {
                         continue;
@@ -283,7 +283,7 @@ pub(crate) fn parse_transcript_bounded(raw: &str, limits: Limits) -> Result<Shim
             // its own event. Both provenances agree on what matters here:
             // neither `write.blocked` nor `write.failed` is a landed edit.
             Some("user") => {
-                agent_events += 1;
+                saw_agent_event = true;
                 for block in content_blocks(&event) {
                     if block.get("type").and_then(Value::as_str) != Some("tool_result") {
                         continue;
@@ -314,7 +314,7 @@ pub(crate) fn parse_transcript_bounded(raw: &str, limits: Limits) -> Result<Shim
         }
     }
 
-    if agent_events == 0 {
+    if !saw_agent_event {
         return Err(ShimError::NoAgentEvents { lines });
     }
 
