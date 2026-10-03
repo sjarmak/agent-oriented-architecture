@@ -132,19 +132,16 @@ fn resolve(
                 RootRead::Beneath(resolved) => boundary.open_member(resolved),
             };
             let text = read_regular_file(opened).map_err(|failure| failure.into_error(&path))?;
-            resolved_members.extend(directory_resolved(&path));
+            resolved_members.extend(resolved_to_deepest_directory(&path));
             text
         } else {
             let resolved = match path.canonicalize() {
                 Ok(resolved) => resolved,
                 Err(_) => {
-                    let first_inside_boundary = match directory_resolved(&path) {
-                        Some(member) => {
+                    let first_inside_boundary =
+                        resolved_to_deepest_directory(&path).is_some_and(|member| {
                             boundary.contains(&member) && resolved_members.insert(member)
-                        }
-                        None => std::path::absolute(&path)
-                            .is_ok_and(|absolute| boundary.contains(&absolute)),
-                    };
+                        });
                     if first_inside_boundary {
                         unread.extend(unresolved_link(&path));
                     }
@@ -157,7 +154,9 @@ fn resolve(
                 }
                 continue;
             }
-            if !directory_resolved(&path).is_some_and(|member| resolved_members.insert(member)) {
+            if !resolved_to_deepest_directory(&path)
+                .is_some_and(|member| resolved_members.insert(member))
+            {
                 continue;
             }
             match read_regular_file(boundary.open_member(&resolved)) {
@@ -211,12 +210,15 @@ fn unresolved_link(path: &Path) -> Option<UnreadLink> {
     })
 }
 
-fn directory_resolved(path: &Path) -> Option<PathBuf> {
-    let parent = match path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent,
-        _ => Path::new("."),
-    };
-    Some(parent.canonicalize().ok()?.join(path.file_name()?))
+fn resolved_to_deepest_directory(path: &Path) -> Option<PathBuf> {
+    path.ancestors().skip(1).find_map(|ancestor| {
+        let directory = match ancestor.as_os_str().is_empty() {
+            true => Path::new("."),
+            false => ancestor,
+        };
+        let unresolved = path.strip_prefix(ancestor).ok()?;
+        Some(directory.canonicalize().ok()?.join(unresolved))
+    })
 }
 
 enum ReadFailure {

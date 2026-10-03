@@ -448,3 +448,49 @@ fn a_member_under_a_directory_that_may_only_be_searched_is_counted() {
 
     assert_eq!(names, ["AGENTS.md", "sealed/member.md"]);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_link_through_an_unresolvable_directory_is_reported_when_the_root_is_named_by_an_alias() {
+    let dir = TempDir::new().unwrap();
+    write(dir.path(), "real/AGENTS.md", "[lost](loop/lost.md)\n");
+    std::os::unix::fs::symlink("loop", dir.path().join("real/loop")).unwrap();
+    std::os::unix::fs::symlink("real", dir.path().join("alias")).unwrap();
+
+    let closure = resolve_closure_within(
+        &dir.path().join("alias/AGENTS.md"),
+        &dir.path().join("real"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        closure.unread,
+        [unread(
+            dir.path().join("alias/loop/lost.md"),
+            UnreadReason::Unreadable
+        )]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_through_an_unresolvable_directory_is_reported_once_across_aliases() {
+    let dir = TempDir::new().unwrap();
+    let root = write(
+        dir.path(),
+        "AGENTS.md",
+        "[aliased](alias/loop/lost.md) [direct](loop/lost.md)\n",
+    );
+    std::os::unix::fs::symlink("loop", dir.path().join("loop")).unwrap();
+    std::os::unix::fs::symlink(".", dir.path().join("alias")).unwrap();
+
+    let closure = resolve_closure_within(&root, dir.path()).unwrap();
+
+    assert_eq!(
+        closure.unread,
+        [unread(
+            dir.path().join("alias/loop/lost.md"),
+            UnreadReason::Unreadable
+        )]
+    );
+}
