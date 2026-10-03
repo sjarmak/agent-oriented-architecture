@@ -3,7 +3,7 @@ use std::path::Path;
 
 use tempfile::TempDir;
 
-use aoa_metrics::{declared_member_dirs, discover_partition, SubtreeError, WorkspaceSource};
+use aoa_metrics::{declared_members, discover_partition, SubtreeError, WorkspaceSource};
 
 fn write(root: &Path, rel: &str, contents: &str) {
     let path = root.join(rel);
@@ -14,14 +14,18 @@ fn write(root: &Path, rel: &str, contents: &str) {
 fn declared(settings_name: &str, settings: &str) -> Vec<String> {
     let dir = TempDir::new().unwrap();
     write(dir.path(), settings_name, settings);
-    declared_member_dirs(dir.path()).unwrap()
+    let declared = declared_members(dir.path());
+    assert!(declared.failures.is_empty(), "{:?}", declared.failures);
+    declared.dirs
 }
 
 #[test]
 fn a_repo_with_no_workspace_manifest_declares_no_members() {
     let dir = TempDir::new().unwrap();
     write(dir.path(), "main.rs", "fn main() {}\n");
-    assert!(declared_member_dirs(dir.path()).unwrap().is_empty());
+    let declared = declared_members(dir.path());
+    assert!(declared.dirs.is_empty());
+    assert!(declared.failures.is_empty());
 }
 
 #[test]
@@ -70,7 +74,11 @@ fn gradle_interpolated_project_names_are_not_guessed() {
 fn gradle_member_escaping_the_repo_root_is_an_error() {
     let dir = TempDir::new().unwrap();
     write(dir.path(), "settings.gradle", "include '../outside'\n");
-    let err = declared_member_dirs(dir.path()).unwrap_err();
+    let declared = declared_members(dir.path());
+    assert!(declared.dirs.is_empty(), "{:?}", declared.dirs);
+    let [err] = declared.failures.as_slice() else {
+        panic!("expected one failure, got {:?}", declared.failures);
+    };
     assert!(matches!(err, SubtreeError::Manifest { .. }), "{err}");
     assert!(err.to_string().contains("settings.gradle"), "{err}");
 }
@@ -95,10 +103,9 @@ fn members_from_every_declaring_manifest_are_merged() {
         "include(\":ops:deploy\")\n",
     );
 
-    assert_eq!(
-        declared_member_dirs(dir.path()).unwrap(),
-        ["ops/deploy", "services/web", "tools/cli"]
-    );
+    let declared = declared_members(dir.path());
+    assert!(declared.failures.is_empty(), "{:?}", declared.failures);
+    assert_eq!(declared.dirs, ["ops/deploy", "services/web", "tools/cli"]);
 }
 
 #[test]
@@ -110,11 +117,19 @@ fn gradle_settings_do_not_change_the_subtree_partition() {
 }
 
 #[test]
-fn a_malformed_manifest_fails_member_discovery() {
+fn a_malformed_manifest_costs_only_its_own_ecosystem_its_members() {
     let dir = TempDir::new().unwrap();
     write(dir.path(), "package.json", "{ \"name\": \"x\", }");
     write(dir.path(), "settings.gradle", "include ':tools'\n");
-    assert!(declared_member_dirs(dir.path()).is_err());
+    write(dir.path(), "go.work", "use ./services/api\n");
+
+    let declared = declared_members(dir.path());
+
+    assert_eq!(declared.dirs, ["services/api", "tools"]);
+    let [failure] = declared.failures.as_slice() else {
+        panic!("expected one failure, got {:?}", declared.failures);
+    };
+    assert!(failure.to_string().contains("package.json"), "{failure}");
 }
 
 #[test]

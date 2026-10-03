@@ -192,16 +192,29 @@ const PARTITION_DETECTORS: [(Detector, WorkspaceSource); 4] = [
     (npm_members, WorkspaceSource::NpmWorkspaces),
 ];
 
-pub fn declared_member_dirs(repo_root: &Path) -> Result<Vec<String>, SubtreeError> {
+#[derive(Debug, Default)]
+pub struct DeclaredMembers {
+    pub dirs: Vec<String>,
+    pub failures: Vec<SubtreeError>,
+}
+
+pub fn declared_members(repo_root: &Path) -> DeclaredMembers {
     let detectors = PARTITION_DETECTORS
         .iter()
         .map(|(detect, _)| *detect)
         .chain([gradle_members as Detector]);
     let mut dirs: BTreeSet<String> = BTreeSet::new();
+    let mut failures = Vec::new();
     for detect in detectors {
-        dirs.extend(detect(repo_root)?.unwrap_or_default());
+        match detect(repo_root) {
+            Ok(members) => dirs.extend(members.unwrap_or_default()),
+            Err(failure) => failures.push(failure),
+        }
     }
-    Ok(dirs.into_iter().collect())
+    DeclaredMembers {
+        dirs: dirs.into_iter().collect(),
+        failures,
+    }
 }
 
 /// Read a manifest if it exists; `Ok(None)` when absent.

@@ -136,94 +136,101 @@ struct Probe {
 
 /// A probe's corpus register: the repo and the module-size multiplier in, one
 /// [`StructureMeasure`] out.
-type MeasureFn = fn(&Path, f64) -> Result<StructureMeasure, AuditError>;
+type MeasureFn = fn(&Path, f64, &[PathBuf]) -> Result<StructureMeasure, AuditError>;
 
 /// A probe's punch-list register: the same inputs plus the subtree partition that
 /// scopes path-carrying findings.
-type ItemFn = fn(&Path, f64, &SubtreePartition) -> Result<Option<PunchItem>, AuditError>;
+type ItemFn =
+    fn(&Path, f64, &SubtreePartition, &[PathBuf]) -> Result<Option<PunchItem>, AuditError>;
 
 /// Every code-structure probe, in punch-list order. The single list both public
 /// entry points read; see [`Probe`].
 const PROBES: &[Probe] = &[
     Probe {
         kind: FindingKind::NavigabilityAnchor,
-        measure: Some(|repo, _k| {
+        measure: Some(|_repo, _k, roots| {
             Ok(StructureMeasure::Measured(
-                navigability_sites(repo)?.len() as u64
+                roots_without_readme(roots).len() as u64,
             ))
         }),
-        item: |repo, _k, partition| navigability_anchor_item(repo, partition),
+        item: |_repo, _k, partition, roots| Ok(navigability_anchor_item(roots, partition)),
     },
     Probe {
         kind: FindingKind::ModuleSizeOutlier,
-        measure: Some(|repo, k| {
+        measure: Some(|repo, k, _roots| {
             Ok(
                 module_size_outliers(repo, k)?.map_or(StructureMeasure::Unmeasurable, |outliers| {
                     StructureMeasure::Measured(outliers.count())
                 }),
             )
         }),
-        item: module_size_outlier_item,
+        item: |repo, k, partition, _roots| module_size_outlier_item(repo, k, partition),
     },
     Probe {
         kind: FindingKind::UnusedImportProxy,
-        measure: Some(|repo, _k| unused_imports::unused_import_measure(repo)),
-        item: |repo, _k, partition| unused_imports::unused_import_proxy_item(repo, partition),
+        measure: Some(|repo, _k, _roots| unused_imports::unused_import_measure(repo)),
+        item: |repo, _k, partition, _roots| {
+            unused_imports::unused_import_proxy_item(repo, partition)
+        },
     },
     Probe {
         kind: FindingKind::VerificationReachability,
         measure: None,
-        item: |repo, _k, partition| verification::verification_reachability_item(repo, partition),
+        item: |repo, _k, partition, roots| {
+            verification::verification_reachability_item(repo, partition, roots)
+        },
     },
     Probe {
         kind: FindingKind::InvariantDiscoverability,
         measure: None,
-        item: |repo, _k, partition| invariants::invariant_discoverability_item(repo, partition),
+        item: |repo, _k, partition, roots| {
+            invariants::invariant_discoverability_item(repo, partition, roots)
+        },
     },
     Probe {
         kind: FindingKind::BuildDeterminism,
-        measure: Some(|repo, _k| {
+        measure: Some(|repo, _k, _roots| {
             Ok(StructureMeasure::Measured(
                 declarations::build_determinism_absent_count(repo),
             ))
         }),
-        item: |repo, _k, _partition| Ok(declarations::build_determinism_item(repo)),
+        item: |repo, _k, _partition, _roots| Ok(declarations::build_determinism_item(repo)),
     },
     Probe {
         kind: FindingKind::DevEnvironmentDeclaration,
-        measure: Some(|repo, _k| {
+        measure: Some(|repo, _k, _roots| {
             Ok(StructureMeasure::Measured(
                 declarations::dev_environment_absent_count(repo),
             ))
         }),
-        item: |repo, _k, _partition| Ok(declarations::dev_environment_item(repo)),
+        item: |repo, _k, _partition, _roots| Ok(declarations::dev_environment_item(repo)),
     },
     Probe {
         kind: FindingKind::TaskDiscoverySurface,
-        measure: Some(|repo, _k| {
+        measure: Some(|repo, _k, _roots| {
             Ok(StructureMeasure::Measured(
                 declarations::task_discovery_absent_count(repo),
             ))
         }),
-        item: |repo, _k, _partition| Ok(declarations::task_discovery_item(repo)),
+        item: |repo, _k, _partition, _roots| Ok(declarations::task_discovery_item(repo)),
     },
     Probe {
         kind: FindingKind::GeneratedArtifactProtection,
-        measure: Some(|repo, _k| {
+        measure: Some(|repo, _k, _roots| {
             Ok(StructureMeasure::Measured(
                 declarations::generated_artifact_protection_absent_count(repo)?,
             ))
         }),
-        item: |repo, _k, _partition| declarations::generated_artifact_protection_item(repo),
+        item: |repo, _k, _partition, _roots| declarations::generated_artifact_protection_item(repo),
     },
     Probe {
         kind: FindingKind::WriteSafetyZone,
-        measure: Some(|repo, _k| {
+        measure: Some(|repo, _k, _roots| {
             Ok(StructureMeasure::Measured(
                 declarations::write_boundary_absent_count(repo),
             ))
         }),
-        item: |repo, _k, _partition| Ok(declarations::write_safety_zone_item(repo)),
+        item: |repo, _k, _partition, _roots| Ok(declarations::write_safety_zone_item(repo)),
     },
 ];
 
@@ -235,10 +242,11 @@ pub(crate) fn structure_items(
     repo: &Path,
     size_outlier_k: f64,
     partition: &SubtreePartition,
+    package_roots: &[PathBuf],
 ) -> Result<Vec<PunchItem>, AuditError> {
     let mut items = Vec::new();
     for probe in PROBES {
-        if let Some(item) = (probe.item)(repo, size_outlier_k, partition)? {
+        if let Some(item) = (probe.item)(repo, size_outlier_k, partition, package_roots)? {
             items.push(item);
         }
     }
@@ -272,10 +280,11 @@ pub fn structure_measurements(
     repo: &Path,
     size_outlier_k: f64,
 ) -> Result<BTreeMap<FindingKind, StructureMeasure>, AuditError> {
+    let package_roots = PackageRoots::discover(repo)?.roots;
     let mut m = BTreeMap::new();
     for probe in PROBES {
         if let Some(measure) = probe.measure {
-            m.insert(probe.kind, measure(repo, size_outlier_k)?);
+            m.insert(probe.kind, measure(repo, size_outlier_k, &package_roots)?);
         }
     }
     Ok(m)
@@ -310,12 +319,56 @@ fn common_subtree<'p>(
 /// reports only its *count* (a measured fact), but `aoa-migrate` consumes the
 /// concrete sites so a migration fixes *exactly* what the audit measured.
 pub fn navigability_sites(repo: &Path) -> Result<Vec<PathBuf>, AuditError> {
-    let mut roots = package_roots(repo)?;
-    roots.retain(|root| !has_readme(root));
-    Ok(roots)
+    Ok(PackageRoots::discover(repo)?.navigability_sites())
+}
+
+fn roots_without_readme(roots: &[PathBuf]) -> Vec<PathBuf> {
+    roots
+        .iter()
+        .filter(|root| !has_readme(root))
+        .cloned()
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageRoots {
+    pub roots: Vec<PathBuf>,
+    pub member_discovery_failures: Vec<String>,
+}
+
+impl PackageRoots {
+    pub fn discover(repo: &Path) -> Result<Self, AuditError> {
+        let declared = aoa_metrics::declared_members(repo);
+        Ok(Self {
+            roots: collect_package_roots(repo, &declared.dirs)?,
+            member_discovery_failures: declared.failures.iter().map(ToString::to_string).collect(),
+        })
+    }
+
+    pub fn navigability_sites(&self) -> Vec<PathBuf> {
+        roots_without_readme(&self.roots)
+    }
+
+    pub fn warning(&self) -> Option<String> {
+        if self.member_discovery_failures.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "workspace member discovery failed ({}); members those manifests declare are not \
+             counted as package roots",
+            self.member_discovery_failures.join("; ")
+        ))
+    }
 }
 
 pub fn package_roots(repo: &Path) -> Result<Vec<PathBuf>, AuditError> {
+    Ok(PackageRoots::discover(repo)?.roots)
+}
+
+fn collect_package_roots(
+    repo: &Path,
+    declared_members: &[String],
+) -> Result<Vec<PathBuf>, AuditError> {
     let mut roots: Vec<PathBuf> = vec![repo.to_path_buf()];
     for entry in read_dir(repo)? {
         let entry = entry.map_err(|source| io_err(repo, source))?;
@@ -339,8 +392,8 @@ pub fn package_roots(repo: &Path) -> Result<Vec<PathBuf>, AuditError> {
         }
     }
     let mut seen: BTreeSet<PathBuf> = roots.iter().cloned().collect();
-    for member in aoa_metrics::declared_member_dirs(repo).unwrap_or_default() {
-        if let Some(root) = declared_member_root(repo, &member) {
+    for member in declared_members {
+        if let Some(root) = declared_member_root(repo, member) {
             if seen.insert(root.clone()) {
                 roots.push(root);
             }
@@ -396,15 +449,15 @@ fn collect_container_members(container: &Path, out: &mut Vec<PathBuf>) -> Result
 /// is exactly the length of [`navigability_sites`] — the migration acts on the
 /// same set.
 fn navigability_anchor_item(
-    repo: &Path,
+    package_roots: &[PathBuf],
     partition: &SubtreePartition,
-) -> Result<Option<PunchItem>, AuditError> {
-    let sites = navigability_sites(repo)?;
+) -> Option<PunchItem> {
+    let sites = roots_without_readme(package_roots);
     if sites.is_empty() {
-        return Ok(None);
+        return None;
     }
 
-    Ok(Some(PunchItem {
+    Some(PunchItem {
         title: "package roots without a navigability anchor (README)".to_string(),
         kind: FindingKind::NavigabilityAnchor,
         tier: Tier::Tier3,
@@ -412,7 +465,7 @@ fn navigability_anchor_item(
         plane: None,
         subtree: common_subtree(partition, sites.iter()),
         size_outliers: None,
-    }))
+    })
 }
 
 /// Read `path` as UTF-8 text, returning `None` if it exceeds the byte cap (the
@@ -611,7 +664,9 @@ mod tests {
         fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
         let partition = implicit(&dir);
         for probe in PROBES {
-            if let Some(item) = (probe.item)(&dir, 4.0, &partition).unwrap() {
+            if let Some(item) =
+                (probe.item)(&dir, 4.0, &partition, &package_roots(&dir).unwrap()).unwrap()
+            {
                 assert_eq!(item.kind, probe.kind);
             }
         }
@@ -755,9 +810,8 @@ mod tests {
         let dir = tmp("nav-missing");
         fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
 
-        let item = navigability_anchor_item(&dir, &implicit(&dir))
-            .unwrap()
-            .expect("item");
+        let item =
+            navigability_anchor_item(&package_roots(&dir).unwrap(), &implicit(&dir)).expect("item");
         assert_eq!(item.tier, Tier::Tier3);
         assert_eq!(item.measured_cost.unit, "package roots");
         assert_eq!(item.measured_cost.value, 1);
@@ -769,9 +823,7 @@ mod tests {
         let dir = tmp("nav-present");
         fs::write(dir.join("README.md"), "# repo\n").unwrap();
 
-        assert!(navigability_anchor_item(&dir, &implicit(&dir))
-            .unwrap()
-            .is_none());
+        assert!(navigability_anchor_item(&package_roots(&dir).unwrap(), &implicit(&dir)).is_none());
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -787,9 +839,8 @@ mod tests {
         let plain = dir.join("docs");
         fs::create_dir_all(&plain).unwrap();
 
-        let item = navigability_anchor_item(&dir, &implicit(&dir))
-            .unwrap()
-            .expect("item");
+        let item =
+            navigability_anchor_item(&package_roots(&dir).unwrap(), &implicit(&dir)).expect("item");
         assert_eq!(
             item.measured_cost.value, 1,
             "only the manifest child counts"
@@ -1067,7 +1118,8 @@ mod tests {
         let dir = tmp("factory-integration");
         fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
 
-        let items = structure_items(&dir, 4.0, &implicit(&dir)).unwrap();
+        let items =
+            structure_items(&dir, 4.0, &implicit(&dir), &package_roots(&dir).unwrap()).unwrap();
         let kinds: Vec<FindingKind> = items.iter().map(|i| i.kind).collect();
         assert!(kinds.contains(&FindingKind::BuildDeterminism));
         assert!(kinds.contains(&FindingKind::DevEnvironmentDeclaration));
@@ -1086,9 +1138,8 @@ mod tests {
         fs::write(dir.join("crates/bar/README.md"), "# bar\n").unwrap();
         // Only crates/foo lacks a README: the finding is scoped to that member.
 
-        let item = navigability_anchor_item(&dir, &partition)
-            .unwrap()
-            .expect("item");
+        let item =
+            navigability_anchor_item(&package_roots(&dir).unwrap(), &partition).expect("item");
         assert_eq!(item.measured_cost.value, 1);
         assert_eq!(item.subtree.as_deref(), Some("crates/foo"));
         fs::remove_dir_all(&dir).ok();
@@ -1100,9 +1151,8 @@ mod tests {
         fs::write(dir.join("README.md"), "# root\n").unwrap();
         // Both members lack a README: no single subtree owns the finding.
 
-        let item = navigability_anchor_item(&dir, &partition)
-            .unwrap()
-            .expect("item");
+        let item =
+            navigability_anchor_item(&package_roots(&dir).unwrap(), &partition).expect("item");
         assert_eq!(item.measured_cost.value, 2);
         assert!(
             item.subtree.is_none(),
@@ -1118,9 +1168,8 @@ mod tests {
         // The repo root (outside every member) and crates/foo both lack a
         // README: a path outside all members blocks attribution.
 
-        let item = navigability_anchor_item(&dir, &partition)
-            .unwrap()
-            .expect("item");
+        let item =
+            navigability_anchor_item(&package_roots(&dir).unwrap(), &partition).expect("item");
         assert_eq!(item.measured_cost.value, 2);
         assert!(item.subtree.is_none(), "root site is outside every member");
         fs::remove_dir_all(&dir).ok();
@@ -1150,9 +1199,8 @@ mod tests {
         let dir = tmp("attr-implicit");
         fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
 
-        let item = navigability_anchor_item(&dir, &implicit(&dir))
-            .unwrap()
-            .expect("item");
+        let item =
+            navigability_anchor_item(&package_roots(&dir).unwrap(), &implicit(&dir)).expect("item");
         assert!(item.subtree.is_none());
         fs::remove_dir_all(&dir).ok();
     }

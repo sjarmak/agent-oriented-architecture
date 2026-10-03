@@ -96,14 +96,17 @@ const TEST_INVOCATION_MARKERS: &[&str] = &[
 /// marker check. Born advisory like its siblings; the audit reports only the
 /// count of unreachable roots.
 pub fn verification_sites(repo: &Path) -> Result<Vec<PathBuf>, AuditError> {
-    // A repo-global verification path is discoverable for every root at once.
+    verification_sites_among(repo, &package_roots(repo)?)
+}
+
+fn verification_sites_among(repo: &Path, roots: &[PathBuf]) -> Result<Vec<PathBuf>, AuditError> {
     if has_repo_global_verification(repo)? {
         return Ok(Vec::new());
     }
     let mut sites = Vec::new();
-    for root in package_roots(repo)? {
-        if !has_local_verification(&root)? {
-            sites.push(root);
+    for root in roots {
+        if !has_local_verification(root)? {
+            sites.push(root.clone());
         }
     }
     Ok(sites)
@@ -114,8 +117,9 @@ pub fn verification_sites(repo: &Path) -> Result<Vec<PathBuf>, AuditError> {
 pub(super) fn verification_reachability_item(
     repo: &Path,
     partition: &SubtreePartition,
+    package_roots: &[PathBuf],
 ) -> Result<Option<PunchItem>, AuditError> {
-    let sites = verification_sites(repo)?;
+    let sites = verification_sites_among(repo, package_roots)?;
     if sites.is_empty() {
         return Ok(None);
     }
@@ -528,9 +532,10 @@ mod tests {
         fs::write(dir.join("README.md"), "# repo\n").unwrap();
         fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
 
-        let item = verification_reachability_item(&dir, &implicit(&dir))
-            .unwrap()
-            .expect("item");
+        let item =
+            verification_reachability_item(&dir, &implicit(&dir), &package_roots(&dir).unwrap())
+                .unwrap()
+                .expect("item");
         assert_eq!(item.kind, FindingKind::VerificationReachability);
         assert_eq!(item.tier, Tier::Tier3);
         assert_eq!(item.measured_cost.unit, "package roots");
@@ -546,9 +551,13 @@ mod tests {
         fs::create_dir_all(dir.join("tests")).unwrap();
         fs::write(dir.join("tests").join("it.rs"), "#[test]\nfn t() {}\n").unwrap();
 
-        assert!(verification_reachability_item(&dir, &implicit(&dir))
-            .unwrap()
-            .is_none());
+        assert!(verification_reachability_item(
+            &dir,
+            &implicit(&dir),
+            &package_roots(&dir).unwrap()
+        )
+        .unwrap()
+        .is_none());
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -565,7 +574,7 @@ mod tests {
         .unwrap();
         fs::write(dir.join("crates/bar/lib.rs"), "pub fn f() {}\n").unwrap();
 
-        let item = verification_reachability_item(&dir, &partition)
+        let item = verification_reachability_item(&dir, &partition, &package_roots(&dir).unwrap())
             .unwrap()
             .expect("item");
         assert_eq!(item.measured_cost.value, 1);

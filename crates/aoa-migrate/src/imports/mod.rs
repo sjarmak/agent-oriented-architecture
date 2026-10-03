@@ -162,6 +162,7 @@ impl CodeFix for DeadImportFix {
                 coverage: Coverage::Skipped {
                     reason: self.adapter.ineligible_reason().to_string(),
                 },
+                warning: None,
             });
         }
 
@@ -183,6 +184,7 @@ impl CodeFix for DeadImportFix {
             coverage: Coverage::Examined {
                 count: subtraction.examined,
             },
+            warning: None,
         })
     }
 

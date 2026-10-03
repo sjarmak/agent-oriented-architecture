@@ -75,14 +75,17 @@ const CODEOWNERS_PATHS: &[&str] = &[".github/CODEOWNERS", "docs/CODEOWNERS"];
 /// traces still counts. Born advisory like its siblings; the audit reports only
 /// the count of roots with no discoverable rules.
 pub fn invariant_sites(repo: &Path) -> Result<Vec<PathBuf>, AuditError> {
-    // A repo-global rule source is discoverable for every root at once.
+    invariant_sites_among(repo, &package_roots(repo)?)
+}
+
+fn invariant_sites_among(repo: &Path, roots: &[PathBuf]) -> Result<Vec<PathBuf>, AuditError> {
     if has_repo_global_invariants(repo)? {
         return Ok(Vec::new());
     }
     let mut sites = Vec::new();
-    for root in package_roots(repo)? {
-        if !has_local_invariants(&root)? {
-            sites.push(root);
+    for root in roots {
+        if !has_local_invariants(root)? {
+            sites.push(root.clone());
         }
     }
     Ok(sites)
@@ -93,8 +96,9 @@ pub fn invariant_sites(repo: &Path) -> Result<Vec<PathBuf>, AuditError> {
 pub(super) fn invariant_discoverability_item(
     repo: &Path,
     partition: &SubtreePartition,
+    package_roots: &[PathBuf],
 ) -> Result<Option<PunchItem>, AuditError> {
-    let sites = invariant_sites(repo)?;
+    let sites = invariant_sites_among(repo, package_roots)?;
     if sites.is_empty() {
         return Ok(None);
     }
@@ -375,9 +379,10 @@ mod tests {
         fs::write(dir.join("README.md"), "# repo\n").unwrap();
         fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
 
-        let item = invariant_discoverability_item(&dir, &implicit(&dir))
-            .unwrap()
-            .expect("item");
+        let item =
+            invariant_discoverability_item(&dir, &implicit(&dir), &package_roots(&dir).unwrap())
+                .unwrap()
+                .expect("item");
         assert_eq!(item.kind, FindingKind::InvariantDiscoverability);
         assert_eq!(item.tier, Tier::Tier3);
         assert_eq!(item.measured_cost.unit, "package roots");
@@ -392,9 +397,13 @@ mod tests {
         fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
         fs::write(dir.join("AGENTS.md"), "# conventions\n").unwrap();
 
-        assert!(invariant_discoverability_item(&dir, &implicit(&dir))
-            .unwrap()
-            .is_none());
+        assert!(invariant_discoverability_item(
+            &dir,
+            &implicit(&dir),
+            &package_roots(&dir).unwrap()
+        )
+        .unwrap()
+        .is_none());
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -405,7 +414,7 @@ mod tests {
         // bar alone has no discoverable rules.
         fs::write(dir.join("crates/foo/rustfmt.toml"), "edition = \"2021\"\n").unwrap();
 
-        let item = invariant_discoverability_item(&dir, &partition)
+        let item = invariant_discoverability_item(&dir, &partition, &package_roots(&dir).unwrap())
             .unwrap()
             .expect("item");
         assert_eq!(item.measured_cost.value, 1);

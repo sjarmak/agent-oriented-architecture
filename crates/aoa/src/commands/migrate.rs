@@ -223,9 +223,13 @@ fn render_fix_reports(reports: &[FixReport]) -> String {
             } else {
                 "did not run".to_string()
             };
-            match &r.no_change_reason {
+            let line = match &r.no_change_reason {
                 Some(reason) => format!("\n[fix:{}] {coverage}: {reason}\n", r.fix_id),
                 None => format!("\n[fix:{}] {coverage}\n", r.fix_id),
+            };
+            match &r.warning {
+                Some(warning) => format!("{line}[fix:{}] warning: {warning}\n", r.fix_id),
+                None => line,
             }
         })
         .collect()

@@ -51,6 +51,6 @@ pub use punch::{
 pub use report::{exit_code, AuditReport};
 pub use structure::{
     invariant_sites, navigability_sites, package_roots, structure_measurements, verification_sites,
-    StructureMeasure,
+    PackageRoots, StructureMeasure,
 };
 pub use tier::{EnforcementPlane, Tier};

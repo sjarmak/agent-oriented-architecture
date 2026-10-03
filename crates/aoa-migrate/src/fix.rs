@@ -82,6 +82,7 @@ pub enum Coverage {
 pub struct FixRun {
     pub changes: Vec<PlannedChange>,
     pub coverage: Coverage,
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -92,6 +93,7 @@ pub struct FixReport {
     pub examined_unit: String,
     pub changes: usize,
     pub no_change_reason: Option<String>,
+    pub warning: Option<String>,
 }
 
 impl FixReport {
@@ -113,6 +115,7 @@ impl FixReport {
             examined_unit: unit.to_string(),
             changes: run.changes.len(),
             no_change_reason: run.changes.is_empty().then_some(idle_reason),
+            warning: run.warning.clone(),
         }
     }
 }
@@ -215,8 +218,9 @@ impl CodeFix for NavigabilityAnchorFix {
     }
 
     fn plan(&self, repo: &Path) -> Result<FixRun, MigrateError> {
-        let examined = aoa_audit::package_roots(repo)?.len();
-        let mut sites = aoa_audit::navigability_sites(repo)?;
+        let package_roots = aoa_audit::PackageRoots::discover(repo)?;
+        let examined = package_roots.roots.len();
+        let mut sites = package_roots.navigability_sites();
         sites.sort();
 
         let changes = sites
@@ -233,6 +237,7 @@ impl CodeFix for NavigabilityAnchorFix {
         Ok(FixRun {
             changes,
             coverage: Coverage::Examined { count: examined },
+            warning: package_roots.warning(),
         })
     }
 }

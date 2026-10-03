@@ -196,3 +196,20 @@ fn a_malformed_member_declaration_keeps_conventional_roots_and_warns() {
         .expect("the member discovery failure must be surfaced");
     assert!(warning.contains("settings.gradle"), "{warning}");
 }
+
+#[test]
+fn a_malformed_manifest_keeps_the_members_other_ecosystems_declare() {
+    let repo = repo_with_readme();
+    write(repo.path(), "package.json", "{ \"name\": \"x\", }");
+    write(repo.path(), "settings.gradle", "include ':services:api'\n");
+    write(repo.path(), "services/api/build.gradle", "");
+
+    assert_eq!(sites(repo.path()), paths(&["services/api"]));
+
+    let report = audit(repo.path(), &AuditConfig::default()).unwrap();
+    let warning = report
+        .subtree_discovery_warning
+        .as_deref()
+        .expect("the member discovery failure must be surfaced");
+    assert!(warning.contains("package.json"), "{warning}");
+}

@@ -33,7 +33,8 @@ pub use record::{compute_metrics, MetricRecord};
 pub use retrieval::{compute_retrieval_locality, RetrievalLocality};
 pub use scoped::{compute_subtree_metrics, SubtreeMetrics};
 pub use subtree::{
-    declared_member_dirs, discover_partition, SubtreeError, SubtreePartition, WorkspaceSource,
+    declared_members, discover_partition, DeclaredMembers, SubtreeError, SubtreePartition,
+    WorkspaceSource,
 };
 pub use trace_locality::{
     compute_trace_convention_inputs, match_repo_relative, trace_footprint, TraceConventionInputs,

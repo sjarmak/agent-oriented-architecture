@@ -95,3 +95,28 @@ fn every_selected_fix_gets_a_report_in_selection_order() {
     let ids: Vec<&str> = plan.reports.iter().map(|r| r.fix_id.as_str()).collect();
     assert_eq!(ids, ["navigability-anchor", "dead-imports"]);
 }
+
+#[test]
+fn a_malformed_workspace_manifest_is_reported_on_the_navigability_fix() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("README.md"), "# repo\n").unwrap();
+    fs::write(dir.path().join("settings.gradle"), "include '../outside'\n").unwrap();
+
+    let plan = MigrationPlan::build(dir.path(), &[&NavigabilityAnchorFix]).unwrap();
+
+    let warning = only_report(&plan)
+        .warning
+        .as_deref()
+        .expect("the member discovery failure must be surfaced");
+    assert!(warning.contains("settings.gradle"), "{warning}");
+}
+
+#[test]
+fn a_repo_with_readable_manifests_reports_no_warning() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("README.md"), "# repo\n").unwrap();
+
+    let plan = MigrationPlan::build(dir.path(), &[&NavigabilityAnchorFix]).unwrap();
+
+    assert_eq!(only_report(&plan).warning, None);
+}

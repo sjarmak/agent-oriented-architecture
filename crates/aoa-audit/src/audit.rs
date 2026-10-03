@@ -5,8 +5,8 @@ use std::time::SystemTime;
 use aoa_budget::{count_budget, resolve_closure, Config, DEFAULT_CONTEXT_CEILING};
 use aoa_construct::BehavioralSignal;
 use aoa_metrics::{
-    compute_metrics, declared_member_dirs, discover_partition, IndexQuality, MetricInput,
-    MetricRecord, SubtreePartition, SymbolGraph, TransformMap,
+    compute_metrics, discover_partition, IndexQuality, MetricInput, MetricRecord, SubtreePartition,
+    SymbolGraph, TransformMap,
 };
 use aoa_trace::Trace;
 use serde::{Deserialize, Serialize};
@@ -16,7 +16,7 @@ use crate::liveness::{enforcement_liveness, EnforcementLiveness};
 use crate::planes::missing_planes;
 use crate::punch::{rank, FindingKind, MeasuredCost, PunchItem};
 use crate::report::AuditReport;
-use crate::structure::structure_items;
+use crate::structure::{structure_items, PackageRoots};
 use crate::tier::{EnforcementPlane, Tier};
 
 /// The reference encoding used for the context-budget probe. o200k_base loads
@@ -163,14 +163,8 @@ pub fn audit(repo: &Path, cfg: &AuditConfig) -> Result<AuditReport, AuditError> 
             )),
         ),
     };
-    let subtree_discovery_warning = subtree_discovery_warning.or_else(|| {
-        declared_member_dirs(repo).err().map(|e| {
-            format!(
-                "workspace member discovery failed ({e}); package roots are counted from \
-                 conventional directories only"
-            )
-        })
-    });
+    let package_roots = PackageRoots::discover(repo)?;
+    let subtree_discovery_warning = subtree_discovery_warning.or_else(|| package_roots.warning());
 
     if let Some(item) = context_budget_item(repo, cfg)? {
         items.push(item);
@@ -180,7 +174,12 @@ pub fn audit(repo: &Path, cfg: &AuditConfig) -> Result<AuditReport, AuditError> 
     }
     let liveness = enforcement_liveness(repo, cfg.enforcement_since);
     items.extend(plane_items(repo, &liveness));
-    items.extend(structure_items(repo, cfg.size_outlier_k, &partition)?);
+    items.extend(structure_items(
+        repo,
+        cfg.size_outlier_k,
+        &partition,
+        &package_roots.roots,
+    )?);
 
     rank(&mut items);
     Ok(AuditReport {
