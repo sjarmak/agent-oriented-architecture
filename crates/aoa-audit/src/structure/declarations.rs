@@ -89,7 +89,7 @@ const TASK_DISCOVERY_SURFACES: &[&str] = &[
 /// probe asks one purely structural question (does the repo *declare* this
 /// convention at all), never which files are generated — that classification is
 /// a semantic judgment outside the audit's mechanical contract.
-const LINGUIST_GENERATED_ATTR: &str = "linguist-generated";
+pub(super) const LINGUIST_GENERATED_ATTR: &str = "linguist-generated";
 
 /// The well-known write-boundary declaration surfaces the write-safety probe
 /// looks for, grouped by *kind*. Each inner slice is one kind, present if any of

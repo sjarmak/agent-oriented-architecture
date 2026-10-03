@@ -88,10 +88,6 @@ impl ImportAdapter for RustImportAdapter {
 /// Distinguishes a failure to *invoke* the toolchain
 /// ([`ToolchainUnavailable`](MigrateError::ToolchainUnavailable)) from a successful
 /// invocation (whose diagnostics are classified and returned).
-fn is_rust_file(path: &Path) -> bool {
-    path.extension().is_some_and(|e| e == "rs")
-}
-
 fn run_cargo_check(workdir: &Path) -> Result<Vec<Value>, MigrateError> {
     let output = cargo_check_command(workdir).output().map_err(|source| {
         MigrateError::ToolchainUnavailable {
@@ -111,6 +107,10 @@ fn run_cargo_check(workdir: &Path) -> Result<Vec<Value>, MigrateError> {
     let diagnostics = compiler_messages(&stdout);
     classify_build(&diagnostics, &stderr, output.status.success())?;
     Ok(diagnostics)
+}
+
+fn is_rust_file(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == "rs")
 }
 
 fn cargo_check_command(workdir: &Path) -> Command {

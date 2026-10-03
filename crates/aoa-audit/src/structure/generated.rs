@@ -3,11 +3,11 @@ use std::path::{Path, PathBuf};
 
 use globset::{GlobBuilder, GlobMatcher};
 
+use super::declarations::LINGUIST_GENERATED_ATTR;
 use super::read_source_capped;
 use crate::error::AuditError;
 
 const ATTRIBUTES_FILE: &str = ".gitattributes";
-const LINGUIST_GENERATED_ATTR: &str = "linguist-generated";
 
 struct Rule {
     matcher: GlobMatcher,
