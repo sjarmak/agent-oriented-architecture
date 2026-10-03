@@ -118,22 +118,21 @@ impl EnforcementLiveness {
         }
     }
 
-    /// One line naming the state, for the human register. The silent state
-    /// shouts: it is the one an operator has been reading as healthy.
     pub(crate) fn missing_plane_note(&self) -> Option<&'static str> {
-        matches!(self, EnforcementLiveness::ForeignHooks).then_some(FOREIGN_REASON)
+        matches!(self, EnforcementLiveness::ForeignHooks).then_some(FOREIGN_HEADLINE)
     }
 
+    /// One line naming the state, for the human register. The silent state
+    /// shouts: it is the one an operator has been reading as healthy.
     #[must_use]
     pub fn render_line(&self) -> String {
         match self {
             EnforcementLiveness::NotInstalled => {
                 "enforcement plane: not installed (no runtime hook set)".to_string()
             }
-            EnforcementLiveness::ForeignHooks => format!(
-                "enforcement plane: agent hooks present, AOA enforcement not installed — \
-                 {FOREIGN_REASON}"
-            ),
+            EnforcementLiveness::ForeignHooks => {
+                format!("enforcement plane: {FOREIGN_HEADLINE} — {FOREIGN_REASON}")
+            }
             EnforcementLiveness::InstalledUnobserved => format!(
                 "enforcement plane: installed but NEVER OBSERVED RUNNING — {UNOBSERVED_REASON}; \
                  this repo is not known to be enforcing"
@@ -154,8 +153,10 @@ impl EnforcementLiveness {
 const UNOBSERVED_REASON: &str = "no .aoa/traces directory exists, so this tree \
                                  carries no enforcement telemetry to read";
 
-const FOREIGN_REASON: &str = "AOA's enforce hook set is not installed; .claude/settings.json \
-                              configures other agent hooks, which AOA does not observe";
+const FOREIGN_HEADLINE: &str = "agent hooks present, AOA enforcement not installed";
+
+const FOREIGN_REASON: &str = ".claude/settings.json configures hooks that are not AOA's enforce \
+                              hook set, and AOA does not observe them";
 
 /// What a liveness state contributes to the audit's punch-list.
 ///
@@ -593,9 +594,10 @@ mod tests {
         );
 
         assert_eq!(liveness.finding(), None);
-        assert!(liveness
-            .missing_plane_note()
-            .is_some_and(|note| note.contains("other agent hooks")));
+        assert_eq!(
+            liveness.missing_plane_note(),
+            Some("agent hooks present, AOA enforcement not installed")
+        );
         assert_eq!(EnforcementLiveness::NotInstalled.missing_plane_note(), None);
 
         let line = liveness.render_line();

@@ -365,8 +365,8 @@ fn a_foreign_hook_set_is_reported_apart_from_a_repo_with_no_hooks() {
     assert_eq!(foreign_items[0]["tier"], "tier-1");
     assert_eq!(
         foreign_items[0]["title"],
-        "missing enforcement plane: runtime hook (AOA's enforce hook set is not installed; \
-         .claude/settings.json configures other agent hooks, which AOA does not observe)"
+        "missing enforcement plane: runtime hook (agent hooks present, AOA enforcement not \
+         installed)"
     );
 
     let bare_items = runtime_plane_items(&bare_report);
@@ -399,7 +399,8 @@ fn a_foreign_hook_set_draws_no_stamp_warning_and_still_fails_the_tier1_gate() {
             "enforcement plane: agent hooks present, AOA enforcement not installed",
         ))
         .stdout(predicate::str::contains(
-            "missing enforcement plane: runtime hook (AOA's enforce hook set is not installed",
+            "missing enforcement plane: runtime hook (agent hooks present, AOA enforcement not \
+             installed)",
         ))
         .stdout(predicate::str::contains("enforce hook stamp").not());
 }
