@@ -1,6 +1,7 @@
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
-use aoa_budget::{count_budget, resolve_closure, Config};
+use aoa_budget::{count_budget, normalize_path, resolve_closure, Closure, Config};
 
 use crate::detectors::{self, LintedFile};
 use crate::error::LintError;
@@ -18,7 +19,14 @@ const LINT_BUDGET_CEILING: usize = usize::MAX;
 /// The closure resolved by aoa-budget defines WHICH files are linted: every file
 /// reachable from `root` is run through the mechanical detectors.
 pub fn lint_context(root: &Path, target_tokenizer: &str) -> Result<LintReport, LintError> {
-    let closure = resolve_closure(root)?;
+    lint_context_roots(&[root.to_path_buf()], target_tokenizer)
+}
+
+pub fn lint_context_roots(
+    roots: &[PathBuf],
+    target_tokenizer: &str,
+) -> Result<LintReport, LintError> {
+    let closure = merged_closure(roots)?;
     let budget = count_budget(
         &closure,
         target_tokenizer,
@@ -37,4 +45,21 @@ pub fn lint_context(root: &Path, target_tokenizer: &str) -> Result<LintReport, L
         .collect();
 
     Ok(LintReport { budget, findings })
+}
+
+fn merged_closure(roots: &[PathBuf]) -> Result<Closure, LintError> {
+    let first = roots.first().ok_or(LintError::NoRoots)?;
+    let mut seen = BTreeSet::new();
+    let mut files = Vec::new();
+    for root in roots {
+        for file in resolve_closure(root)?.files {
+            if seen.insert(file.path.clone()) {
+                files.push(file);
+            }
+        }
+    }
+    Ok(Closure {
+        root: normalize_path(first),
+        files,
+    })
 }

@@ -256,3 +256,127 @@ fn lint_context_human_renders_text() {
         .success()
         .stdout(predicate::str::contains("context lint"));
 }
+
+const LINT_DUPLICATED_HEADING: &str = "# Rules\n\nfirst\n\n# Rules\n\nsecond\n";
+
+fn lint_json(dir: &Path, args: &[&str]) -> Value {
+    let output = aoa()
+        .current_dir(dir)
+        .args(["lint-context", "--json"])
+        .args(args)
+        .output()
+        .expect("run");
+    assert!(
+        output.status.success(),
+        "lint-context failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("valid json")
+}
+
+fn json_strings(value: &Value) -> Vec<&str> {
+    value
+        .as_array()
+        .expect("array")
+        .iter()
+        .map(|entry| entry.as_str().expect("string"))
+        .collect()
+}
+
+fn finding_files(parsed: &Value) -> Vec<&str> {
+    parsed["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .map(|finding| finding["file"].as_str().expect("file"))
+        .collect()
+}
+
+#[test]
+fn lint_context_without_root_lints_a_claude_only_tree_with_nested_files() {
+    let dir = TempDir::new().expect("tempdir");
+    std::fs::write(dir.path().join("CLAUDE.md"), "# Root\n\nplain\n").unwrap();
+    std::fs::create_dir_all(dir.path().join("services/api")).unwrap();
+    std::fs::write(
+        dir.path().join("services/api/CLAUDE.md"),
+        LINT_DUPLICATED_HEADING,
+    )
+    .unwrap();
+
+    let parsed = lint_json(dir.path(), &[]);
+
+    assert_eq!(
+        json_strings(&parsed["roots"]),
+        ["CLAUDE.md", "services/api/CLAUDE.md"]
+    );
+    assert_eq!(finding_files(&parsed), ["services/api/CLAUDE.md"]);
+}
+
+#[test]
+fn lint_context_explicit_root_also_lints_nested_context_files() {
+    let dir = TempDir::new().expect("tempdir");
+    std::fs::write(dir.path().join("CLAUDE.md"), "# Root\n\nplain\n").unwrap();
+    std::fs::create_dir_all(dir.path().join("pkg")).unwrap();
+    std::fs::write(dir.path().join("pkg/AGENTS.md"), LINT_DUPLICATED_HEADING).unwrap();
+
+    let parsed = lint_json(dir.path(), &["--root", "./CLAUDE.md"]);
+
+    assert_eq!(
+        json_strings(&parsed["roots"]),
+        ["CLAUDE.md", "pkg/AGENTS.md"]
+    );
+    assert_eq!(finding_files(&parsed), ["pkg/AGENTS.md"]);
+}
+
+#[test]
+fn lint_context_human_reports_how_many_roots_were_linted() {
+    let dir = TempDir::new().expect("tempdir");
+    std::fs::write(dir.path().join("AGENTS.md"), "# Root\n").unwrap();
+    std::fs::create_dir_all(dir.path().join("pkg")).unwrap();
+    std::fs::write(dir.path().join("pkg/CLAUDE.md"), "# Pkg\n").unwrap();
+
+    aoa()
+        .current_dir(dir.path())
+        .arg("lint-context")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "context lint: 0 finding(s) across 2 context root(s)",
+        ));
+}
+
+#[test]
+fn lint_context_without_any_context_file_says_how_to_name_one() {
+    let dir = TempDir::new().expect("tempdir");
+    std::fs::write(dir.path().join("README.md"), "# Readme\n").unwrap();
+
+    aoa()
+        .current_dir(dir.path())
+        .arg("lint-context")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no AGENTS.md or CLAUDE.md found"))
+        .stderr(predicate::str::contains("--root"));
+}
+
+#[test]
+fn lint_context_missing_explicit_root_states_the_cause_once() {
+    let dir = TempDir::new().expect("tempdir");
+
+    let output = aoa()
+        .current_dir(dir.path())
+        .args(["lint-context", "--root", "AGENTS.md"])
+        .output()
+        .expect("run");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        stderr
+            .matches("failed to read context file AGENTS.md")
+            .count(),
+        1,
+        "{stderr}"
+    );
+    assert_eq!(stderr.matches("os error").count(), 1, "{stderr}");
+}

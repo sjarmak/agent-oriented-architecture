@@ -6,7 +6,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum BudgetError {
     /// A context file could not be read from disk.
-    #[error("failed to read context file {path}: {source}")]
+    #[error("failed to read context file {path}")]
     Io {
         path: PathBuf,
         #[source]

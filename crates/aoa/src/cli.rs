@@ -199,9 +199,11 @@ pub struct MigrateArgs {
 
 #[derive(Debug, Args)]
 pub struct LintArgs {
-    /// Root context document to resolve the closure from.
-    #[arg(long, default_value = "AGENTS.md")]
-    pub root: PathBuf,
+    /// Context document to lint, together with every AGENTS.md and CLAUDE.md
+    /// beneath its directory. Omitted: every AGENTS.md and CLAUDE.md beneath
+    /// the current directory.
+    #[arg(long)]
+    pub root: Option<PathBuf>,
 
     /// Restrict the reported findings to this set of changed files.
     #[arg(long, num_args = 1.., value_delimiter = ' ')]

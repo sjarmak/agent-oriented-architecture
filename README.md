@@ -28,8 +28,8 @@ aoa observe
 # 2. Read the repo and print a ranked, tiered punch-list with a measured cost per item.
 aoa audit
 
-# 3. Check that your agent context files (AGENTS.md and what they reference) fit a token budget.
-aoa lint-context --changed AGENTS.md
+# 3. Lint your agent context files: every AGENTS.md and CLAUDE.md in the tree, and what they reference.
+aoa lint-context
 
 # 4. Turn a recorded agent run into per-task metrics.
 aoa eval run --codeprobe-run path/to/run --tasks path/to/tasks
