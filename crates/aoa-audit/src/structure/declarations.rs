@@ -103,9 +103,15 @@ const LINGUIST_GENERATED_ATTR: &str = "linguist-generated";
 /// root, `.github/`, `docs/`); `.aoa/write-policy.toml` is the toolkit's own
 /// declared safe-write-zone surface (the same `.aoa/` namespace the enforcement
 /// planes probe).
-const WRITE_BOUNDARY_SURFACES: &[&[&str]] = &[
-    &["CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS"],
-    &[".aoa/write-policy.toml"],
+const WRITE_BOUNDARY_SURFACES: &[(&str, &[&str])] = &[
+    (
+        "CODEOWNERS",
+        &["CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS"],
+    ),
+    (
+        "AOA safe-write-zone policy (.aoa/write-policy.toml)",
+        &[".aoa/write-policy.toml"],
+    ),
 ];
 
 /// Whether the repo declares deterministic build inputs: any well-known
@@ -254,17 +260,19 @@ fn declares_linguist_generated(repo: &Path) -> Result<bool, AuditError> {
 /// only when every known surface is present. Born [`Tier::Tier3`]; infallible —
 /// every check is a fixed-path existence probe, so no IO error can arise.
 pub(super) fn write_safety_zone_item(repo: &Path) -> Option<PunchItem> {
-    let absent = write_boundary_absent_count(repo);
-    if absent == 0 {
+    let absent = absent_write_boundary_surfaces(repo);
+    if absent.is_empty() {
         return None;
     }
 
     Some(PunchItem {
-        title: "write-boundary declaration surfaces absent (CODEOWNERS / safe-write-zone policy)"
-            .to_string(),
+        title: format!(
+            "write-boundary declaration surfaces absent: {}",
+            absent.join(", ")
+        ),
         kind: FindingKind::WriteSafetyZone,
         tier: Tier::Tier3,
-        measured_cost: MeasuredCost::new(absent, "write-boundary surfaces absent"),
+        measured_cost: MeasuredCost::new(absent.len() as u64, "write-boundary surfaces absent"),
         plane: None,
         subtree: None,
     })
@@ -275,10 +283,15 @@ pub(super) fn write_safety_zone_item(repo: &Path) -> Option<PunchItem> {
 /// emits (as a punch item only when non-zero) and [`super::structure_measurements`]
 /// reports (including `0`).
 pub(super) fn write_boundary_absent_count(repo: &Path) -> u64 {
+    absent_write_boundary_surfaces(repo).len() as u64
+}
+
+fn absent_write_boundary_surfaces(repo: &Path) -> Vec<&'static str> {
     WRITE_BOUNDARY_SURFACES
         .iter()
-        .filter(|candidates| !candidates.iter().any(|rel| repo.join(rel).exists()))
-        .count() as u64
+        .filter(|(_, candidates)| !candidates.iter().any(|rel| repo.join(rel).exists()))
+        .map(|(surface, _)| *surface)
+        .collect()
 }
 
 /// The measured count of dependency-pinning lockfile families absent from
@@ -494,8 +507,12 @@ mod tests {
         assert_eq!(item.tier, Tier::Tier3);
         assert_eq!(item.kind, FindingKind::WriteSafetyZone);
         assert_eq!(item.measured_cost.unit, "write-boundary surfaces absent");
-        // Both known surface kinds (ownership map + safe-write policy) are absent.
         assert_eq!(item.measured_cost.value, 2);
+        assert_eq!(
+            item.title,
+            "write-boundary declaration surfaces absent: CODEOWNERS, \
+             AOA safe-write-zone policy (.aoa/write-policy.toml)"
+        );
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -533,6 +550,11 @@ mod tests {
 
         let item = write_safety_zone_item(&dir).expect("item");
         assert_eq!(item.measured_cost.value, 1);
+        assert_eq!(
+            item.title,
+            "write-boundary declaration surfaces absent: \
+             AOA safe-write-zone policy (.aoa/write-policy.toml)"
+        );
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -548,6 +570,10 @@ mod tests {
 
         let item = write_safety_zone_item(&dir).expect("item");
         assert_eq!(item.measured_cost.value, 1);
+        assert_eq!(
+            item.title,
+            "write-boundary declaration surfaces absent: CODEOWNERS"
+        );
         fs::remove_dir_all(&dir).ok();
     }
 

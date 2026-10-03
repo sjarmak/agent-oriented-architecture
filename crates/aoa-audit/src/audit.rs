@@ -336,15 +336,16 @@ fn mutation_surface_item(metrics: &[&MetricRecord]) -> Option<PunchItem> {
 /// Its tier comes from the liveness state rather than from the plane — see
 /// [`EnforcementLiveness::finding`] for why — which makes this the one punch
 /// item whose tier `EnforcementPlane::tier` does not decide.
-///
-/// A plane never draws both: `missing_planes` reports the runtime plane only
-/// when the hook set is absent, and liveness raises a finding only when it is
-/// present.
 fn plane_items(repo: &Path, liveness: &EnforcementLiveness) -> Vec<PunchItem> {
     let mut items: Vec<PunchItem> = missing_planes(repo)
         .into_iter()
         .map(|plane| PunchItem {
-            title: format!("missing enforcement plane: {}", plane.label()),
+            title: match liveness.missing_plane_note() {
+                Some(note) if plane == EnforcementPlane::RuntimeHook => {
+                    format!("missing enforcement plane: {} ({note})", plane.label())
+                }
+                _ => format!("missing enforcement plane: {}", plane.label()),
+            },
             kind: FindingKind::MissingPlane,
             tier: plane.tier(),
             measured_cost: MeasuredCost::new(1, "missing plane"),

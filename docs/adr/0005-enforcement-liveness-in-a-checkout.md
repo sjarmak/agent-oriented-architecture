@@ -130,7 +130,7 @@ of anything that writes `.aoa/`.
 
 ## Where this lives
 
-- `crates/aoa-audit/src/liveness.rs` — the four states, and
+- `crates/aoa-audit/src/liveness.rs` — the liveness states, and
   `EnforcementLiveness::finding`, which assigns the tier from the state.
 - `crates/aoa-audit/src/audit.rs`, `fn plane_items` — the one punch item whose
   tier comes from liveness rather than from the plane.

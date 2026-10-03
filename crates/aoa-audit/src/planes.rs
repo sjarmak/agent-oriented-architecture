@@ -4,7 +4,7 @@ use std::process::Command;
 use aoa_corpus::PRECOMMIT_HOOK_MARKERS;
 use serde_json::Value;
 
-use crate::hook_set::{read_settings, ENFORCE_HOOK_SET, ENFORCE_WRAPPER_REL};
+use crate::hook_set::{read_settings, AOA_SETTINGS_KEY, ENFORCE_HOOK_SET, ENFORCE_WRAPPER_REL};
 use crate::tier::EnforcementPlane;
 
 const CI_MARKERS: &[&str] = &[
@@ -24,7 +24,7 @@ const AMBIENT_REPOSITORY_ENV: [&str; 6] = [
 
 fn present(repo: &Path, plane: EnforcementPlane) -> bool {
     match plane {
-        EnforcementPlane::RuntimeHook => runtime_hook_present(repo),
+        EnforcementPlane::RuntimeHook => runtime_hooks(repo) == RuntimeHooks::Installed,
         EnforcementPlane::PreCommit => {
             any_exists(repo, PRECOMMIT_HOOK_MARKERS) || installed_pre_commit_hook(repo)
         }
@@ -62,26 +62,58 @@ fn installed_pre_commit_hook(repo: &Path) -> bool {
     !hook.is_empty() && repo.join(hook).is_file()
 }
 
-/// Whether Claude settings contain every AOA runtime enforcement hook.
-///
-/// Malformed, oversized, non-regular, and incomplete files are treated as a
-/// missing plane. The audit reports the resulting Tier-1 finding rather than
-/// failing its whole read-only pass on optional host configuration.
-///
-/// The event/verb set is [`ENFORCE_HOOK_SET`], the same declaration the installer
-/// writes from, so a hook added or moved on the writing side cannot leave this
-/// check looking for the previous shape.
-///
-/// Shared with [`crate::liveness`], which asks the follow-up question this one
-/// cannot answer: an installed hook set is not a running one. [`crate::hook_set`]
-/// asks the other one: an installed hook set is not necessarily *this binary's*.
-pub(crate) fn runtime_hook_present(repo: &Path) -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeHooks {
+    Installed,
+    ForeignOnly,
+    Missing,
+}
+
+pub(crate) fn runtime_hooks(repo: &Path) -> RuntimeHooks {
     let Ok(Some(settings)) = read_settings(repo) else {
-        return false;
+        return RuntimeHooks::Missing;
     };
-    ENFORCE_HOOK_SET
+    if ENFORCE_HOOK_SET
         .into_iter()
         .all(|(event, verb)| has_enforce_hook(&settings, event, verb))
+    {
+        return RuntimeHooks::Installed;
+    }
+    if carries_aoa_install(&settings) || hook_entries(&settings).next().is_none() {
+        return RuntimeHooks::Missing;
+    }
+    RuntimeHooks::ForeignOnly
+}
+
+pub(crate) fn carries_aoa_install(settings: &Value) -> bool {
+    settings.get(AOA_SETTINGS_KEY).is_some()
+        || hook_entries(settings).filter_map(command).any(|command| {
+            ENFORCE_HOOK_SET
+                .iter()
+                .any(|(_, verb)| is_enforce_command(command, verb))
+        })
+}
+
+fn hook_entries(settings: &Value) -> impl Iterator<Item = &Value> {
+    settings
+        .get("hooks")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|events| events.values())
+        .flat_map(event_entries)
+}
+
+fn event_entries(groups: &Value) -> impl Iterator<Item = &Value> {
+    groups
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|group| group.get("hooks").and_then(Value::as_array))
+        .flatten()
+}
+
+fn command(hook: &Value) -> Option<&str> {
+    hook.get("command").and_then(Value::as_str)
 }
 
 /// Does `event` carry a hook running AOA's enforcement for `verb`?
@@ -96,12 +128,9 @@ fn has_enforce_hook(settings: &Value, event: &str, verb: &str) -> bool {
     settings
         .get("hooks")
         .and_then(|hooks| hooks.get(event))
-        .and_then(Value::as_array)
         .into_iter()
-        .flatten()
-        .filter_map(|group| group.get("hooks").and_then(Value::as_array))
-        .flatten()
-        .filter_map(|hook| hook.get("command").and_then(Value::as_str))
+        .flat_map(event_entries)
+        .filter_map(command)
         .any(|command| is_enforce_command(command, verb))
 }
 
@@ -177,7 +206,7 @@ mod tests {
                 "PermissionDenied":[{"hooks":[{"command":"aoa enforce deny"}]}]
             }}"#,
         );
-        assert!(runtime_hook_present(repo.path()));
+        assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::Installed);
 
         settings(
             repo.path(),
@@ -186,8 +215,9 @@ mod tests {
                 {"command":"aoa enforce check"}
             ]}]}}"#,
         );
-        assert!(
-            !runtime_hook_present(repo.path()),
+        assert_eq!(
+            runtime_hooks(repo.path()),
+            RuntimeHooks::Missing,
             "a command under the wrong event cannot forge the plane"
         );
     }
@@ -211,7 +241,7 @@ mod tests {
                 "PermissionDenied":[{"hooks":[{"command":"\"${CLAUDE_PROJECT_DIR:-.}\"/.claude/hooks/aoa-enforce deny"}]}]
             }}"#,
         );
-        assert!(runtime_hook_present(repo.path()));
+        assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::Installed);
     }
 
     /// The reader must accept the command the writer actually composes, built
@@ -236,7 +266,7 @@ mod tests {
             repo.path(),
             &serde_json::json!({ "hooks": hooks }).to_string(),
         );
-        assert!(runtime_hook_present(repo.path()));
+        assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::Installed);
 
         // One verb's command must not satisfy another's, or a settings file
         // holding five copies of the same hook would read as the full set.
@@ -278,7 +308,7 @@ mod tests {
     fn malformed_or_oversized_settings_do_not_satisfy_the_plane() {
         let repo = tempfile::tempdir().unwrap();
         settings(repo.path(), "{");
-        assert!(!runtime_hook_present(repo.path()));
+        assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::Missing);
 
         settings(
             repo.path(),
@@ -287,6 +317,74 @@ mod tests {
                 "x".repeat(MAX_SETTINGS_BYTES as usize)
             ),
         );
-        assert!(!runtime_hook_present(repo.path()));
+        assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::Missing);
+    }
+
+    const FOREIGN_SETTINGS: &str = r#"{"hooks":{
+        "PreToolUse":[{"matcher":"Edit|Write","hooks":[
+            {"type":"command","command":"\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard.sh pre"}
+        ]}],
+        "SessionStart":[{"hooks":[{"type":"command","command":"echo session"}]}]
+    }}"#;
+
+    #[test]
+    fn hooks_that_are_all_somebody_elses_are_foreign_and_still_a_missing_plane() {
+        let repo = tempfile::tempdir().unwrap();
+        settings(repo.path(), FOREIGN_SETTINGS);
+
+        assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::ForeignOnly);
+        assert!(missing_planes(repo.path()).contains(&EnforcementPlane::RuntimeHook));
+
+        settings(
+            repo.path(),
+            r#"{"hooks":{"Stop":[{"hooks":[{"type":"prompt","prompt":"check the work"}]}]}}"#,
+        );
+        assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::ForeignOnly);
+    }
+
+    #[test]
+    fn a_stamped_install_whose_enforce_hooks_were_removed_is_not_foreign() {
+        let repo = tempfile::tempdir().unwrap();
+        settings(
+            repo.path(),
+            r#"{
+                "aoa":{"enforce_hook_set_version":3},
+                "hooks":{"PreToolUse":[{"hooks":[{"command":"./tools/guard.sh"}]}]}
+            }"#,
+        );
+
+        assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::Missing);
+    }
+
+    #[test]
+    fn a_repo_with_no_hook_command_at_all_is_missing_the_plane() {
+        let repo = tempfile::tempdir().unwrap();
+        assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::Missing);
+
+        for body in [
+            "{}",
+            r#"{"hooks":{}}"#,
+            r#"{"hooks":{"PreToolUse":[{"hooks":[]}]}}"#,
+        ] {
+            settings(repo.path(), body);
+            assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::Missing, "{body}");
+        }
+        assert!(missing_planes(repo.path()).contains(&EnforcementPlane::RuntimeHook));
+    }
+
+    #[test]
+    fn a_partial_enforce_set_beside_other_hooks_is_a_missing_plane_not_a_foreign_one() {
+        let repo = tempfile::tempdir().unwrap();
+        settings(
+            repo.path(),
+            r#"{"hooks":{
+                "PreToolUse":[{"hooks":[
+                    {"command":"aoa enforce check"},
+                    {"command":"./tools/guard.sh"}
+                ]}]
+            }}"#,
+        );
+
+        assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::Missing);
     }
 }

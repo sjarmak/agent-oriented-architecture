@@ -237,7 +237,12 @@ fn tracked_settings_json_matches_observe_enforce_output() {
 #[test]
 fn observe_reports_missing_and_stale_enforce_hook_stamps() {
     for (settings, expected) in [
-        (serde_json::json!({"hooks": {}}), "missing"),
+        (
+            serde_json::json!({
+                "hooks": {"PreToolUse": [{"hooks": [{"command": "aoa enforce check"}]}]}
+            }),
+            "missing",
+        ),
         (
             serde_json::json!({
                 "hooks": {},

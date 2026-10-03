@@ -9,17 +9,6 @@
 //! installed, every one invoking a binary on no session's PATH, `.aoa/traces/`
 //! never created — and nothing here or anywhere else said so (aoa-dpluh).
 //!
-//! So this module reports four distinct states, never two:
-//! [`EnforcementLiveness::NotInstalled`],
-//! [`EnforcementLiveness::InstalledUnobserved`],
-//! [`EnforcementLiveness::InstalledButSilent`], and
-//! [`EnforcementLiveness::Enforcing`]. Silence carries a [`Silence`] reason
-//! because the ways of being silent are different defects with different fixes:
-//! an empty `.aoa/traces` means the install ran and the hooks did not, and logs
-//! holding zero records mean a session opened one and wrote nothing into it.
-//! Collapsing those into one blank hands an operator a symptom with no
-//! direction.
-//!
 //! Silence is emphatically not a pass. [`crate::audit`] raises it as a Tier-1
 //! finding, the same rule the metrics side adopted after aoa-xo8y0: an absent
 //! measurement is missing evidence, not a benign zero.
@@ -50,7 +39,7 @@ use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 
 use crate::observe::TRACES_SUBDIR;
-use crate::planes::runtime_hook_present;
+use crate::planes::{runtime_hooks, RuntimeHooks};
 use crate::tier::Tier;
 
 /// The filename shape the enforcement hooks append to, one per session. Owned by
@@ -61,11 +50,6 @@ const LIVE_LOG_PREFIX: &str = "live-";
 const LIVE_LOG_EXTENSION: &str = ".jsonl";
 
 /// Whether this repository's runtime enforcement plane is producing records.
-///
-/// Four states, deliberately not a boolean: the pair that matters is
-/// `Enforcing` vs `InstalledButSilent`, a boolean "installed" answers neither,
-/// and `InstalledUnobserved` is the tree where the question has not been put to
-/// a plane at all.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub enum EnforcementLiveness {
@@ -77,6 +61,7 @@ pub enum EnforcementLiveness {
     /// read as enforcing.
     #[default]
     NotInstalled,
+    ForeignHooks,
     /// The hook set is installed and this tree holds no enforcement telemetry at
     /// all: `<repo>/.aoa/traces` does not exist. The module doc derives why that
     /// is the state of every clean checkout.
@@ -87,7 +72,9 @@ pub enum EnforcementLiveness {
     /// The hook set is installed, its telemetry directory exists, and no
     /// enforcement record reached the live log. The plane reads as present from
     /// every configuration surface and enforces nothing.
-    InstalledButSilent { silence: Silence },
+    InstalledButSilent {
+        silence: Silence,
+    },
     /// The hook set is installed and the live log holds records.
     Enforcing {
         /// Live logs contributing spans within the window.
@@ -113,7 +100,9 @@ impl EnforcementLiveness {
     #[must_use]
     pub(crate) fn finding(&self) -> Option<LivenessFinding> {
         match self {
-            EnforcementLiveness::NotInstalled | EnforcementLiveness::Enforcing { .. } => None,
+            EnforcementLiveness::NotInstalled
+            | EnforcementLiveness::ForeignHooks
+            | EnforcementLiveness::Enforcing { .. } => None,
             EnforcementLiveness::InstalledUnobserved => Some(LivenessFinding {
                 tier: Tier::Tier3,
                 headline: "installed but never observed running",
@@ -131,12 +120,20 @@ impl EnforcementLiveness {
 
     /// One line naming the state, for the human register. The silent state
     /// shouts: it is the one an operator has been reading as healthy.
+    pub(crate) fn missing_plane_note(&self) -> Option<&'static str> {
+        matches!(self, EnforcementLiveness::ForeignHooks).then_some(FOREIGN_REASON)
+    }
+
     #[must_use]
     pub fn render_line(&self) -> String {
         match self {
             EnforcementLiveness::NotInstalled => {
                 "enforcement plane: not installed (no runtime hook set)".to_string()
             }
+            EnforcementLiveness::ForeignHooks => format!(
+                "enforcement plane: agent hooks present, AOA enforcement not installed — \
+                 {FOREIGN_REASON}"
+            ),
             EnforcementLiveness::InstalledUnobserved => format!(
                 "enforcement plane: installed but NEVER OBSERVED RUNNING — {UNOBSERVED_REASON}; \
                  this repo is not known to be enforcing"
@@ -156,6 +153,9 @@ impl EnforcementLiveness {
 /// title and the human line cannot describe the same state differently.
 const UNOBSERVED_REASON: &str = "no .aoa/traces directory exists, so this tree \
                                  carries no enforcement telemetry to read";
+
+const FOREIGN_REASON: &str = "AOA's enforce hook set is not installed; .claude/settings.json \
+                              configures other agent hooks, which AOA does not observe";
 
 /// What a liveness state contributes to the audit's punch-list.
 ///
@@ -224,8 +224,10 @@ impl Silence {
 /// nothing even if it holds records.
 #[must_use]
 pub fn enforcement_liveness(repo: &Path, since: Option<SystemTime>) -> EnforcementLiveness {
-    if !runtime_hook_present(repo) {
-        return EnforcementLiveness::NotInstalled;
+    match runtime_hooks(repo) {
+        RuntimeHooks::Missing => return EnforcementLiveness::NotInstalled,
+        RuntimeHooks::ForeignOnly => return EnforcementLiveness::ForeignHooks,
+        RuntimeHooks::Installed => {}
     }
     let silent = |silence| EnforcementLiveness::InstalledButSilent { silence };
 
@@ -570,6 +572,36 @@ mod tests {
             }
             .finding(),
             None
+        );
+    }
+
+    #[test]
+    fn foreign_hooks_are_a_state_of_their_own_and_annotate_the_missing_plane() {
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(repo.path().join(".claude")).unwrap();
+        std::fs::write(
+            repo.path().join(".claude/settings.json"),
+            r#"{"hooks":{"PreToolUse":[{"hooks":[{"command":"./tools/guard.sh"}]}]}}"#,
+        )
+        .unwrap();
+
+        let liveness = enforcement_liveness(repo.path(), None);
+        assert_eq!(liveness, EnforcementLiveness::ForeignHooks);
+        assert_eq!(
+            serde_json::to_value(&liveness).unwrap(),
+            serde_json::json!({"state": "foreign-hooks"})
+        );
+
+        assert_eq!(liveness.finding(), None);
+        assert!(liveness
+            .missing_plane_note()
+            .is_some_and(|note| note.contains("other agent hooks")));
+        assert_eq!(EnforcementLiveness::NotInstalled.missing_plane_note(), None);
+
+        let line = liveness.render_line();
+        assert!(
+            line.contains("agent hooks present, AOA enforcement not installed"),
+            "{line}"
         );
     }
 

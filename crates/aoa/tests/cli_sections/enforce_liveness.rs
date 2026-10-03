@@ -319,3 +319,114 @@ fn deleting_the_telemetry_directory_downgrades_a_measured_silence() {
         .assert()
         .success();
 }
+
+fn foreign_hook_set(repo: &Path) {
+    std::fs::create_dir_all(repo.join(".claude/hooks")).unwrap();
+    std::fs::write(repo.join(".claude/hooks/guard.sh"), "#!/bin/sh\n").unwrap();
+    std::fs::write(
+        repo.join(".claude/settings.json"),
+        r#"{"hooks":{
+            "PreToolUse":[{"matcher":"Edit|Write","hooks":[
+                {"type":"command","command":"\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard.sh pre"}
+            ]}],
+            "PostToolUse":[{"hooks":[
+                {"type":"command","command":"\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard.sh post"}
+            ]}],
+            "SessionStart":[{"hooks":[{"type":"command","command":"echo session"}]}]
+        }}"#,
+    )
+    .unwrap();
+}
+
+fn runtime_plane_items(report: &Value) -> Vec<&Value> {
+    report["items"]
+        .as_array()
+        .expect("items array")
+        .iter()
+        .filter(|item| item["plane"] == "runtime-hook")
+        .collect()
+}
+
+#[test]
+fn a_foreign_hook_set_is_reported_apart_from_a_repo_with_no_hooks() {
+    let foreign = TempDir::new().unwrap();
+    foreign_hook_set(foreign.path());
+    let bare = TempDir::new().unwrap();
+
+    let foreign_report = audit_json(foreign.path());
+    let bare_report = audit_json(bare.path());
+
+    assert_eq!(liveness_state(&foreign_report), "foreign-hooks");
+    assert_eq!(liveness_state(&bare_report), "not-installed");
+
+    let foreign_items = runtime_plane_items(&foreign_report);
+    assert_eq!(foreign_items.len(), 1, "{foreign_report}");
+    assert_eq!(foreign_items[0]["kind"], "missing_plane");
+    assert_eq!(foreign_items[0]["tier"], "tier-1");
+    assert_eq!(
+        foreign_items[0]["title"],
+        "missing enforcement plane: runtime hook (AOA's enforce hook set is not installed; \
+         .claude/settings.json configures other agent hooks, which AOA does not observe)"
+    );
+
+    let bare_items = runtime_plane_items(&bare_report);
+    assert_eq!(bare_items.len(), 1, "{bare_report}");
+    assert_eq!(bare_items[0]["tier"], "tier-1");
+    assert_eq!(
+        bare_items[0]["title"],
+        "missing enforcement plane: runtime hook"
+    );
+}
+
+#[test]
+fn a_foreign_hook_set_draws_no_stamp_warning_and_still_fails_the_tier1_gate() {
+    let repo = TempDir::new().unwrap();
+    foreign_hook_set(repo.path());
+    present_ci_plane(repo.path());
+
+    let report = audit_json(repo.path());
+    assert!(
+        report.get("enforce_hook_warning").is_none(),
+        "a settings file AOA never wrote has no AOA stamp to be missing: {report}"
+    );
+
+    aoa_stdin()
+        .args(["audit", "--fail-on", "tier1", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "enforcement plane: agent hooks present, AOA enforcement not installed",
+        ))
+        .stdout(predicate::str::contains(
+            "missing enforcement plane: runtime hook (AOA's enforce hook set is not installed",
+        ))
+        .stdout(predicate::str::contains("enforce hook stamp").not());
+}
+
+#[test]
+fn a_codeowners_only_repo_is_told_which_write_boundary_surface_is_absent() {
+    let repo = TempDir::new().unwrap();
+    std::fs::create_dir_all(repo.path().join(".github")).unwrap();
+    std::fs::write(repo.path().join(".github/CODEOWNERS"), "* @owner\n").unwrap();
+
+    let report = audit_json(repo.path());
+    let item = report["items"]
+        .as_array()
+        .expect("items array")
+        .iter()
+        .find(|item| item["kind"] == "write_safety_zone")
+        .unwrap_or_else(|| panic!("no write-boundary item: {report}"));
+
+    assert_eq!(item["measured_cost"]["value"], 1);
+    let title = item["title"].as_str().unwrap();
+    assert!(title.contains(".aoa/write-policy.toml"), "{title}");
+    assert!(!title.contains("CODEOWNERS"), "{title}");
+
+    aoa_stdin()
+        .args(["audit", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(title.to_string()));
+}

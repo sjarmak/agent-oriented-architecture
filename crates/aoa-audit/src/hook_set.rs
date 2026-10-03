@@ -256,7 +256,8 @@ pub fn hook_set_defect(repo: &Path) -> Option<HookSetDefect> {
         .and_then(Value::as_object)
         .and_then(|aoa| aoa.get(HOOK_VERSION_KEY))
     else {
-        return Some(HookSetDefect::StampMissing);
+        return crate::planes::carries_aoa_install(&settings)
+            .then_some(HookSetDefect::StampMissing);
     };
     let Some(installed) = version.as_u64() else {
         return Some(HookSetDefect::StampMalformed);
@@ -361,6 +362,18 @@ mod tests {
     }
 
     #[test]
+    fn settings_aoa_never_wrote_have_no_stamp_to_be_missing() {
+        let repo = tempfile::tempdir().unwrap();
+        for body in [
+            r#"{"hooks":{}}"#,
+            r#"{"hooks":{"PreToolUse":[{"hooks":[{"command":"./tools/guard.sh"}]}]}}"#,
+        ] {
+            write_settings(repo.path(), body);
+            assert_eq!(hook_set_defect(repo.path()), None, "{body}");
+        }
+    }
+
+    #[test]
     fn an_unusable_settings_file_is_reported_rather_than_read_as_absent() {
         let repo = tempfile::tempdir().unwrap();
         write_settings(repo.path(), "{");
@@ -385,7 +398,16 @@ mod tests {
     #[test]
     fn a_settings_file_with_no_usable_stamp_says_which_way_it_is_wrong() {
         let repo = tempfile::tempdir().unwrap();
-        write_settings(repo.path(), r#"{"hooks":{}}"#);
+        write_settings(
+            repo.path(),
+            r#"{"hooks":{"PreToolUse":[{"hooks":[{"command":"aoa enforce check"}]}]}}"#,
+        );
+        assert_eq!(
+            hook_set_defect(repo.path()),
+            Some(HookSetDefect::StampMissing)
+        );
+
+        write_settings(repo.path(), r#"{"aoa":{}}"#);
         assert_eq!(
             hook_set_defect(repo.path()),
             Some(HookSetDefect::StampMissing)

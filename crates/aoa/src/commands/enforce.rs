@@ -976,6 +976,11 @@ mod tests {
             "the audit must recognise the hook set this installer just wrote; \
              reading a real install as not-installed is the drift this contract exists to stop"
         );
+        assert_ne!(
+            aoa_audit::enforcement_liveness(repo.path(), None),
+            aoa_audit::EnforcementLiveness::ForeignHooks,
+            "a real install must not read as somebody else's hook set"
+        );
         assert_eq!(
             aoa_audit::hook_set_defect(repo.path()),
             None,
