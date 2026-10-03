@@ -25,7 +25,9 @@ pub fn escape_terminal(s: &str) -> EscapeDebug<'_> {
 /// Print a serializable value as pretty JSON to stdout (the agent register).
 pub fn print_json<T: Serialize>(value: &T) -> Result<()> {
     let rendered = serde_json::to_string_pretty(value)?;
-    println!("{rendered}");
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    tolerate_departed_reader(writeln!(out, "{rendered}"))?;
     Ok(())
 }
 
@@ -34,21 +36,28 @@ pub fn print_json<T: Serialize>(value: &T) -> Result<()> {
 pub fn print_human(text: &str) {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
-    write_human(&mut out, text).expect("failed to write human output");
+    tolerate_departed_reader(write_human(&mut out, text)).expect("failed to write human output");
 }
 
 /// Print human-facing text to stderr through the same terminal-safe boundary.
 pub fn eprint_human(text: &str) {
     let stderr = std::io::stderr();
     let mut out = stderr.lock();
-    write_terminal(&mut out, text, false).expect("failed to write human error output");
-    writeln!(out).expect("failed to terminate human error output");
+    tolerate_departed_reader(write_terminal(&mut out, text, false).and_then(|()| writeln!(out)))
+        .expect("failed to write human error output");
 }
 
 /// Print an anyhow error chain to stderr without allowing terminal controls
 /// carried by any source error to survive the boundary.
 pub fn eprint_error(error: &anyhow::Error) {
     eprint_human(&format!("error: {error:#}"));
+}
+
+fn tolerate_departed_reader(written: std::io::Result<()>) -> std::io::Result<()> {
+    match written {
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        other => other,
+    }
 }
 
 fn write_human(mut out: impl std::io::Write, text: &str) -> std::io::Result<()> {
@@ -96,6 +105,13 @@ mod tests {
     #[test]
     fn escape_terminal_leaves_ordinary_text_readable() {
         assert_eq!(escape_terminal("repo/pkg-1.2").to_string(), "repo/pkg-1.2");
+    }
+
+    #[test]
+    fn a_write_failure_other_than_a_departed_reader_is_still_reported() {
+        let full = std::io::Error::from(std::io::ErrorKind::StorageFull);
+        let reported = tolerate_departed_reader(Err(full)).expect_err("still an error");
+        assert_eq!(reported.kind(), std::io::ErrorKind::StorageFull);
     }
 
     #[test]

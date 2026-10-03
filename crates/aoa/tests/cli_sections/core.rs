@@ -145,3 +145,63 @@ fn compare_json_carries_gap_delta() {
     assert!(parsed.get("gap_delta").is_some());
     assert_eq!(parsed["label"], "good");
 }
+
+#[cfg(unix)]
+fn pipe_whose_reader_already_left() -> std::io::PipeWriter {
+    let (reader, writer) = std::io::pipe().expect("pipe");
+    drop(reader);
+    writer
+}
+
+#[cfg(unix)]
+fn clean_lint_root(dir: &TempDir) -> PathBuf {
+    let root = dir.path().join("AGENTS.md");
+    std::fs::write(&root, "# Root\n\nplain doc with no smells\n").unwrap();
+    root
+}
+
+#[cfg(unix)]
+#[test]
+fn human_output_to_a_closed_stdout_exits_with_the_command_verdict_and_no_panic() {
+    let dir = TempDir::new().expect("tempdir");
+    let output = aoa()
+        .args(["lint-context", "--root"])
+        .arg(clean_lint_root(&dir))
+        .stdout(pipe_whose_reader_already_left())
+        .output()
+        .expect("run");
+
+    let stderr = String::from_utf8(output.stderr).expect("stderr is UTF-8");
+    assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
+    assert_eq!(stderr, "");
+}
+
+#[cfg(unix)]
+#[test]
+fn json_output_to_a_closed_stdout_exits_with_the_command_verdict_and_no_panic() {
+    let dir = TempDir::new().expect("tempdir");
+    let output = aoa()
+        .args(["lint-context", "--json", "--root"])
+        .arg(clean_lint_root(&dir))
+        .stdout(pipe_whose_reader_already_left())
+        .output()
+        .expect("run");
+
+    let stderr = String::from_utf8(output.stderr).expect("stderr is UTF-8");
+    assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
+    assert_eq!(stderr, "");
+}
+
+#[cfg(unix)]
+#[test]
+fn error_output_to_a_closed_stderr_keeps_the_failure_exit_code() {
+    let dir = TempDir::new().expect("tempdir");
+    let status = aoa()
+        .args(["audit", "--repo"])
+        .arg(dir.path().join("absent"))
+        .stderr(pipe_whose_reader_already_left())
+        .status()
+        .expect("run");
+
+    assert_eq!(status.code(), Some(1));
+}
