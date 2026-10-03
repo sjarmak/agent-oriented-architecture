@@ -1,7 +1,7 @@
 use super::eval_run::{run_dir, tasks_dir};
 use super::*;
 
-fn repo_with(typescript_files: usize, python_files: usize) -> TempDir {
+pub(super) fn repo_with(typescript_files: usize, python_files: usize) -> TempDir {
     let repo = TempDir::new().expect("temp repo");
     std::fs::create_dir_all(repo.path().join("src")).expect("src dir");
     std::fs::create_dir_all(repo.path().join("tools")).expect("tools dir");

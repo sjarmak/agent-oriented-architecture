@@ -67,11 +67,18 @@ impl GraphCoverage {
         format!("{indexed}; not indexed: {skipped}")
     }
 
+    #[must_use]
+    pub fn unindexed_notice(&self) -> String {
+        format!(
+            "best-effort graph indexes {INDEXED_LANGUAGE} only: {}",
+            self.summary()
+        )
+    }
+
     pub(crate) fn degrade_reason(&self) -> String {
         format!(
-            "best-effort graph indexes {INDEXED_LANGUAGE} only: {}; \
-             pass --scip-index <file> for a weighted graph",
-            self.summary()
+            "{}; pass --scip-index <file> for a weighted graph",
+            self.unindexed_notice()
         )
     }
 }
@@ -152,6 +159,15 @@ mod tests {
         assert!(reason.contains("0 of 5 source files indexed"), "{reason}");
         assert!(reason.contains("TypeScript (5 files)"), "{reason}");
         assert!(reason.contains("--scip-index"), "{reason}");
+    }
+
+    #[test]
+    fn unindexed_notice_recommends_no_flag() {
+        assert_eq!(
+            coverage(0, &[("TypeScript", 5)]).unindexed_notice(),
+            "best-effort graph indexes Python only: 0 of 5 source files indexed; \
+             not indexed: TypeScript (5 files)"
+        );
     }
 
     #[test]

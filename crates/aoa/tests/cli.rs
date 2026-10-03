@@ -54,5 +54,7 @@ mod ownership;
 mod policy_observe;
 #[path = "cli_sections/r0b.rs"]
 mod r0b;
+#[path = "cli_sections/readiness_graph_coverage.rs"]
+mod readiness_graph_coverage;
 #[path = "cli_sections/report.rs"]
 mod report;

@@ -5,13 +5,16 @@ use serde::Serialize;
 
 use crate::cli::AuditArgs;
 use crate::commands::enforce::enforce_hook_warning;
-use crate::commands::{pipeline, self_audit};
+use crate::commands::pipeline::{self, Audited, GraphNotice};
+use crate::commands::self_audit;
 use crate::output::{print_human, print_json};
 
 #[derive(Serialize)]
 struct AuditView<'a> {
     #[serde(flatten)]
     report: &'a aoa_audit::AuditReport,
+    #[serde(flatten)]
+    graph: &'a GraphNotice,
     #[serde(skip_serializing_if = "Option::is_none")]
     enforce_hook_warning: Option<&'a str>,
 }
@@ -27,16 +30,18 @@ pub fn run(args: &AuditArgs) -> Result<i32> {
     let enforcement_since = args
         .enforcement_window_secs
         .map(|secs| SystemTime::now() - Duration::from_secs(secs));
-    let report = pipeline::audited(&args.repo, enforcement_since)?;
+    let Audited { report, graph } = pipeline::audited(&args.repo, enforcement_since)?;
     let hook_warning = enforce_hook_warning(&args.repo);
 
     if args.json {
         print_json(&AuditView {
             report: &report,
+            graph: &graph,
             enforce_hook_warning: hook_warning.as_deref(),
         })?;
     } else {
         let mut rendered = report.render_human();
+        rendered.push_str(&graph.render_human());
         if let Some(warning) = &hook_warning {
             rendered.push_str(&format!("warning: {warning}\n"));
         }

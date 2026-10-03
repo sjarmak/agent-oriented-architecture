@@ -125,8 +125,7 @@ fn report_and_audit_agree_on_findings_for_an_indexable_repo() {
     // comparison passes while `measured_cost` or `subtree` diverge, and
     // `subtree` is observable through this leg alone: `FindingRecommendation`
     // drops it, so the recommend-leg guard below cannot see it.
-    let from_audit = aoa_json(repo.path(), &["audit", "--json", "--repo"]);
-    // `audit --json` IS the AuditReport; `report --json` nests it under `audit`.
+    let from_audit = without_graph_notice(aoa_json(repo.path(), &["audit", "--json", "--repo"]));
     let mut report_view = aoa_json(repo.path(), &["report", "--json", "--repo"]);
     let from_report = report_view["audit"].take();
 
@@ -149,6 +148,16 @@ fn aoa_json(repo: &Path, args: &[&str]) -> Value {
     let output = aoa().args(args).arg(repo).output().expect("run");
     assert!(output.status.success(), "{args:?} failed: {output:?}");
     serde_json::from_slice(&output.stdout).expect("valid json")
+}
+
+fn without_graph_notice(mut standalone: Value) -> Value {
+    let fields = standalone.as_object_mut().expect("object");
+    assert!(
+        fields.remove("graph_coverage").is_some(),
+        "precondition: the standalone command states graph coverage"
+    );
+    fields.remove("graph_degrade_reason");
+    standalone
 }
 
 /// A repo with BOTH a sufficient held-out corpus and source the indexer can see
@@ -186,7 +195,8 @@ fn report_and_recommend_agree_on_recommendations() {
     // Assert the two surfaces agree for `repo`, and hand back the report view so
     // the preconditions below read it instead of re-running the command.
     let agreeing_report = |repo: &Path| -> Value {
-        let from_recommend = aoa_json(repo, &["recommend", "--json", "--repo"]);
+        let from_recommend =
+            without_graph_notice(aoa_json(repo, &["recommend", "--json", "--repo"]));
         let from_report = aoa_json(repo, &["report", "--json", "--repo"]);
         assert_eq!(
             from_report["recommendations"],

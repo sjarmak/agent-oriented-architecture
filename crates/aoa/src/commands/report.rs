@@ -30,7 +30,7 @@ use aoa_recommend::RecommendationReport;
 
 use crate::cli::ReportArgs;
 use crate::commands::fsutil::load_json_capped;
-use crate::commands::pipeline::{self, Readiness};
+use crate::commands::pipeline::{self, GraphNotice, Readiness};
 use crate::output::{escape_terminal, print_human, print_json};
 
 /// The filename `aoa falsify` writes by default, consulted under the repo root.
@@ -81,6 +81,8 @@ struct FalsificationSlice {
 #[derive(Debug, Serialize)]
 struct ReadinessView {
     audit: AuditReport,
+    #[serde(flatten)]
+    graph: GraphNotice,
     construct_validity: ConstructValidityReport,
     migrations: Vec<MigrationView>,
     recommendations: RecommendationReport,
@@ -96,6 +98,7 @@ pub fn run(args: &ReportArgs) -> Result<i32> {
     // drift from the surface it claims to agree with. See `commands::pipeline`.
     let Readiness {
         audit,
+        graph,
         determination,
         fixes,
         recommendations,
@@ -113,6 +116,7 @@ pub fn run(args: &ReportArgs) -> Result<i32> {
     let view = ReadinessView {
         migrate_pillar_live: pillar_live(&falsification),
         audit,
+        graph,
         construct_validity: determination,
         migrations,
         recommendations,
@@ -171,6 +175,7 @@ fn render_human(view: &ReadinessView, repo: &Path) -> String {
     let _ = writeln!(out, "migrate pillar: {}", render_pillar(view));
     let _ = writeln!(out, "\n== Audit punch-list ==");
     out.push_str(&view.audit.render_human());
+    out.push_str(&view.graph.render_human());
     let _ = writeln!(out, "\n== Construct validity (may a metric gate?) ==");
     out.push_str(&view.construct_validity.render_human());
     let _ = writeln!(out, "\n== Available migrations ==");

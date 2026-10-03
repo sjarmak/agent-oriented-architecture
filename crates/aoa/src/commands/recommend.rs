@@ -1,8 +1,17 @@
 use anyhow::Result;
+use serde::Serialize;
 
 use crate::cli::RecommendArgs;
-use crate::commands::pipeline::{self, Readiness};
+use crate::commands::pipeline::{self, GraphNotice, Readiness};
 use crate::output::{eprint_human, print_human, print_json};
+
+#[derive(Serialize)]
+struct RecommendView<'a> {
+    #[serde(flatten)]
+    report: &'a aoa_recommend::RecommendationReport,
+    #[serde(flatten)]
+    graph: &'a GraphNotice,
+}
 
 /// Join the audit punch-list, the R9c construct-validity determination, and the
 /// migration registry into per-finding recommendations, rendered in the requested
@@ -21,6 +30,7 @@ use crate::output::{eprint_human, print_human, print_json};
 pub fn run(args: &RecommendArgs) -> Result<i32> {
     let Readiness {
         audit,
+        graph,
         recommendations: report,
         ..
     } = pipeline::readiness(&args.repo)?;
@@ -33,9 +43,12 @@ pub fn run(args: &RecommendArgs) -> Result<i32> {
         eprint_human(&format!("warning: {warning}"));
     }
     if args.json {
-        print_json(&report)?;
+        print_json(&RecommendView {
+            report: &report,
+            graph: &graph,
+        })?;
     } else {
-        print_human(&report.render_human());
+        print_human(&(report.render_human() + &graph.render_human()));
     }
 
     Ok(0)

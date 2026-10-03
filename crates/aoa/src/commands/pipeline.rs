@@ -17,15 +17,61 @@
 //! `aoa-scip-graph` dependency and deliberately never acquires a graph — it
 //! scores one the caller supplies.
 
+use std::fmt::Write as _;
 use std::path::Path;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
+use serde::Serialize;
 
 use aoa_audit::AuditReport;
 use aoa_construct::ConstructValidityReport;
 use aoa_migrate::CodeFix;
 use aoa_recommend::{AvailableFix, RecommendationReport};
+use aoa_scip_graph::GraphCoverage;
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct GraphNotice {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    graph_coverage: Option<GraphCoverage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    graph_degrade_reason: Option<String>,
+}
+
+impl GraphNotice {
+    fn of(coverage: Option<GraphCoverage>) -> Self {
+        let graph_degrade_reason = coverage
+            .as_ref()
+            .filter(|coverage| coverage.is_negligible())
+            .map(|coverage| {
+                format!(
+                    "{}; live sessions are excluded as symbol_graph_missing \
+                     rather than scored against it",
+                    coverage.unindexed_notice()
+                )
+            });
+        Self {
+            graph_coverage: coverage,
+            graph_degrade_reason,
+        }
+    }
+
+    pub(crate) fn render_human(&self) -> String {
+        let mut out = String::new();
+        if let Some(coverage) = &self.graph_coverage {
+            let _ = writeln!(out, "graph coverage: {}", coverage.summary());
+        }
+        if let Some(reason) = &self.graph_degrade_reason {
+            let _ = writeln!(out, "warning: {reason}");
+        }
+        out
+    }
+}
+
+pub(crate) struct Audited {
+    pub(crate) report: AuditReport,
+    pub(crate) graph: GraphNotice,
+}
 
 /// The audit configuration measured from the repo itself: the defaults plus a
 /// best-effort symbol graph indexed from the repo's source. A repo the indexer
@@ -45,14 +91,21 @@ use aoa_recommend::{AvailableFix, RecommendationReport};
 fn repo_audit_config(
     repo: &Path,
     enforcement_since: Option<SystemTime>,
-) -> Result<aoa_audit::AuditConfig> {
+) -> Result<(aoa_audit::AuditConfig, GraphNotice)> {
     let indexed = aoa_scip_graph::index_best_effort(repo)
         .with_context(|| format!("failed to index {}", repo.display()))?;
-    Ok(aoa_audit::AuditConfig {
-        graph: indexed.graph,
+    let notice = GraphNotice::of(indexed.coverage);
+    let graph = if notice.graph_degrade_reason.is_some() {
+        aoa_scip_graph::degraded(None).graph
+    } else {
+        indexed.graph
+    };
+    let cfg = aoa_audit::AuditConfig {
+        graph,
         enforcement_since,
         ..aoa_audit::AuditConfig::default()
-    })
+    };
+    Ok((cfg, notice))
 }
 
 /// Audit `repo` through its own measured config — the prefix of the chain that
@@ -60,9 +113,11 @@ fn repo_audit_config(
 ///
 /// `enforcement_since` narrows the enforcement-liveness question to a recent
 /// window; `None` asks it over the whole history.
-pub(crate) fn audited(repo: &Path, enforcement_since: Option<SystemTime>) -> Result<AuditReport> {
-    let cfg = repo_audit_config(repo, enforcement_since)?;
-    aoa_audit::audit(repo, &cfg).with_context(|| format!("failed to audit {}", repo.display()))
+pub(crate) fn audited(repo: &Path, enforcement_since: Option<SystemTime>) -> Result<Audited> {
+    let (cfg, graph) = repo_audit_config(repo, enforcement_since)?;
+    let report = aoa_audit::audit(repo, &cfg)
+        .with_context(|| format!("failed to audit {}", repo.display()))?;
+    Ok(Audited { report, graph })
 }
 
 /// The full chain, as `recommend` and `report` both need it.
@@ -71,6 +126,7 @@ pub(crate) fn audited(repo: &Path, enforcement_since: Option<SystemTime>) -> Res
 /// so `#[derive(Debug)]` on `fixes` does not compile.
 pub(crate) struct Readiness {
     pub(crate) audit: AuditReport,
+    pub(crate) graph: GraphNotice,
     pub(crate) determination: ConstructValidityReport,
     /// The exact registry `recommendations` was joined against. Carried rather
     /// than re-fetched so a caller rendering the migration list cannot describe
@@ -89,12 +145,16 @@ pub(crate) struct Readiness {
 pub(crate) fn readiness(repo: &Path) -> Result<Readiness> {
     // The readiness view asks whether the plane has *ever* enforced; narrowing
     // to a window is a live-session question `aoa audit` owns.
-    let audit = audited(repo, None)?;
+    let Audited {
+        report: audit,
+        graph,
+    } = audited(repo, None)?;
     let determination = audit.determination();
     let fixes = aoa_migrate::all_fixes();
     let recommendations = aoa_recommend::recommend(&audit, &determination, &available(&fixes));
     Ok(Readiness {
         audit,
+        graph,
         determination,
         fixes,
         recommendations,
