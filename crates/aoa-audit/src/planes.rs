@@ -66,30 +66,37 @@ fn installed_pre_commit_hook(repo: &Path) -> bool {
             .common_dir
             .canonicalize()
             .is_ok_and(|common_dir| hook.starts_with(common_dir))
-            && registers_worktree(&location.git_dir, &git_dir));
+            && names_worktree(&location.git_dir, &repo));
     contained && std::fs::metadata(&hook).is_ok_and(|meta| meta.is_file() && is_executable(&meta))
 }
 
-fn registers_worktree(git_dir: &Path, worktree_git_file: &Path) -> bool {
-    let Ok(registered) = std::fs::read_to_string(git_dir.join("gitdir")) else {
-        return false;
+fn names_worktree(git_dir: &Path, repo: &Path) -> bool {
+    let resolves_to = |named: PathBuf, expected: &Path| {
+        named.canonicalize().is_ok_and(|named| {
+            expected
+                .canonicalize()
+                .is_ok_and(|expected| named == expected)
+        })
     };
-    match (
-        Path::new(registered.trim_end()).canonicalize(),
-        worktree_git_file.canonicalize(),
-    ) {
-        (Ok(registered), Ok(expected)) => registered == expected,
-        _ => false,
-    }
+    let linked_worktree = std::fs::read_to_string(git_dir.join("gitdir"))
+        .is_ok_and(|registered| resolves_to(registered.trim_end().into(), &repo.join(".git")));
+    linked_worktree
+        || configured_worktree(repo, git_dir)
+            .is_some_and(|worktree| resolves_to(git_dir.join(worktree), repo))
 }
 
-struct HookLocation {
-    hook: PathBuf,
-    common_dir: PathBuf,
-    git_dir: PathBuf,
+fn configured_worktree(repo: &Path, git_dir: &Path) -> Option<PathBuf> {
+    let output = git(repo)
+        .args(["config", "--file"])
+        .arg(git_dir.join("config"))
+        .args(["--get", "core.worktree"])
+        .output()
+        .ok()?;
+    let worktree = std::str::from_utf8(&output.stdout).ok()?.trim_end();
+    (output.status.success() && !worktree.is_empty()).then(|| PathBuf::from(worktree))
 }
 
-fn git_hook_location(repo: &Path) -> Option<HookLocation> {
+fn git(repo: &Path) -> Command {
     let mut command = Command::new("git");
     for variable in AMBIENT_REPOSITORY_ENV {
         command.env_remove(variable);
@@ -101,9 +108,18 @@ fn git_hook_location(repo: &Path) -> Option<HookLocation> {
     if let Some(parent) = repo.parent() {
         command.env("GIT_CEILING_DIRECTORIES", parent);
     }
-    let output = command
-        .arg("-C")
-        .arg(repo)
+    command.arg("-C").arg(repo);
+    command
+}
+
+struct HookLocation {
+    hook: PathBuf,
+    common_dir: PathBuf,
+    git_dir: PathBuf,
+}
+
+fn git_hook_location(repo: &Path) -> Option<HookLocation> {
+    let output = git(repo)
         .args([
             "rev-parse",
             "--git-common-dir",

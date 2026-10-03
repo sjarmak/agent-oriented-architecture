@@ -1266,6 +1266,35 @@ fn a_git_file_pointing_at_another_repository_does_not_borrow_its_hook() {
 }
 
 #[test]
+fn a_git_dir_outside_the_checkout_that_names_it_as_its_worktree_lends_its_hook() {
+    let repo = fixture_repo();
+    let git_dirs = tempfile::tempdir().expect("git dir parent");
+    let git_dir = git_dirs.path().join("module");
+    git(
+        repo.path(),
+        &[
+            "init",
+            "--quiet",
+            "--template=",
+            "--separate-git-dir",
+            git_dir.to_str().expect("utf-8 path"),
+        ],
+    );
+    write_hook(&git_dir.join("hooks/pre-commit"));
+    assert!(pre_commit_plane_missing(repo.path()));
+
+    git(
+        repo.path(),
+        &[
+            "config",
+            "core.worktree",
+            repo.path().to_str().expect("utf-8 path"),
+        ],
+    );
+    assert!(!pre_commit_plane_missing(repo.path()));
+}
+
+#[test]
 fn a_hook_under_core_hooks_path_satisfies_the_pre_commit_plane() {
     let repo = git_fixture_repo();
     git(repo.path(), &["config", "core.hooksPath", ".githooks"]);
