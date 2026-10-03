@@ -220,3 +220,41 @@ fn section_rules_still_apply_to_extensionless_context_files() {
         "expected the repeated heading in .cursorrules, got {duplicates:?}"
     );
 }
+
+#[test]
+fn nested_roots_share_the_directory_that_holds_them_all_as_their_boundary() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let outside = tempfile::TempDir::new().unwrap();
+    std::fs::write(outside.path().join("notes.md"), "elsewhere\n").unwrap();
+    std::fs::create_dir_all(dir.path().join("pkg")).unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(dir.path().join("docs/shared.md"), "shared\n").unwrap();
+    std::fs::write(dir.path().join("AGENTS.md"), "top\n").unwrap();
+    std::fs::write(
+        dir.path().join("pkg/AGENTS.md"),
+        format!(
+            "[shared](../docs/shared.md) [out]({})\n",
+            outside.path().join("notes.md").display()
+        ),
+    )
+    .unwrap();
+
+    let report = aoa_lint::lint_context_roots(
+        &[
+            dir.path().join("AGENTS.md"),
+            dir.path().join("pkg/AGENTS.md"),
+        ],
+        "o200k_base",
+    )
+    .unwrap();
+
+    let nested: Vec<&Path> = report.closures[1]
+        .files
+        .iter()
+        .map(|file| file.path.strip_prefix(dir.path()).unwrap())
+        .collect();
+    assert_eq!(
+        nested,
+        [Path::new("pkg/AGENTS.md"), Path::new("docs/shared.md")]
+    );
+}

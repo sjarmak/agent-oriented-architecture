@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use aoa_budget::{
-    count_budget, normalize_path, resolve_closure, BudgetReport, Closure, Config, FileBudget,
+    count_budget, normalize_path, resolve_closure_within, BudgetReport, Closure, Config, FileBudget,
 };
 
 use crate::detectors::{self, LintedFile};
@@ -68,8 +68,9 @@ fn resolve_members(roots: &[PathBuf]) -> Result<(Closure, Vec<Member>), LintErro
     let mut seen = BTreeSet::new();
     let mut files = Vec::new();
     let mut members = Vec::with_capacity(roots.len());
+    let boundary = common_directory(roots);
     for root in roots {
-        let closure = resolve_closure(root)?;
+        let closure = resolve_closure_within(root, &boundary)?;
         members.push(Member {
             root: closure.root,
             paths: closure.files.iter().map(|file| file.path.clone()).collect(),
@@ -85,6 +86,29 @@ fn resolve_members(roots: &[PathBuf]) -> Result<(Closure, Vec<Member>), LintErro
         files,
     };
     Ok((merged, members))
+}
+
+fn common_directory(roots: &[PathBuf]) -> PathBuf {
+    let mut directories = roots.iter().map(|root| {
+        normalize_path(root)
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default()
+    });
+    let first = directories.next().unwrap_or_default();
+    let common = directories.fold(first, |common, directory| {
+        common
+            .components()
+            .zip(directory.components())
+            .take_while(|(left, right)| left == right)
+            .map(|(component, _)| component)
+            .collect()
+    });
+    if common.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        common
+    }
 }
 
 fn closure_budget(member: Member, budget: &BudgetReport) -> ClosureBudget {

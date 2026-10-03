@@ -13,6 +13,9 @@ pub enum BudgetError {
         source: std::io::Error,
     },
 
+    #[error("context file {path} exceeds {max_bytes} bytes")]
+    Oversized { path: PathBuf, max_bytes: u64 },
+
     /// The requested target-model tokenizer name is not supported.
     ///
     /// This is raised loudly (never silently defaulted) so a misconfigured

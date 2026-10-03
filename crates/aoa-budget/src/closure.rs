@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::error::BudgetError;
@@ -30,14 +31,21 @@ impl Closure {
     }
 }
 
-/// Resolve the transitive closure of context files starting at `root`.
-///
-/// Performs a cycle-safe depth-first walk: each file is read once, its
-/// references extracted and queued, and already-visited paths are skipped so a
-/// reference cycle terminates. A reference that does not resolve to a readable
-/// file is skipped (it may be a relative doc link outside the context tree);
-/// failure to read the explicitly requested `root`, however, is an error.
+pub const MAX_CONTEXT_FILE_BYTES: u64 = 8 * 1024 * 1024;
+
 pub fn resolve_closure(root: &Path) -> Result<Closure, BudgetError> {
+    let boundary = match root.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    resolve_closure_within(root, boundary)
+}
+
+pub fn resolve_closure_within(root: &Path, boundary: &Path) -> Result<Closure, BudgetError> {
+    let boundary = boundary.canonicalize().map_err(|source| BudgetError::Io {
+        path: boundary.to_path_buf(),
+        source,
+    })?;
     let root = normalize_path(root);
     let mut visited: BTreeSet<PathBuf> = BTreeSet::new();
     let mut files: Vec<ContextFile> = Vec::new();
@@ -47,13 +55,12 @@ pub fn resolve_closure(root: &Path) -> Result<Closure, BudgetError> {
         if !visited.insert(path.clone()) {
             continue;
         }
-        let text = match std::fs::read_to_string(&path) {
-            Ok(t) => t,
-            Err(source) => {
-                if path == root {
-                    return Err(BudgetError::Io { path, source });
-                }
-                continue;
+        let text = if path == root {
+            read_regular_file(&path, &path)?
+        } else {
+            match read_member(&path, &boundary)? {
+                Some(text) => text,
+                None => continue,
             }
         };
         let base_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
@@ -62,11 +69,52 @@ pub fn resolve_closure(root: &Path) -> Result<Closure, BudgetError> {
             .map(|r| normalize_path(&r.target))
             .filter(|p| !visited.contains(p))
             .collect();
-        // Reverse so the stack pops children in source order (stable output).
         children.reverse();
         stack.extend(children);
         files.push(ContextFile { path, text });
     }
 
     Ok(Closure { root, files })
+}
+
+fn read_member(path: &Path, boundary: &Path) -> Result<Option<String>, BudgetError> {
+    let Ok(resolved) = path.canonicalize() else {
+        return Ok(None);
+    };
+    if !resolved.starts_with(boundary) {
+        return Ok(None);
+    }
+    match read_regular_file(&resolved, path) {
+        Ok(text) => Ok(Some(text)),
+        Err(oversized @ BudgetError::Oversized { .. }) => Err(oversized),
+        Err(_) => Ok(None),
+    }
+}
+
+fn read_regular_file(path: &Path, reported: &Path) -> Result<String, BudgetError> {
+    let io_err = |source| BudgetError::Io {
+        path: reported.to_path_buf(),
+        source,
+    };
+    let meta = std::fs::metadata(path).map_err(io_err)?;
+    if !meta.is_file() {
+        return Err(io_err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular file",
+        )));
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .map_err(io_err)?
+        .take(MAX_CONTEXT_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(io_err)?;
+    if bytes.len() as u64 > MAX_CONTEXT_FILE_BYTES {
+        return Err(BudgetError::Oversized {
+            path: reported.to_path_buf(),
+            max_bytes: MAX_CONTEXT_FILE_BYTES,
+        });
+    }
+    String::from_utf8(bytes)
+        .map_err(|source| io_err(std::io::Error::new(std::io::ErrorKind::InvalidData, source)))
 }
