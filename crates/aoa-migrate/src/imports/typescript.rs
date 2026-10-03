@@ -26,7 +26,7 @@ use std::process::Command;
 
 use serde_json::Value;
 
-use super::{collect_files, io_err, subtract_via_inplace_fix, ImportAdapter, SubtractedFile};
+use super::{collect_files, io_err, subtract_via_inplace_fix, ImportAdapter, Subtraction};
 use crate::error::MigrateError;
 use crate::fix::FixProvenance;
 
@@ -38,6 +38,10 @@ const PROJECT_MARKERS: &[&str] = &["package.json", "tsconfig.json"];
 /// Source extensions the adapter lints. Matches the `files` glob in the vendored
 /// flat config.
 const TS_EXTENSIONS: &[&str] = &["js", "jsx", "mjs", "cjs", "ts", "tsx"];
+
+const ESLINT_BATCH_FILES: usize = 500;
+
+const NODE_HEAP_CAP: &str = "--max-old-space-size=1024";
 
 pub(crate) const TS_DEAD_IMPORT_ELIGIBILITY: &str = "ESLint unused-import removal is a construct-valid, reproducible code-layer treatment only when: \
 (1) the analyzer is the vendored, pinned ESLint + eslint-plugin-unused-imports run with `--no-config-lookup --no-inline-config --no-ignore`, so neither the repo's eslint config nor in-source directives can widen scope — reproducibility is anchored by the node/eslint/plugin versions and config fingerprint recorded in provenance; \
@@ -66,20 +70,26 @@ impl ImportAdapter for TsImportAdapter {
         PROJECT_MARKERS.iter().any(|m| repo.join(m).is_file())
     }
 
-    fn subtract_imports(&self, work: &Path) -> Result<Vec<SubtractedFile>, MigrateError> {
+    fn ineligible_reason(&self) -> &'static str {
+        "no package.json or tsconfig.json at the repo root"
+    }
+
+    fn examined_unit(&self) -> &'static str {
+        "TypeScript/JavaScript source files"
+    }
+
+    fn subtract_imports(&self, work: &Path) -> Result<Subtraction, MigrateError> {
         let files = collect_files(work, &is_ts_file)?;
-        // An eligible project with no source files yields a legitimate empty plan;
-        // running ESLint with no file arguments would be a usage error.
-        if files.is_empty() {
-            return Ok(Vec::new());
+        let mut subtracted = Vec::new();
+        for batch in files.chunks(ESLINT_BATCH_FILES) {
+            subtracted.extend(subtract_via_inplace_fix(work, batch, || {
+                run_eslint_fix(work, batch)
+            })?);
         }
-
-        // 1) Classify: a parse error is a LOUD RepoDoesNotCheck before we touch
-        // anything; a missing `node` is a LOUD ToolchainUnavailable.
-        classify(work, &files)?;
-
-        // 2) Run the vendored eslint --fix in place, then diff the touched files.
-        subtract_via_inplace_fix(work, &is_ts_file, run_eslint_fix)
+        Ok(Subtraction {
+            examined: files.len(),
+            files: subtracted,
+        })
     }
 
     fn provenance(&self, _repo: &Path) -> Result<Option<FixProvenance>, MigrateError> {
@@ -115,11 +125,6 @@ fn eslint_bin() -> PathBuf {
     vendor_dir().join("node_modules/eslint/bin/eslint.js")
 }
 
-/// The vendored `node_modules` is gitignored and regenerated with `npm ci`. A
-/// missing install is a LOUD `ToolchainUnavailable`: `node` would otherwise exit 1
-/// with a "Cannot find module" message that `classify` reads as a clean,
-/// empty-findings run — i.e. a silent empty plan, the one outcome this adapter
-/// promises never to produce.
 fn ensure_vendored_eslint() -> Result<(), MigrateError> {
     let bin = eslint_bin();
     if bin.is_file() {
@@ -138,34 +143,31 @@ fn eslint_config() -> PathBuf {
     vendor_dir().join("eslint.config.mjs")
 }
 
-/// The hermetic eslint argv shared by the classify and fix passes (minus
-/// `--fix`/`--format`, which the callers append).
-fn base_eslint_args() -> Vec<String> {
-    vec![
+fn eslint_fix_args(files: &[PathBuf]) -> Vec<String> {
+    let mut args = vec![
+        NODE_HEAP_CAP.to_string(),
         eslint_bin().to_string_lossy().into_owned(),
         "--config".to_string(),
         eslint_config().to_string_lossy().into_owned(),
         "--no-config-lookup".to_string(),
         "--no-inline-config".to_string(),
         "--no-ignore".to_string(),
-    ]
+        "--fix".to_string(),
+        "--fix-type".to_string(),
+        "problem".to_string(),
+        "--format".to_string(),
+        "json".to_string(),
+        "--".to_string(),
+    ];
+    args.extend(files.iter().map(|f| f.to_string_lossy().into_owned()));
+    args
 }
 
-/// Run the vendored ESLint in JSON mode (no `--fix`) and classify the outcome.
-/// `Ok(())` means the files parse and any findings are our single rule.
-fn classify(work: &Path, files: &[PathBuf]) -> Result<(), MigrateError> {
+fn run_eslint_fix(work: &Path, files: &[PathBuf]) -> Result<(), MigrateError> {
     ensure_vendored_eslint()?;
-    let mut args = base_eslint_args();
-    args.push("--format".to_string());
-    args.push("json".to_string());
-    // `--` terminates option parsing: a repo file literally named `--parser`
-    // must reach ESLint as a path, never as a flag (argument injection).
-    args.push("--".to_string());
-    args.extend(files.iter().map(|f| f.to_string_lossy().into_owned()));
-
     let output = Command::new("node")
         .current_dir(work)
-        .args(&args)
+        .args(eslint_fix_args(files))
         .output()
         .map_err(|source| MigrateError::ToolchainUnavailable {
             detail: format!("could not run `node` for the vendored eslint: {source}"),
@@ -174,7 +176,6 @@ fn classify(work: &Path, files: &[PathBuf]) -> Result<(), MigrateError> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
 
-    // Exit 0 (clean) or 1 (lint findings) are expected; 2 is a config/usage fault.
     if !matches!(output.status.code(), Some(0) | Some(1)) {
         return Err(MigrateError::BuildFailed {
             stderr: if stderr.is_empty() {
@@ -185,8 +186,6 @@ fn classify(work: &Path, files: &[PathBuf]) -> Result<(), MigrateError> {
         });
     }
 
-    // The exit-code gate above already rejected anything but 0/1, so an empty
-    // stdout here is a clean run with nothing to report, not a failure.
     let results: Vec<Value> = match serde_json::from_str(stdout.trim()) {
         Ok(v) => v,
         Err(_) if stdout.trim().is_empty() => Vec::new(),
@@ -197,8 +196,6 @@ fn classify(work: &Path, files: &[PathBuf]) -> Result<(), MigrateError> {
         }
     };
 
-    // A parse failure surfaces as a `fatal` message (severity 2): the tree does
-    // not parse, so subtractivity cannot be certified.
     let has_fatal = results.iter().any(|file| {
         file.get("messages")
             .and_then(Value::as_array)
@@ -214,39 +211,6 @@ fn classify(work: &Path, files: &[PathBuf]) -> Result<(), MigrateError> {
         });
     }
 
-    Ok(())
-}
-
-/// Apply the vendored eslint autofixer in place. `--fix-type problem` clamps the
-/// applied fixes; the single-rule config restricts them to unused-import deletions.
-fn run_eslint_fix(work: &Path, files: &[PathBuf]) -> Result<(), MigrateError> {
-    if files.is_empty() {
-        return Ok(());
-    }
-    ensure_vendored_eslint()?;
-    let mut args = base_eslint_args();
-    args.push("--fix".to_string());
-    args.push("--fix-type".to_string());
-    args.push("problem".to_string());
-    // See `classify`: `--` stops a `--`-prefixed repo filename being read as a flag.
-    args.push("--".to_string());
-    args.extend(files.iter().map(|f| f.to_string_lossy().into_owned()));
-
-    let output = Command::new("node")
-        .current_dir(work)
-        .args(&args)
-        .output()
-        .map_err(|source| MigrateError::ToolchainUnavailable {
-            detail: format!("could not run `node` for the vendored eslint: {source}"),
-        })?;
-
-    // After --fix, remaining lint findings (exit 1) are acceptable — the fix
-    // removed what it could. A config/usage fault (exit 2) is loud.
-    if !matches!(output.status.code(), Some(0) | Some(1)) {
-        return Err(MigrateError::BuildFailed {
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        });
-    }
     Ok(())
 }
 
@@ -355,6 +319,15 @@ mod tests {
         assert_ne!(fnv1a_64(b"rule: error"), fnv1a_64(b"rule: off"));
         // Known FNV-1a 64-bit vector for the empty input is the offset basis.
         assert_eq!(fnv1a_64(b""), 0xcbf2_9ce4_8422_2325);
+    }
+
+    #[test]
+    fn eslint_runs_under_the_heap_cap_and_cannot_read_a_filename_as_a_flag() {
+        let args = eslint_fix_args(&[PathBuf::from("--parser"), PathBuf::from("a.ts")]);
+        assert_eq!(args[0], NODE_HEAP_CAP);
+        assert_eq!(args[1], eslint_bin().to_string_lossy());
+        let terminator = args.iter().position(|a| a == "--").unwrap();
+        assert_eq!(args[terminator + 1..], ["--parser", "a.ts"]);
     }
 
     #[test]

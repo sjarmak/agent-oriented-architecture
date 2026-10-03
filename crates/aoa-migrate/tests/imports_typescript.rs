@@ -249,3 +249,82 @@ fn eligible_project_with_no_source_is_an_empty_plan() {
     let plan = MigrationPlan::build(repo, &[&DeadImportFix::typescript()]).unwrap();
     assert!(plan.is_empty(), "no source files => legitimate empty plan");
 }
+
+#[test]
+fn clean_project_reports_the_files_eslint_examined() {
+    require_node!("clean_project_reports_examined");
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path();
+    fs::write(repo.join("package.json"), "{}\n").unwrap();
+    fs::create_dir_all(repo.join("src")).unwrap();
+    fs::write(repo.join("src/m.ts"), "export const used = 1;\n").unwrap();
+    fs::write(
+        repo.join("src/a.tsx"),
+        "import { used } from './m';\n\nexport const b = used;\n",
+    )
+    .unwrap();
+    fs::write(repo.join("notes.md"), "not source\n").unwrap();
+
+    let plan = MigrationPlan::build(repo, &[&DeadImportFix::typescript()]).unwrap();
+
+    assert!(plan.is_empty());
+    let report = &plan.reports[0];
+    assert!(report.ran);
+    assert_eq!(report.examined, 2);
+    assert_eq!(report.changes, 0);
+    assert_eq!(
+        report.no_change_reason.as_deref(),
+        Some("none of the 2 TypeScript/JavaScript source files examined needed a change")
+    );
+}
+
+#[test]
+fn files_beyond_the_first_eslint_batch_are_still_fixed() {
+    require_node!("files_beyond_first_batch");
+    const MORE_THAN_ONE_BATCH: usize = 520;
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path();
+    fs::write(repo.join("package.json"), "{}\n").unwrap();
+    for i in 0..MORE_THAN_ONE_BATCH - 1 {
+        fs::write(
+            repo.join(format!("f{i:04}.ts")),
+            "export const value = 1;\n",
+        )
+        .unwrap();
+    }
+    let last = repo.join("zz_last.ts");
+    fs::write(
+        &last,
+        "import { used, unused } from './f0000';\n\nexport const v = used;\n",
+    )
+    .unwrap();
+
+    let plan = MigrationPlan::build(repo, &[&DeadImportFix::typescript()]).unwrap();
+
+    assert_eq!(plan.reports[0].examined, MORE_THAN_ONE_BATCH);
+    assert_eq!(plan.changes.len(), 1);
+    assert_eq!(plan.changes[0].path, last);
+    assert!(!plan.changes[0].new_content.contains("unused"));
+}
+
+#[test]
+fn parse_error_beyond_the_first_eslint_batch_is_still_loud() {
+    require_node!("parse_error_beyond_first_batch");
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path();
+    fs::write(repo.join("package.json"), "{}\n").unwrap();
+    for i in 0..500 {
+        fs::write(
+            repo.join(format!("f{i:04}.ts")),
+            "export const value = 1;\n",
+        )
+        .unwrap();
+    }
+    fs::write(repo.join("zz_broken.ts"), "const x = ;\n").unwrap();
+
+    let err = MigrationPlan::build(repo, &[&DeadImportFix::typescript()]).unwrap_err();
+    assert!(
+        matches!(err, MigrateError::RepoDoesNotCheck { .. }),
+        "got {err:?}"
+    );
+}

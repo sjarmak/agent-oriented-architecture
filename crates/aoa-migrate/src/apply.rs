@@ -306,6 +306,7 @@ mod tests {
                 note: "test eligibility".to_string(),
             }],
             provenance: Vec::new(),
+            reports: Vec::new(),
         }
     }
 
@@ -401,6 +402,7 @@ mod tests {
             fix_ids: vec!["test-overwrite".to_string()],
             eligibility_notes: Vec::new(),
             provenance: Vec::new(),
+            reports: Vec::new(),
         };
         apply(&repo, &plan).unwrap();
         assert_eq!(fs::read_to_string(&target).unwrap(), "REPLACED\n");
@@ -441,6 +443,7 @@ mod tests {
             fix_ids: vec!["symlink-overwrite".to_string()],
             eligibility_notes: Vec::new(),
             provenance: Vec::new(),
+            reports: Vec::new(),
         };
         let err = apply(&repo, &plan).expect_err("an overwrite target symlink must be rejected");
 
@@ -468,6 +471,7 @@ mod tests {
             fix_ids: vec!["parent-traversal".to_string()],
             eligibility_notes: Vec::new(),
             provenance: Vec::new(),
+            reports: Vec::new(),
         };
         let err = apply(&repo, &plan).expect_err("a parent traversal target must be rejected");
 
@@ -497,6 +501,7 @@ mod tests {
             fix_ids: vec!["multi".to_string()],
             eligibility_notes: Vec::new(),
             provenance: Vec::new(),
+            reports: Vec::new(),
         };
         apply(&repo, &plan).unwrap();
         assert_eq!(fs::read_to_string(&a).unwrap(), "A-NEW\n");

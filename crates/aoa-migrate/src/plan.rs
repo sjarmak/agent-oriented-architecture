@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use crate::error::MigrateError;
-use crate::fix::{ChangeAction, CodeFix, FixEligibility, FixProvenance, PlannedChange};
+use crate::fix::{ChangeAction, CodeFix, FixEligibility, FixProvenance, FixReport, PlannedChange};
 
 /// The full set of changes a migration would make, gathered from one or more
 /// [`CodeFix`]es. Building a plan writes nothing — it is the dry-run artifact.
@@ -20,6 +20,7 @@ pub struct MigrationPlan {
     /// (e.g. the toolchain a compiler-backed fix ran under) — the reproducibility
     /// verification half. Empty for fixes that are pure functions of the tree.
     pub provenance: Vec<FixProvenance>,
+    pub reports: Vec<FixReport>,
 }
 
 impl MigrationPlan {
@@ -29,8 +30,11 @@ impl MigrationPlan {
         let mut fix_ids = Vec::new();
         let mut eligibility_notes = Vec::new();
         let mut provenance = Vec::new();
+        let mut reports = Vec::new();
         for fix in fixes {
-            let fix_changes = fix.plan(repo)?;
+            let run = fix.plan(repo)?;
+            reports.push(FixReport::new(*fix, &run));
+            let fix_changes = run.changes;
             if !fix_changes.is_empty() {
                 fix_ids.push(fix.id().to_string());
                 eligibility_notes.push(FixEligibility {
@@ -53,6 +57,7 @@ impl MigrationPlan {
             fix_ids,
             eligibility_notes,
             provenance,
+            reports,
         })
     }
 
@@ -66,7 +71,7 @@ impl MigrationPlan {
     /// new lines added. This is what `aoa migrate --plan` prints.
     pub fn render_diff(&self) -> String {
         if self.changes.is_empty() {
-            return "No changes: every package root already conforms.\n".to_string();
+            return "No changes planned.\n".to_string();
         }
         let mut out = String::new();
         for change in &self.changes {

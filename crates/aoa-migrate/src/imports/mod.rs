@@ -33,7 +33,7 @@ mod typescript;
 use std::path::{Path, PathBuf};
 
 use crate::error::MigrateError;
-use crate::fix::{ChangeAction, CodeFix, FixProvenance, PlannedChange};
+use crate::fix::{ChangeAction, CodeFix, Coverage, FixProvenance, FixRun, PlannedChange};
 
 /// Directory basenames excluded from the isolated copy, at any nesting depth:
 /// build output (`target`, `build`, `dist`), VCS metadata (`.git`), this tool's
@@ -64,6 +64,11 @@ pub(crate) struct SubtractedFile {
     pub new_content: String,
 }
 
+pub(crate) struct Subtraction {
+    pub examined: usize,
+    pub files: Vec<SubtractedFile>,
+}
+
 /// One language's dead-import treatment. The engine ([`DeadImportFix`]) owns
 /// isolation, the temp→real path round-trip, repo-containment validation,
 /// deterministic ordering, and honest-degrade. An adapter owns ONLY: root-marker
@@ -85,12 +90,16 @@ pub(crate) trait ImportAdapter: Send + Sync {
     /// `false` ⇒ the engine honest-degrades to an empty plan (never an error).
     fn is_eligible(&self, repo: &Path) -> bool;
 
+    fn ineligible_reason(&self) -> &'static str;
+
+    fn examined_unit(&self) -> &'static str;
+
     /// Run the tool against the ISOLATED copy `work` and return the strictly-
     /// subtractive rewrite of each touched file. The adapter MUST classify tool or
     /// build failure into the shared taxonomy (`ToolchainUnavailable` /
     /// `BuildFailed` / `RepoDoesNotCheck`) — LOUD, never a silent empty `Vec`. An
     /// empty `Vec` means "tool ran cleanly, nothing to remove" (legitimate).
-    fn subtract_imports(&self, work: &Path) -> Result<Vec<SubtractedFile>, MigrateError>;
+    fn subtract_imports(&self, work: &Path) -> Result<Subtraction, MigrateError>;
 
     /// Toolchain/version provenance, resolved against the real repo.
     fn provenance(&self, repo: &Path) -> Result<Option<FixProvenance>, MigrateError>;
@@ -142,10 +151,18 @@ impl CodeFix for DeadImportFix {
         self.adapter.eligibility_note()
     }
 
-    fn plan(&self, repo: &Path) -> Result<Vec<PlannedChange>, MigrateError> {
-        // (1) A tree without this language's root marker is ineligible, not broken.
+    fn examined_unit(&self) -> &str {
+        self.adapter.examined_unit()
+    }
+
+    fn plan(&self, repo: &Path) -> Result<FixRun, MigrateError> {
         if !self.adapter.is_eligible(repo) {
-            return Ok(Vec::new());
+            return Ok(FixRun {
+                changes: Vec::new(),
+                coverage: Coverage::Skipped {
+                    reason: self.adapter.ineligible_reason().to_string(),
+                },
+            });
         }
 
         // (2) Isolate: copy to a throwaway tree so the tool never writes the real
@@ -159,11 +176,14 @@ impl CodeFix for DeadImportFix {
             })?;
         copy_tree(repo, work.path())?;
 
-        // (3) Per-language strictly-subtractive rewrite of the isolated copy.
-        let subtracted = self.adapter.subtract_imports(work.path())?;
+        let subtraction = self.adapter.subtract_imports(work.path())?;
 
-        // (4) Shared temp→real round-trip + containment guard + Overwrite emission.
-        finalize_changes(subtracted, work.path(), repo)
+        Ok(FixRun {
+            changes: finalize_changes(subtraction.files, work.path(), repo)?,
+            coverage: Coverage::Examined {
+                count: subtraction.examined,
+            },
+        })
     }
 
     fn provenance(&self, repo: &Path) -> Result<Option<FixProvenance>, MigrateError> {
@@ -319,8 +339,6 @@ pub(crate) fn collect_files(
     Ok(out)
 }
 
-/// Model-A subtraction: snapshot the eligible files under `work`, run the tool's
-/// own in-place autofixer via `fix`, then return the files whose content changed.
 /// Adapters that drive a tool's `--fix` (ruff, ESLint) share this so the
 /// snapshot/diff lives in one reviewed place. The returned paths are tree-relative
 /// (the engine maps them to the real repo); a file the tool only touches
@@ -328,17 +346,16 @@ pub(crate) fn collect_files(
 /// restriction upstream, then by [`finalize_changes`]' no-op guard downstream.
 pub(crate) fn subtract_via_inplace_fix(
     work: &Path,
-    keep: &dyn Fn(&Path) -> bool,
-    fix: impl FnOnce(&Path, &[PathBuf]) -> Result<(), MigrateError>,
+    files: &[PathBuf],
+    fix: impl FnOnce() -> Result<(), MigrateError>,
 ) -> Result<Vec<SubtractedFile>, MigrateError> {
-    let files = collect_files(work, keep)?;
     let mut before = Vec::with_capacity(files.len());
-    for rel in &files {
+    for rel in files {
         let abs = work.join(rel);
         before.push(std::fs::read_to_string(&abs).map_err(|s| io_err(&abs, s))?);
     }
 
-    fix(work, &files)?;
+    fix()?;
 
     let mut subtracted = Vec::new();
     for (rel, old) in files.iter().zip(before) {

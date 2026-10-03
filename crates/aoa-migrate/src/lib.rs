@@ -28,8 +28,8 @@ mod plan;
 pub use apply::{apply, manifest_path, read_manifest, rollback, ManifestEntry, MigrationManifest};
 pub use error::MigrateError;
 pub use fix::{
-    all_fixes, ChangeAction, CodeFix, FixEligibility, FixProvenance, NavigabilityAnchorFix,
-    PlannedChange,
+    all_fixes, ChangeAction, CodeFix, Coverage, FixEligibility, FixProvenance, FixReport, FixRun,
+    NavigabilityAnchorFix, PlannedChange,
 };
 pub use imports::DeadImportFix;
 pub use plan::MigrationPlan;

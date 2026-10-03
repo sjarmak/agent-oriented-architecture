@@ -23,7 +23,7 @@ use std::process::Command;
 
 use serde_json::Value;
 
-use super::{subtract_via_inplace_fix, ImportAdapter, SubtractedFile};
+use super::{collect_files, subtract_via_inplace_fix, ImportAdapter, Subtraction};
 use crate::error::MigrateError;
 use crate::fix::FixProvenance;
 
@@ -69,13 +69,24 @@ impl ImportAdapter for PythonImportAdapter {
         PACKAGING_MARKERS.iter().any(|m| repo.join(m).is_file())
     }
 
-    fn subtract_imports(&self, work: &Path) -> Result<Vec<SubtractedFile>, MigrateError> {
+    fn ineligible_reason(&self) -> &'static str {
+        "no pyproject.toml, setup.py or setup.cfg at the repo root"
+    }
+
+    fn examined_unit(&self) -> &'static str {
+        "Python source files"
+    }
+
+    fn subtract_imports(&self, work: &Path) -> Result<Subtraction, MigrateError> {
+        let files = collect_files(work, &is_python_file)?;
         // 1) Classify the tree against the same single-lint selection. A parse
         // failure here is a LOUD RepoDoesNotCheck before we touch anything.
         classify(work)?;
 
-        // 2) Run ruff's own F401 autofixer in place, then diff the touched files.
-        subtract_via_inplace_fix(work, &is_python_file, |w, _files| run_ruff_fix(w))
+        Ok(Subtraction {
+            examined: files.len(),
+            files: subtract_via_inplace_fix(work, &files, || run_ruff_fix(work))?,
+        })
     }
 
     fn provenance(&self, _repo: &Path) -> Result<Option<FixProvenance>, MigrateError> {

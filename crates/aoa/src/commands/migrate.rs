@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
 
-use aoa_migrate::{CodeFix, FixEligibility, FixProvenance, MigrationPlan};
+use aoa_migrate::{CodeFix, FixEligibility, FixProvenance, FixReport, MigrationPlan};
 
 use crate::cli::MigrateArgs;
 use crate::output::{print_human, print_json};
@@ -57,6 +57,7 @@ fn run_preview(args: &MigrateArgs, plan: MigrationPlan) -> Result<i32> {
             changes,
             eligibility_notes: plan.eligibility_notes,
             provenance: plan.provenance,
+            fix_reports: plan.reports,
         })?;
     } else {
         let mut out = format!(
@@ -66,6 +67,7 @@ fn run_preview(args: &MigrateArgs, plan: MigrationPlan) -> Result<i32> {
         if !plan.is_empty() {
             out.push_str("\nRun with --apply to write these changes (archived for rollback).\n");
         }
+        out.push_str(&render_fix_reports(&plan.reports));
         out.push_str(&render_eligibility(&plan.eligibility_notes));
         out.push_str(&render_provenance(&plan.provenance));
         print_human(&out);
@@ -91,9 +93,13 @@ fn run_apply(args: &MigrateArgs, plan: MigrationPlan) -> Result<i32> {
                 manifest_path: String::new(),
                 eligibility_notes: Vec::new(),
                 provenance: Vec::new(),
+                fix_reports: plan.reports,
             })?;
         } else {
-            print_human("AOA migrate: repo already conforms; nothing to apply.\n");
+            print_human(&format!(
+                "AOA migrate: no fix planned a change; nothing to apply.\n{}",
+                render_fix_reports(&plan.reports)
+            ));
         }
         return Ok(0);
     }
@@ -120,6 +126,7 @@ fn run_apply(args: &MigrateArgs, plan: MigrationPlan) -> Result<i32> {
             manifest_path: aoa_migrate::manifest_path(&args.repo).display().to_string(),
             eligibility_notes: manifest.eligibility_notes,
             provenance: manifest.provenance,
+            fix_reports: plan.reports,
         })?;
     } else {
         let mut out = render_apply_summary(
@@ -128,6 +135,7 @@ fn run_apply(args: &MigrateArgs, plan: MigrationPlan) -> Result<i32> {
             navigability_remaining,
             &aoa_migrate::manifest_path(&args.repo).display().to_string(),
         );
+        out.push_str(&render_fix_reports(&plan.reports));
         out.push_str(&render_eligibility(&manifest.eligibility_notes));
         out.push_str(&render_provenance(&manifest.provenance));
         print_human(&out);
@@ -201,6 +209,26 @@ fn navigability_count(repo: &Path) -> Result<u64> {
     let sites = aoa_audit::navigability_sites(repo)
         .with_context(|| format!("failed to measure navigability sites in {}", repo.display()))?;
     Ok(sites.len() as u64)
+}
+
+fn render_fix_reports(reports: &[FixReport]) -> String {
+    reports
+        .iter()
+        .map(|r| {
+            let coverage = if r.ran {
+                format!(
+                    "ran: examined {} {}, planned {} change(s)",
+                    r.examined, r.examined_unit, r.changes
+                )
+            } else {
+                "did not run".to_string()
+            };
+            match &r.no_change_reason {
+                Some(reason) => format!("\n[fix:{}] {coverage}: {reason}\n", r.fix_id),
+                None => format!("\n[fix:{}] {coverage}\n", r.fix_id),
+            }
+        })
+        .collect()
 }
 
 /// Render each contributing fix's eligibility precondition as human text.
@@ -324,6 +352,7 @@ enum MigrateView {
         changes: Vec<ChangeView>,
         eligibility_notes: Vec<FixEligibility>,
         provenance: Vec<FixProvenance>,
+        fix_reports: Vec<FixReport>,
     },
     Apply {
         fixes_applied: Vec<String>,
@@ -335,6 +364,7 @@ enum MigrateView {
         manifest_path: String,
         eligibility_notes: Vec<FixEligibility>,
         provenance: Vec<FixProvenance>,
+        fix_reports: Vec<FixReport>,
     },
     Rollback {
         files_reverted: usize,

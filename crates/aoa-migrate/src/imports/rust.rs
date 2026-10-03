@@ -14,7 +14,7 @@ use std::process::Command;
 use rustfix::{Filter, Suggestion};
 use serde_json::Value;
 
-use super::{io_err, ImportAdapter, SubtractedFile};
+use super::{collect_files, io_err, ImportAdapter, SubtractedFile, Subtraction};
 use crate::error::MigrateError;
 use crate::fix::FixProvenance;
 
@@ -58,9 +58,20 @@ impl ImportAdapter for RustImportAdapter {
         repo.join("Cargo.toml").is_file()
     }
 
-    fn subtract_imports(&self, work: &Path) -> Result<Vec<SubtractedFile>, MigrateError> {
+    fn ineligible_reason(&self) -> &'static str {
+        "no Cargo.toml at the repo root"
+    }
+
+    fn examined_unit(&self) -> &'static str {
+        "Rust source files"
+    }
+
+    fn subtract_imports(&self, work: &Path) -> Result<Subtraction, MigrateError> {
         let diagnostics = run_cargo_check(work)?;
-        compute_subtracted(&diagnostics, work)
+        Ok(Subtraction {
+            examined: collect_files(work, &is_rust_file)?.len(),
+            files: compute_subtracted(&diagnostics, work)?,
+        })
     }
 
     fn provenance(&self, repo: &Path) -> Result<Option<FixProvenance>, MigrateError> {
@@ -77,6 +88,10 @@ impl ImportAdapter for RustImportAdapter {
 /// Distinguishes a failure to *invoke* the toolchain
 /// ([`ToolchainUnavailable`](MigrateError::ToolchainUnavailable)) from a successful
 /// invocation (whose diagnostics are classified and returned).
+fn is_rust_file(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == "rs")
+}
+
 fn run_cargo_check(workdir: &Path) -> Result<Vec<Value>, MigrateError> {
     let output = cargo_check_command(workdir).output().map_err(|source| {
         MigrateError::ToolchainUnavailable {
@@ -418,7 +433,11 @@ mod tests {
     fn honest_degrades_to_empty_when_no_root_cargo_toml() {
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
-        assert!(DeadImportFix::rust().plan(dir.path()).unwrap().is_empty());
+        assert!(DeadImportFix::rust()
+            .plan(dir.path())
+            .unwrap()
+            .changes
+            .is_empty());
     }
 
     #[test]

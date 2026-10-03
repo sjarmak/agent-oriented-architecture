@@ -315,7 +315,7 @@ pub fn navigability_sites(repo: &Path) -> Result<Vec<PathBuf>, AuditError> {
     Ok(roots)
 }
 
-fn package_roots(repo: &Path) -> Result<Vec<PathBuf>, AuditError> {
+pub fn package_roots(repo: &Path) -> Result<Vec<PathBuf>, AuditError> {
     let mut roots: Vec<PathBuf> = vec![repo.to_path_buf()];
     for entry in read_dir(repo)? {
         let entry = entry.map_err(|source| io_err(repo, source))?;

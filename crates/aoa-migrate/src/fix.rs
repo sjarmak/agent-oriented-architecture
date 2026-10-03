@@ -72,6 +72,51 @@ pub struct FixProvenance {
     pub pin_present: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Coverage {
+    Skipped { reason: String },
+    Examined { count: usize },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FixRun {
+    pub changes: Vec<PlannedChange>,
+    pub coverage: Coverage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FixReport {
+    pub fix_id: String,
+    pub ran: bool,
+    pub examined: usize,
+    pub examined_unit: String,
+    pub changes: usize,
+    pub no_change_reason: Option<String>,
+}
+
+impl FixReport {
+    pub(crate) fn new(fix: &dyn CodeFix, run: &FixRun) -> Self {
+        let unit = fix.examined_unit();
+        let (ran, examined, idle_reason) = match &run.coverage {
+            Coverage::Skipped { reason } => (false, 0, reason.clone()),
+            Coverage::Examined { count: 0 } => (true, 0, format!("found no {unit} to examine")),
+            Coverage::Examined { count } => (
+                true,
+                *count,
+                format!("none of the {count} {unit} examined needed a change"),
+            ),
+        };
+        Self {
+            fix_id: fix.id().to_string(),
+            ran,
+            examined,
+            examined_unit: unit.to_string(),
+            changes: run.changes.len(),
+            no_change_reason: run.changes.is_empty().then_some(idle_reason),
+        }
+    }
+}
+
 /// A mechanical, reproducible, oracle-blind migration toward a code-layer
 /// best-practice. Implementors only *plan*; the engine applies.
 pub trait CodeFix {
@@ -87,7 +132,9 @@ pub trait CodeFix {
 
     /// Compute the changes this fix would make to `repo`. Read-only: a `plan`
     /// call never mutates the checkout.
-    fn plan(&self, repo: &Path) -> Result<Vec<PlannedChange>, MigrateError>;
+    fn plan(&self, repo: &Path) -> Result<FixRun, MigrateError>;
+
+    fn examined_unit(&self) -> &str;
 
     /// Environment provenance for this fix's changes, recorded in the manifest as
     /// reproducibility *verification*. Default `None`: a fix that is a pure
@@ -163,13 +210,16 @@ impl CodeFix for NavigabilityAnchorFix {
         NAVIGABILITY_ELIGIBILITY
     }
 
-    fn plan(&self, repo: &Path) -> Result<Vec<PlannedChange>, MigrateError> {
+    fn examined_unit(&self) -> &str {
+        "package roots"
+    }
+
+    fn plan(&self, repo: &Path) -> Result<FixRun, MigrateError> {
+        let examined = aoa_audit::package_roots(repo)?.len();
         let mut sites = aoa_audit::navigability_sites(repo)?;
-        // Deterministic plan order regardless of directory-read order, so the
-        // diff preview and manifest are reproducible.
         sites.sort();
 
-        sites
+        let changes = sites
             .iter()
             .map(|site| {
                 Ok(PlannedChange {
@@ -179,7 +229,11 @@ impl CodeFix for NavigabilityAnchorFix {
                     old_content: None,
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>, MigrateError>>()?;
+        Ok(FixRun {
+            changes,
+            coverage: Coverage::Examined { count: examined },
+        })
     }
 }
 
@@ -308,7 +362,7 @@ mod tests {
         fs::create_dir_all(&pkg).unwrap();
         fs::write(pkg.join("Cargo.toml"), "[package]\n").unwrap();
 
-        let changes = NavigabilityAnchorFix.plan(&dir).unwrap();
+        let changes = NavigabilityAnchorFix.plan(&dir).unwrap().changes;
         let targets: Vec<&PathBuf> = changes.iter().map(|c| &c.path).collect();
         assert!(targets.contains(&&dir.join("README.md")));
         assert!(targets.contains(&&pkg.join("README.md")));
@@ -323,7 +377,9 @@ mod tests {
         fs::write(dir.join("README.md"), "# repo\n").unwrap();
         fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
 
-        assert!(NavigabilityAnchorFix.plan(&dir).unwrap().is_empty());
+        let run = NavigabilityAnchorFix.plan(&dir).unwrap();
+        assert!(run.changes.is_empty());
+        assert_eq!(run.coverage, Coverage::Examined { count: 1 });
         fs::remove_dir_all(&dir).ok();
     }
 

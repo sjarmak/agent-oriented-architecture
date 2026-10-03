@@ -146,3 +146,98 @@ fn migrate_fix_selector_runs_named_fix() {
         "selected fix ran and wrote the anchor"
     );
 }
+
+fn conforming_repo_without_language_markers() -> TempDir {
+    let dir = TempDir::new().expect("tempdir");
+    std::fs::write(dir.path().join("README.md"), "# demo\n").unwrap();
+    std::fs::write(dir.path().join("notes.txt"), "plain\n").unwrap();
+    dir
+}
+
+#[test]
+fn migrate_plan_json_reports_every_fix_on_a_zero_change_result() {
+    let repo = conforming_repo_without_language_markers();
+    let assert = aoa()
+        .args(["migrate", "--json", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8");
+    let v: Value = serde_json::from_str(&stdout).expect("json");
+    assert_eq!(v["mode"], "plan");
+    assert_eq!(v["changes"].as_array().expect("changes").len(), 0);
+
+    let reports = v["fix_reports"].as_array().expect("fix_reports");
+    let ids: Vec<&str> = reports
+        .iter()
+        .map(|r| r["fix_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "navigability-anchor",
+            "dead-imports",
+            "dead-imports-python",
+            "dead-imports-typescript"
+        ]
+    );
+
+    assert_eq!(reports[0]["ran"], true);
+    assert_eq!(reports[0]["examined"], 1);
+    assert_eq!(reports[0]["examined_unit"], "package roots");
+    assert_eq!(reports[0]["changes"], 0);
+    assert_eq!(
+        reports[0]["no_change_reason"],
+        "none of the 1 package roots examined needed a change"
+    );
+
+    assert_eq!(reports[3]["ran"], false);
+    assert_eq!(reports[3]["examined"], 0);
+    assert_eq!(
+        reports[3]["no_change_reason"],
+        "no package.json or tsconfig.json at the repo root"
+    );
+}
+
+#[test]
+fn migrate_plan_human_reports_every_fix_on_a_zero_change_result() {
+    let repo = conforming_repo_without_language_markers();
+    aoa()
+        .args(["migrate", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No changes planned."))
+        .stdout(predicate::str::contains(
+            "[fix:navigability-anchor] ran: examined 1 package roots, planned 0 change(s): \
+             none of the 1 package roots examined needed a change",
+        ))
+        .stdout(predicate::str::contains(
+            "[fix:dead-imports-typescript] did not run: \
+             no package.json or tsconfig.json at the repo root",
+        ));
+}
+
+#[test]
+fn migrate_apply_reports_every_fix_when_nothing_was_planned() {
+    let repo = conforming_repo_without_language_markers();
+    aoa()
+        .args(["migrate", "--apply", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nothing to apply"))
+        .stdout(predicate::str::contains(
+            "[fix:dead-imports] did not run: no Cargo.toml at the repo root",
+        ));
+
+    let assert = aoa()
+        .args(["migrate", "--apply", "--json", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8");
+    let v: Value = serde_json::from_str(&stdout).expect("json");
+    assert_eq!(v["fix_reports"].as_array().expect("fix_reports").len(), 4);
+    assert!(!repo.path().join(".aoa").exists());
+}
