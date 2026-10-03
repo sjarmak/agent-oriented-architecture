@@ -94,6 +94,36 @@ fn gap_checkbox_baseline_show_excluded_lists_reasons() {
         .stdout(predicate::str::contains("self_improving_orchestration"));
 }
 
+#[test]
+fn gap_checkbox_baseline_passes_an_oxc_monorepo_root_with_colocated_tests() {
+    let repo = TempDir::new().expect("tempdir");
+    let p = repo.path();
+    std::fs::write(p.join("package.json"), "{}\n").unwrap();
+    std::fs::write(p.join("README.md"), "# demo\n").unwrap();
+    std::fs::write(p.join(".oxlintrc.json"), "{}\n").unwrap();
+    std::fs::write(p.join(".oxfmtrc.json"), "{}\n").unwrap();
+    std::fs::write(p.join("vitest.config.ts"), "").unwrap();
+    std::fs::create_dir_all(p.join("apps/web/src")).unwrap();
+    std::fs::write(p.join("apps/web/src/widget.test.ts"), "").unwrap();
+    let output = aoa()
+        .args(["gap", "checkbox-baseline"])
+        .arg(p)
+        .args(["--repo-id", "oxc-monorepo", "--json"])
+        .output()
+        .expect("run");
+    assert!(output.status.success());
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    let criteria = parsed["criteria"].as_array().expect("criteria array");
+    for id in ["lint_config", "formatter_config", "test_directory"] {
+        let criterion = criteria
+            .iter()
+            .find(|c| c["id"] == id)
+            .unwrap_or_else(|| panic!("{id} is in the artifact"));
+        assert_eq!(criterion["status"]["status"], "pass", "{id}");
+    }
+    assert_eq!(parsed["level"], 2);
+}
+
 // A missing root fails loud with a typed error, never a level-1 default.
 #[test]
 fn gap_checkbox_baseline_missing_root_fails_loud() {
