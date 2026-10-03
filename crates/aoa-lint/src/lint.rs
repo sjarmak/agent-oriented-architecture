@@ -28,26 +28,7 @@ pub fn lint_context_roots(
     roots: &[PathBuf],
     target_tokenizer: &str,
 ) -> Result<LintReport, LintError> {
-    let first = roots.first().ok_or(LintError::NoRoots)?;
-    let mut seen = BTreeSet::new();
-    let mut files = Vec::new();
-    let mut members: Vec<(PathBuf, Vec<PathBuf>)> = Vec::with_capacity(roots.len());
-    for root in roots {
-        let closure = resolve_closure(root)?;
-        members.push((
-            closure.root,
-            closure.files.iter().map(|file| file.path.clone()).collect(),
-        ));
-        for file in closure.files {
-            if seen.insert(file.path.clone()) {
-                files.push(file);
-            }
-        }
-    }
-    let merged = Closure {
-        root: normalize_path(first),
-        files,
-    };
+    let (merged, members) = resolve_members(roots)?;
     let budget = count_budget(
         &merged,
         target_tokenizer,
@@ -67,7 +48,7 @@ pub fn lint_context_roots(
 
     let closures = members
         .into_iter()
-        .map(|(root, paths)| closure_budget(root, &paths, &budget))
+        .map(|member| closure_budget(member, &budget))
         .collect();
 
     Ok(LintReport {
@@ -77,15 +58,45 @@ pub fn lint_context_roots(
     })
 }
 
-fn closure_budget(root: PathBuf, paths: &[PathBuf], budget: &BudgetReport) -> ClosureBudget {
-    let files: Vec<FileBudget> = paths
+struct Member {
+    root: PathBuf,
+    paths: Vec<PathBuf>,
+}
+
+fn resolve_members(roots: &[PathBuf]) -> Result<(Closure, Vec<Member>), LintError> {
+    let first = roots.first().ok_or(LintError::NoRoots)?;
+    let mut seen = BTreeSet::new();
+    let mut files = Vec::new();
+    let mut members = Vec::with_capacity(roots.len());
+    for root in roots {
+        let closure = resolve_closure(root)?;
+        members.push(Member {
+            root: closure.root,
+            paths: closure.files.iter().map(|file| file.path.clone()).collect(),
+        });
+        for file in closure.files {
+            if seen.insert(file.path.clone()) {
+                files.push(file);
+            }
+        }
+    }
+    let merged = Closure {
+        root: normalize_path(first),
+        files,
+    };
+    Ok((merged, members))
+}
+
+fn closure_budget(member: Member, budget: &BudgetReport) -> ClosureBudget {
+    let files: Vec<FileBudget> = member
+        .paths
         .iter()
         .filter_map(|path| budget.files.iter().find(|file| &file.path == path))
         .cloned()
         .collect();
     let sum = |tokens: fn(&FileBudget) -> usize| files.iter().map(tokens).sum();
     ClosureBudget {
-        root,
+        root: member.root,
         o200k_tokens: sum(|file| file.o200k_tokens),
         target_tokens: sum(|file| file.target_tokens),
         gating_target_tokens: sum(|file| if file.gating { file.target_tokens } else { 0 }),
