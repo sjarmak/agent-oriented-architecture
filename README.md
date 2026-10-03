@@ -76,6 +76,7 @@ aoa audit [--fail-on tier1]       Ranked, tiered, read-only audit punch-list
 aoa lint-context [--changed ...]  Token-budget check over your agent context files
 aoa eval validate-trace <file>    Validate a trace; print span counts per type
 aoa eval run --codeprobe-run DIR  Turn a codeprobe run into per-task metric records
+                                  (--emit-traces DIR also writes each task's trace for validate-trace)
 aoa eval compare BASE MIGRATED    Print the visible-vs-hidden success gap delta
 aoa gap                           Which metrics are trustworthy enough to gate a decision
 aoa falsify --repos INPUT         Run the deciding experiment; write falsification.json

@@ -12,8 +12,9 @@
 //! in memory from any one file so a crafted or pathological input cannot exhaust
 //! memory.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
@@ -72,6 +73,37 @@ pub(crate) fn load_json_capped<T: DeserializeOwned>(path: &Path, label: &str) ->
         .with_context(|| format!("failed to read {label}"))?;
     serde_json::from_str(&raw)
         .with_context(|| format!("failed to parse {label} {}", path.display()))
+}
+
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("output path must have a UTF-8 file name")?;
+    let temporary = parent.join(format!(
+        ".{name}.{}.{}.tmp",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result = (|| -> Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .with_context(|| format!("failed to create {}", temporary.display()))?;
+        file.write_all(bytes)
+            .with_context(|| format!("failed to write {}", temporary.display()))?;
+        file.sync_all()
+            .with_context(|| format!("failed to sync {}", temporary.display()))?;
+        std::fs::rename(&temporary, path)
+            .with_context(|| format!("failed to install {}", path.display()))
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
 }
 
 #[cfg(test)]

@@ -40,6 +40,7 @@
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -59,9 +60,11 @@ use aoa_metrics::{
     WorkspaceSource,
 };
 use aoa_scip_graph::{build_symbol_graph, degraded, GraphCoverage, IndexSource, IndexedRepo};
-use aoa_trace::Trace;
+use aoa_trace::{to_envelope_json_pretty, validate_trace_value, Trace};
 
 use crate::cli::EvalRunArgs;
+use crate::commands::eval::TraceView;
+use crate::commands::fsutil::write_atomic;
 use crate::output::{eprint_human, escape_terminal, print_human, print_json};
 
 /// Mutation-surface reachability depth and retrieval cutoff. Fixed to the value
@@ -89,8 +92,16 @@ struct EvalRunReport {
     subtree_partition: Option<SubtreePartitionInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     graph_coverage: Option<GraphCoverage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    traces_emitted: Option<TracesEmitted>,
     records: Vec<TaskRecord>,
     errors: Vec<TaskError>,
+}
+
+#[derive(Debug, Serialize)]
+struct TracesEmitted {
+    dir: String,
+    count: usize,
 }
 
 /// How the repo was partitioned into subtrees, for JSON consumers.
@@ -127,6 +138,7 @@ struct TaskRecord {
     /// Count of non-fatal shim warnings (e.g. non-JSON transcript lines); a
     /// nonzero value flags a possibly-truncated or corrupt transcript.
     transcript_warnings: usize,
+    spans: TraceView,
     retrieval_locality: RetrievalLocality,
     invariant_discoverability: InvariantDiscoverability,
     mutation_surface: MutationSurface,
@@ -161,6 +173,12 @@ pub fn run(args: &EvalRunArgs) -> Result<i32> {
 
     let (task_ids, rejected_names) = discover_tasks_isolating_names(&args.codeprobe_run)?;
 
+    if let Some(dir) = &args.emit_traces {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("failed to create trace directory {}", dir.display()))?;
+    }
+    let mut traces_written = 0usize;
+
     let mut records = Vec::new();
     let mut errors: Vec<TaskError> = rejected_names
         .into_iter()
@@ -170,7 +188,13 @@ pub fn run(args: &EvalRunArgs) -> Result<i32> {
         })
         .collect();
     for task_id in task_ids {
-        match process_task(&task_id, args, &indexed, partition.as_ref()) {
+        match process_task(
+            &task_id,
+            args,
+            &indexed,
+            partition.as_ref(),
+            &mut traces_written,
+        ) {
             Ok(record) => records.push(record),
             // Fail loud for THIS trial — reported, never silently skipped — and
             // keep processing the rest of the batch.
@@ -197,6 +221,10 @@ pub fn run(args: &EvalRunArgs) -> Result<i32> {
             }
         }),
         graph_coverage: indexed.coverage.clone(),
+        traces_emitted: args.emit_traces.as_ref().map(|dir| TracesEmitted {
+            dir: dir.display().to_string(),
+            count: traces_written,
+        }),
         records,
         errors,
     };
@@ -278,6 +306,7 @@ fn process_task(
     args: &EvalRunArgs,
     indexed: &IndexedRepo,
     partition: Option<&SubtreePartition>,
+    traces_written: &mut usize,
 ) -> Result<TaskRecord> {
     let transcript = transcript_path(&args.codeprobe_run, task_id);
     let shim = parse_transcript_file(&transcript)
@@ -286,6 +315,15 @@ fn process_task(
     // A nonzero warning count flags a possibly-truncated/corrupt transcript; it
     // is surfaced on the record rather than dropped.
     let transcript_warnings = shim.warnings.len();
+
+    let spans = TraceView::from_report(
+        &validate_trace_value(&trace)
+            .with_context(|| format!("trace reconstructed for {task_id} is not valid"))?,
+    );
+    if let Some(dir) = &args.emit_traces {
+        emit_trace(dir, task_id, &trace)?;
+        *traces_written += 1;
+    }
 
     let scoring_path = scoring_path(&args.codeprobe_run, task_id);
     let scoring = TrialScoring::load(&args.codeprobe_run, task_id)?;
@@ -393,6 +431,7 @@ fn process_task(
         repo_eligible_for_r0: quality.eligible_for_r0(),
         graph_degrade_reason: indexed.degrade_reason.clone(),
         transcript_warnings,
+        spans,
         retrieval_locality: compute_retrieval_locality(input)?,
         invariant_discoverability: compute_invariant_discoverability(input),
         mutation_surface: compute_mutation_surface(input),
@@ -403,6 +442,22 @@ fn process_task(
             .transpose()?,
         gap,
     })
+}
+
+fn emit_trace(dir: &Path, task_id: &str, trace: &Trace) -> Result<()> {
+    let path = dir.join(format!("{task_id}.trace.json"));
+    let json = to_envelope_json_pretty(trace)
+        .with_context(|| format!("failed to serialize the trace for {task_id}"))?;
+    write_atomic(&path, json.as_bytes())
+}
+
+fn span_summary(spans: &TraceView) -> String {
+    spans
+        .counts
+        .iter()
+        .map(|entry| format!("{} {}", entry.span_type, entry.count))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// `F_edit`: the files the agent actually edited, from `write.committed` span
@@ -471,6 +526,12 @@ fn render_human(report: &EvalRunReport) -> String {
             gap,
             edit
         );
+        let _ = writeln!(
+            out,
+            "    spans: {} ({})",
+            r.spans.total,
+            span_summary(&r.spans)
+        );
         // Per-subtree rows (aoa-d6t.26): indented under their task record.
         for row in r.subtree_metrics.iter().flatten() {
             let first = match row.retrieval_locality.tool_calls_to_first_relevant_artifact {
@@ -505,6 +566,14 @@ fn render_human(report: &EvalRunReport) -> String {
             "  ERROR {:<26} {}",
             escape_terminal(&e.task_id),
             e.error
+        );
+    }
+    if let Some(emitted) = &report.traces_emitted {
+        let _ = writeln!(
+            out,
+            "traces: {} file(s) written to {}",
+            emitted.count,
+            escape_terminal(&emitted.dir)
         );
     }
     if let Some(note) = &report.insufficient_data {

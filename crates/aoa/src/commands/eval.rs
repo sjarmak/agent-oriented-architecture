@@ -27,16 +27,33 @@ pub fn run(args: &EvalArgs) -> Result<i32> {
 }
 
 #[derive(Debug, Serialize)]
-struct TraceView {
-    total: usize,
-    has_reconstructed: bool,
-    counts: Vec<TypeCount>,
+pub(crate) struct TraceView {
+    pub(crate) total: usize,
+    pub(crate) has_reconstructed: bool,
+    pub(crate) counts: Vec<TypeCount>,
 }
 
 #[derive(Debug, Serialize)]
-struct TypeCount {
-    span_type: String,
-    count: usize,
+pub(crate) struct TypeCount {
+    pub(crate) span_type: String,
+    pub(crate) count: usize,
+}
+
+impl TraceView {
+    pub(crate) fn from_report(report: &TraceReport) -> Self {
+        Self {
+            total: report.total(),
+            has_reconstructed: report.has_reconstructed(),
+            counts: report
+                .counts()
+                .iter()
+                .map(|(span_type, count)| TypeCount {
+                    span_type: span_type.as_str().to_string(),
+                    count: *count,
+                })
+                .collect(),
+        }
+    }
 }
 
 fn validate_trace(path: &Path, json: bool) -> Result<i32> {
@@ -44,22 +61,7 @@ fn validate_trace(path: &Path, json: bool) -> Result<i32> {
     // names the offending file itself, so wrapping would print the path twice in
     // the `{err:#}` chain rendering. (The type carries no such guarantee — a bare
     // `UnsupportedVersion` from `into_trace` names nothing.)
-    let report: TraceReport = aoa_trace::validate_trace(path)?;
-
-    let counts: Vec<TypeCount> = report
-        .counts()
-        .iter()
-        .map(|(span_type, count)| TypeCount {
-            span_type: span_type.as_str().to_string(),
-            count: *count,
-        })
-        .collect();
-
-    let view = TraceView {
-        total: report.total(),
-        has_reconstructed: report.has_reconstructed(),
-        counts,
-    };
+    let view = TraceView::from_report(&aoa_trace::validate_trace(path)?);
 
     if json {
         print_json(&view)?;

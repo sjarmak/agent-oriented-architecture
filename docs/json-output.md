@@ -30,7 +30,7 @@ removed without a major version note. Field types are given as JSON types.
 | `aoa falsify --json` | the `falsification.json` document: `verdict`, `precondition_unmet?`, `repo_delta?`, `harness_delta?`, `eligible_repos?`, `excluded_repos?`, `conventions_tried?`, `notes`, `bias_warnings?`, `bias_gate_invalidating` | `FalsificationOutput` in `crates/aoa/src/commands/falsify.rs` |
 | `aoa eval validate-trace --json` | `total` (number), `has_reconstructed` (bool), `counts` (array: `span_type`, `count`) | `TraceView` in `crates/aoa/src/commands/eval.rs` |
 | `aoa eval compare --json` | `gap_delta`, `held_out_delta` (numbers), `label` (string) | `aoa_gap` compare outcome via `crates/aoa/src/commands/eval.rs` |
-| `aoa eval run --json` | per-task AOA metric records | `crates/aoa/src/commands/eval_run.rs` |
+| `aoa eval run --json` | per-task AOA metric records; each carries `spans` in the `validate-trace` shape (`total`, `has_reconstructed`, `counts`), and `traces_emitted` (`dir`, `count`) appears with `--emit-traces` | `crates/aoa/src/commands/eval_run.rs` |
 | `aoa eval r0b --json` | leakage-canary composition report | `crates/aoa/src/commands/r0b.rs` |
 | `aoa eval experiment --json` | `FalsifyInput` build report, including observation sidecar path/SHA-256/count/IDs and per-repo `candidate_pairs`, `identical_pairs`, and `pair_yield` | `aoa_falsify_build::BuildReport`; `aoa_bench::MeasurementObservationV1` |
 | `aoa init --json` | `mode` (string), `template_version` (number), `written`, `skipped`, `review` (string arrays) | `InitView` in `crates/aoa/src/commands/init.rs` |

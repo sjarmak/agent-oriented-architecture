@@ -337,6 +337,14 @@ pub struct EvalRunArgs {
     #[arg(long, value_name = "DIR")]
     pub subtree_root: Option<PathBuf>,
 
+    /// Write the trace reconstructed from each task's transcript to
+    /// `<DIR>/<task_id>.trace.json`, in the format `aoa eval validate-trace`
+    /// reads. The directory is created when missing and an existing trace
+    /// file for the same task is replaced. Tool targets are copied from the
+    /// transcript verbatim, so treat the files as sensitively as the run.
+    #[arg(long, value_name = "DIR")]
+    pub emit_traces: Option<PathBuf>,
+
     /// Emit the structured JSON rendering instead of human text.
     #[arg(long)]
     pub json: bool,
