@@ -82,8 +82,9 @@ fn names_worktree(git_dir: &Path, repo: &Path) -> bool {
         Ok(registered) => resolves_to(registered.trim_end().into(), &repo.join(".git")),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             match config_value(repo, git_dir, &["--get", "core.worktree"]) {
-                Some(worktree) => resolves_to(git_dir.join(worktree), repo),
-                None => names_no_worktree(git_dir, repo),
+                ConfigValue::Set(worktree) => resolves_to(git_dir.join(worktree), repo),
+                ConfigValue::Unset => names_no_worktree(git_dir, repo),
+                ConfigValue::Unreadable => false,
             }
         }
         Err(_) => false,
@@ -96,19 +97,36 @@ fn names_no_worktree(git_dir: &Path, repo: &Path) -> bool {
     });
     !inside_another_checkout
         && git_dir.join("config").is_file()
-        && config_value(repo, git_dir, &["--type=bool", "--get", "core.bare"]).as_deref()
-            != Some("true")
+        && match config_value(repo, git_dir, &["--type=bool", "--get", "core.bare"]) {
+            ConfigValue::Set(bare) => bare != "true",
+            ConfigValue::Unset => true,
+            ConfigValue::Unreadable => false,
+        }
 }
 
-fn config_value(repo: &Path, git_dir: &Path, query: &[&str]) -> Option<String> {
-    let output = git(repo)
-        .args(["config", "--file"])
-        .arg(git_dir.join("config"))
+enum ConfigValue {
+    Set(String),
+    Unset,
+    Unreadable,
+}
+
+const GIT_CONFIG_KEY_UNSET: i32 = 1;
+
+fn config_value(repo: &Path, git_dir: &Path, query: &[&str]) -> ConfigValue {
+    let Ok(output) = git(repo)
+        .arg("--git-dir")
+        .arg(git_dir)
+        .arg("config")
         .args(query)
         .output()
-        .ok()?;
-    let value = std::str::from_utf8(&output.stdout).ok()?.trim_end();
-    (output.status.success() && !value.is_empty()).then(|| value.to_string())
+    else {
+        return ConfigValue::Unreadable;
+    };
+    match (output.status.code(), std::str::from_utf8(&output.stdout)) {
+        (Some(0), Ok(value)) => ConfigValue::Set(value.trim_end().to_string()),
+        (Some(GIT_CONFIG_KEY_UNSET), _) => ConfigValue::Unset,
+        _ => ConfigValue::Unreadable,
+    }
 }
 
 fn git(repo: &Path) -> Command {

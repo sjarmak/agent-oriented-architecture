@@ -1319,6 +1319,56 @@ fn a_git_dir_outside_the_checkout_lends_its_hook_only_to_the_worktree_it_names()
     assert!(!pre_commit_plane_missing(repo.path()));
 }
 
+fn config_file(file: &Path, key: &str, value: &str) {
+    git(
+        file.parent().expect("config file parent"),
+        &[
+            "config",
+            "--file",
+            file.to_str().expect("utf-8 path"),
+            key,
+            value,
+        ],
+    );
+}
+
+#[test]
+fn a_worktree_named_through_an_included_config_is_the_one_the_hook_belongs_to() {
+    let git_dirs = tempfile::tempdir().expect("git dir parent");
+    let git_dir = git_dirs.path().join("module");
+    let repo = separate_git_dir_repo(&git_dir);
+    write_hook(&git_dir.join("hooks/pre-commit"));
+    let elsewhere = tempfile::tempdir().expect("another worktree");
+    let included = git_dir.join("elsewhere.config");
+    config_file(
+        &included,
+        "core.worktree",
+        elsewhere.path().to_str().expect("utf-8 path"),
+    );
+    assert!(!pre_commit_plane_missing(repo.path()));
+
+    config_file(&git_dir.join("config"), "include.path", "elsewhere.config");
+    assert!(pre_commit_plane_missing(repo.path()));
+}
+
+#[test]
+fn a_worktree_named_in_the_per_worktree_config_is_the_one_the_hook_belongs_to() {
+    let git_dirs = tempfile::tempdir().expect("git dir parent");
+    let git_dir = git_dirs.path().join("module");
+    let repo = separate_git_dir_repo(&git_dir);
+    write_hook(&git_dir.join("hooks/pre-commit"));
+    let elsewhere = tempfile::tempdir().expect("another worktree");
+    config_file(
+        &git_dir.join("config.worktree"),
+        "core.worktree",
+        elsewhere.path().to_str().expect("utf-8 path"),
+    );
+    assert!(!pre_commit_plane_missing(repo.path()));
+
+    config_file(&git_dir.join("config"), "extensions.worktreeConfig", "true");
+    assert!(pre_commit_plane_missing(repo.path()));
+}
+
 #[test]
 fn a_git_file_pointing_at_a_bare_repository_does_not_borrow_its_hook() {
     let bare = tempfile::tempdir().expect("bare repository");
