@@ -113,6 +113,9 @@ fn collect_source_files(
                 source: std::io::Error::other(unapplied.to_string()),
             });
         }
+        if entry.file_type().is_some_and(|kind| kind.is_dir()) {
+            require_readable_ignore_file(entry.path())?;
+        }
         if !entry.file_type().is_some_and(|kind| kind.is_file()) {
             continue;
         }
@@ -124,6 +127,15 @@ fn collect_source_files(
     }
     files.sort();
     Ok(files)
+}
+
+fn require_readable_ignore_file(dir: &Path) -> Result<(), ScipGraphError> {
+    let path = dir.join(".gitignore");
+    match std::fs::read_to_string(&path) {
+        Ok(_) => Ok(()),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(ScipGraphError::Io { path, source }),
+    }
 }
 
 fn is_dependency_or_build_dir(entry: &DirEntry) -> bool {

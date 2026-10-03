@@ -215,3 +215,20 @@ fn ignore_line_the_matcher_cannot_apply_fails_the_index_and_names_the_file() {
     let reason = degraded.degrade_reason.expect("degrade reason");
     assert!(reason.contains(".gitignore"), "{reason}");
 }
+
+#[test]
+fn ignore_file_that_cannot_be_read_fails_the_index_and_names_the_file() {
+    let repo = TempDir::new().unwrap();
+    write(repo.path(), "svc/a.py", "def own():\n    pass\n");
+    write(repo.path(), "svc/generated/client.py", &functions(4));
+    std::fs::create_dir(repo.path().join("svc/.gitignore")).unwrap();
+
+    let err = index_best_effort(repo.path()).expect_err("unreadable ignore file");
+    assert!(err.to_string().contains("svc/.gitignore"), "{err}");
+
+    let degraded = build_symbol_graph(IndexSource::BestEffort {
+        repo_dir: repo.path(),
+    });
+    assert_eq!(degraded.graph.quality, IndexQuality::Degraded);
+    assert!(degraded.degrade_reason.is_some());
+}

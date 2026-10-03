@@ -211,3 +211,19 @@ fn ignore_line_the_matcher_cannot_apply_fails_discovery_and_names_the_file() {
     let source = std::error::Error::source(&err).expect("source").to_string();
     assert!(source.contains(".gitignore"), "{source}");
 }
+
+#[test]
+fn ignore_file_that_cannot_be_read_fails_discovery_and_names_the_file() {
+    for name in [".gitignore", ".ignore"] {
+        let dir = TempDir::new().expect("tempdir");
+        write(dir.path(), "services/api/AGENTS.md", "# Api\n");
+        fs::create_dir(dir.path().join("services").join(name)).expect("ignore dir");
+
+        let err = discover_context_roots(dir.path()).expect_err("unreadable ignore file");
+
+        assert!(
+            matches!(&err, LintError::Walk { dir, .. } if dir.ends_with(name)),
+            "{err}"
+        );
+    }
+}
