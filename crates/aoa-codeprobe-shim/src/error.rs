@@ -29,6 +29,12 @@ pub enum ShimError {
     #[error("transcript exceeds the {max}-span cap (DoS guard)")]
     TooManySpans { max: usize },
 
+    #[error(
+        "transcript carries no stream-json `assistant` or `user` event \
+         ({lines} non-blank line(s) read), so no agent action is observable"
+    )]
+    NoAgentEvents { lines: usize },
+
     /// A span-per-line log carried a line that is not a well-formed span.
     /// Raised by backends whose input format AOA itself owns (the observe
     /// live log): there a malformed line is upstream corruption and fails

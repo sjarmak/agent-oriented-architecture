@@ -190,6 +190,90 @@ fn eval_run_excludes_a_trial_whose_scorer_errored() {
     }
 }
 
+fn answer_only_run(dir: &TempDir, transcript: &str) -> PathBuf {
+    let run = dir.path().join("run");
+    let trial = run.join("answer-only-000");
+    std::fs::create_dir_all(&trial).expect("trial dir");
+    std::fs::write(trial.join("agent_output.txt"), transcript).expect("write transcript");
+    std::fs::write(
+        trial.join("scoring.json"),
+        br#"{"score": 1.0, "passed": true}"#,
+    )
+    .expect("write scoring");
+    run
+}
+
+#[test]
+fn eval_run_rejects_a_transcript_that_holds_only_the_final_answer() {
+    for transcript in [
+        "7\n",
+        "The answer is 7.\n",
+        "{\"type\":\"system\"}\n{\"type\":\"result\",\"result\":\"7\"}\n",
+        "",
+    ] {
+        let dir = TempDir::new().expect("tempdir");
+        let run = answer_only_run(&dir, transcript);
+
+        let output = aoa()
+            .args(["eval", "run", "--json", "--codeprobe-run"])
+            .arg(&run)
+            .output()
+            .expect("run");
+
+        assert!(
+            !output.status.success(),
+            "a transcript with no agent events must fail loud: {transcript:?}"
+        );
+        let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+        assert_eq!(parsed["record_count"], 0, "{transcript:?}");
+        assert_eq!(parsed["error_count"], 1, "{transcript:?}");
+        assert_eq!(parsed["behavioral_signal"]["observations"], 0);
+        assert_eq!(parsed["errors"][0]["task_id"], "answer-only-000");
+        let error = parsed["errors"][0]["error"].as_str().expect("error string");
+        for expected in ["agent_output.txt", "stream-json", "assistant"] {
+            assert!(
+                error.contains(expected),
+                "error must name {expected}: {error}"
+            );
+        }
+    }
+}
+
+#[test]
+fn eval_run_human_reports_an_answer_only_transcript_as_an_error() {
+    let dir = TempDir::new().expect("tempdir");
+    let run = answer_only_run(&dir, "7\n");
+
+    aoa()
+        .args(["eval", "run", "--codeprobe-run"])
+        .arg(&run)
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("0 record(s), 1 error(s)"))
+        .stdout(predicate::str::contains("ERROR answer-only-000"))
+        .stdout(predicate::str::contains("stream-json"));
+}
+
+#[test]
+fn eval_run_records_a_prose_only_stream_json_transcript() {
+    let dir = TempDir::new().expect("tempdir");
+    let run = answer_only_run(
+        &dir,
+        "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"7\"}]}}\n",
+    );
+
+    let output = aoa()
+        .args(["eval", "run", "--json", "--codeprobe-run"])
+        .arg(&run)
+        .output()
+        .expect("run");
+
+    assert!(output.status.success());
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert_eq!(parsed["record_count"], 1);
+    assert_eq!(parsed["error_count"], 0);
+}
+
 #[test]
 fn eval_run_uses_the_artifact_leg_as_held_out_for_dual_composite() {
     let dir = TempDir::new().expect("tempdir");

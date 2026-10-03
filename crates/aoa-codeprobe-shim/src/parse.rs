@@ -193,12 +193,15 @@ pub(crate) fn parse_transcript_bounded(raw: &str, limits: Limits) -> Result<Shim
         std::collections::HashMap::new();
     let mut seq: u64 = 0;
     let mut saw_write = false;
+    let mut lines: usize = 0;
+    let mut agent_events: usize = 0;
 
     for line in raw.lines() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
+        lines += 1;
         let event: Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(_) => {
@@ -213,6 +216,7 @@ pub(crate) fn parse_transcript_bounded(raw: &str, limits: Limits) -> Result<Shim
 
         match event.get("type").and_then(Value::as_str) {
             Some("assistant") => {
+                agent_events += 1;
                 for block in content_blocks(&event) {
                     if block.get("type").and_then(Value::as_str) != Some("tool_use") {
                         continue;
@@ -279,6 +283,7 @@ pub(crate) fn parse_transcript_bounded(raw: &str, limits: Limits) -> Result<Shim
             // its own event. Both provenances agree on what matters here:
             // neither `write.blocked` nor `write.failed` is a landed edit.
             Some("user") => {
+                agent_events += 1;
                 for block in content_blocks(&event) {
                     if block.get("type").and_then(Value::as_str) != Some("tool_result") {
                         continue;
@@ -307,6 +312,10 @@ pub(crate) fn parse_transcript_bounded(raw: &str, limits: Limits) -> Result<Shim
             }
             _ => {}
         }
+    }
+
+    if agent_events == 0 {
+        return Err(ShimError::NoAgentEvents { lines });
     }
 
     if !saw_write {
@@ -514,6 +523,30 @@ mod tests {
     }
 
     #[test]
+    fn a_transcript_without_agent_events_is_rejected() {
+        for (raw, lines) in [
+            ("7\n", 1),
+            ("The answer is 7.\n", 1),
+            ("{\"type\":\"system\"}\n\n{\"type\":\"result\"}\n", 2),
+            ("", 0),
+        ] {
+            let err = parse_transcript(raw).unwrap_err();
+            assert!(
+                matches!(err, ShimError::NoAgentEvents { lines: found } if found == lines),
+                "{raw:?} gave {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_prose_only_assistant_event_is_an_abstaining_trace() {
+        let raw = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"7"}]}}"#;
+        let result = parse_transcript(raw).unwrap();
+        assert_eq!(result.trace.spans.len(), 1);
+        assert_eq!(result.trace.spans[0].span_type, SpanType::Abstain);
+    }
+
+    #[test]
     fn span_cap_fails_loud_rather_than_truncating() {
         // Three spannable events with a span cap of 2 must error, not return a
         // truncated 2-span trace (which would corrupt locality metrics).
@@ -531,8 +564,8 @@ mod tests {
     fn warning_cap_truncates_behind_a_visible_sentinel() {
         // Five non-JSON lines with a warning cap of 2: two real warnings plus one
         // sentinel, and the sentinel names the cap so the truncation is visible.
-        let raw = "x\ny\nz\nw\nv\n";
-        let result = parse_transcript_bounded(raw, limits(100, 2)).unwrap();
+        let raw = format!("x\ny\nz\nw\nv\n{}\n", read_event());
+        let result = parse_transcript_bounded(&raw, limits(100, 2)).unwrap();
         assert_eq!(result.warnings.len(), 3);
         assert!(result
             .warnings

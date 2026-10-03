@@ -1,1 +1,1 @@
-false
+{"type":"assistant","message":{"content":[{"type":"text","text":"false"}]}}
