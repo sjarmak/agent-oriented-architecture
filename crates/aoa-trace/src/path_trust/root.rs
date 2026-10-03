@@ -330,7 +330,7 @@ fn git_resolved_path(
     Ok(Ok(reported))
 }
 
-fn linked_worktree_points_back(
+pub fn linked_worktree_points_back(
     candidate: &Path,
     git_dir: &Path,
 ) -> Result<bool, RepositoryRootError> {

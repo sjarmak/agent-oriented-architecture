@@ -31,4 +31,4 @@ pub use component::validate_single_component;
 pub use error::{PathTrustError, UnsafePathComponent};
 pub use nofollow::{is_symlink_nofollow, reject_symlink, safe_join_nofollow};
 pub use resolve::{normalize_lexically, resolve_canonicalizing};
-pub use root::{resolve_repository_root, RepositoryRootError};
+pub use root::{linked_worktree_points_back, resolve_repository_root, RepositoryRootError};

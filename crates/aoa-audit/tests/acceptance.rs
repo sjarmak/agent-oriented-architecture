@@ -1252,6 +1252,31 @@ fn a_linked_worktree_inherits_the_main_checkout_pre_commit_hook() {
 }
 
 #[test]
+fn a_linked_worktree_registered_by_a_relative_path_inherits_the_hook() {
+    let main = git_fixture_repo();
+    write_hook(&main.path().join(".git/hooks/pre-commit"));
+    let linked = main.path().join("linked");
+    git(
+        main.path(),
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "linked",
+            linked.to_str().expect("utf-8 path"),
+        ],
+    );
+    std::fs::write(
+        main.path().join(".git/worktrees/linked/gitdir"),
+        "../../../linked/.git\n",
+    )
+    .expect("register the worktree by a relative path");
+
+    assert!(!pre_commit_plane_missing(&linked));
+}
+
+#[test]
 fn a_git_file_pointing_at_another_repository_does_not_borrow_its_hook() {
     let other = git_fixture_repo();
     write_hook(&other.path().join(".git/hooks/pre-commit"));

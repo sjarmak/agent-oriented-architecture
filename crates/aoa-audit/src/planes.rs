@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use aoa_corpus::PRECOMMIT_HOOK_MARKERS;
+use aoa_trace::{linked_worktree_points_back, RepositoryRootError};
 use serde_json::Value;
 
 use crate::hook_set::{read_settings, AOA_SETTINGS_KEY, ENFORCE_HOOK_SET, ENFORCE_WRAPPER_REL};
@@ -71,24 +72,27 @@ fn installed_pre_commit_hook(repo: &Path) -> bool {
 }
 
 fn names_worktree(git_dir: &Path, repo: &Path) -> bool {
-    let resolves_to = |named: PathBuf, expected: &Path| {
-        named.canonicalize().is_ok_and(|named| {
-            expected
-                .canonicalize()
-                .is_ok_and(|expected| named == expected)
-        })
-    };
-    match std::fs::read_to_string(git_dir.join("gitdir")) {
-        Ok(registered) => resolves_to(registered.trim_end().into(), &repo.join(".git")),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+    match linked_worktree_points_back(repo, git_dir) {
+        Ok(points_back) => points_back,
+        Err(RepositoryRootError::Backlink { source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
             match config_value(repo, git_dir, &["--get", "core.worktree"]) {
-                ConfigValue::Set(worktree) => resolves_to(git_dir.join(worktree), repo),
+                ConfigValue::Set(worktree) => same_directory(&git_dir.join(worktree), repo),
                 ConfigValue::Unset => names_no_worktree(git_dir, repo),
                 ConfigValue::Unreadable => false,
             }
         }
         Err(_) => false,
     }
+}
+
+fn same_directory(named: &Path, expected: &Path) -> bool {
+    named.canonicalize().is_ok_and(|named| {
+        expected
+            .canonicalize()
+            .is_ok_and(|expected| named == expected)
+    })
 }
 
 fn names_no_worktree(git_dir: &Path, repo: &Path) -> bool {
