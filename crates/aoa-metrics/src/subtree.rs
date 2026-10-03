@@ -175,19 +175,33 @@ impl SubtreePartition {
 /// on a manifest that exists but is unreadable or malformed — callers should
 /// surface that and fall back to repo-wide reporting, never guess.
 pub fn discover_partition(repo_root: &Path) -> Result<SubtreePartition, SubtreeError> {
-    type Detector = fn(&Path) -> Result<Option<Vec<String>>, SubtreeError>;
-    const DETECTORS: [(Detector, WorkspaceSource); 4] = [
-        (cargo_members, WorkspaceSource::CargoWorkspace),
-        (go_work_members, WorkspaceSource::GoWork),
-        (pnpm_members, WorkspaceSource::PnpmWorkspace),
-        (npm_members, WorkspaceSource::NpmWorkspaces),
-    ];
-    for (detect, source) in DETECTORS {
+    for (detect, source) in PARTITION_DETECTORS {
         if let Some(members) = detect(repo_root)? {
             return Ok(SubtreePartition::new(repo_root, members, source));
         }
     }
     Ok(SubtreePartition::implicit_root(repo_root))
+}
+
+type Detector = fn(&Path) -> Result<Option<Vec<String>>, SubtreeError>;
+
+const PARTITION_DETECTORS: [(Detector, WorkspaceSource); 4] = [
+    (cargo_members, WorkspaceSource::CargoWorkspace),
+    (go_work_members, WorkspaceSource::GoWork),
+    (pnpm_members, WorkspaceSource::PnpmWorkspace),
+    (npm_members, WorkspaceSource::NpmWorkspaces),
+];
+
+pub fn declared_member_dirs(repo_root: &Path) -> Result<Vec<String>, SubtreeError> {
+    let detectors = PARTITION_DETECTORS
+        .iter()
+        .map(|(detect, _)| *detect)
+        .chain([gradle_members as Detector]);
+    let mut dirs: BTreeSet<String> = BTreeSet::new();
+    for detect in detectors {
+        dirs.extend(detect(repo_root)?.unwrap_or_default());
+    }
+    Ok(dirs.into_iter().collect())
 }
 
 /// Read a manifest if it exists; `Ok(None)` when absent.
@@ -306,6 +320,106 @@ fn go_work_members(root: &Path) -> Result<Option<Vec<String>>, SubtreeError> {
         validate_member(&path, member)?;
     }
     Ok((!members.is_empty()).then_some(members))
+}
+
+fn gradle_members(root: &Path) -> Result<Option<Vec<String>>, SubtreeError> {
+    let mut members = Vec::new();
+    for name in ["settings.gradle", "settings.gradle.kts"] {
+        let path = root.join(name);
+        let Some(raw) = read_manifest(&path)? else {
+            continue;
+        };
+        for member in gradle_includes(&raw) {
+            validate_member(&path, &member)?;
+            members.push(member);
+        }
+    }
+    Ok((!members.is_empty()).then_some(members))
+}
+
+fn gradle_includes(settings: &str) -> Vec<String> {
+    const KEYWORD: &str = "include";
+    let text = strip_gradle_comments(settings);
+    let mut members = Vec::new();
+    let mut rest = text.as_str();
+    while let Some(at) = rest.find(KEYWORD) {
+        let follows_identifier = rest[..at]
+            .chars()
+            .next_back()
+            .is_some_and(is_identifier_char);
+        rest = &rest[at + KEYWORD.len()..];
+        if follows_identifier {
+            continue;
+        }
+        let args = rest.trim_start_matches([' ', '\t']);
+        let args = if let Some(call) = args.strip_prefix('(') {
+            call.split(')').next().unwrap_or_default()
+        } else if args.len() < rest.len() {
+            bare_include_args(args)
+        } else {
+            continue;
+        };
+        members.extend(
+            quoted_strings(args)
+                .into_iter()
+                .filter(|project| !project.contains('$'))
+                .map(|project| clean_member(&project.trim_start_matches(':').replace(':', "/")))
+                .filter(|dir| !dir.is_empty()),
+        );
+    }
+    members
+}
+
+fn is_identifier_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+fn strip_gradle_comments(raw: &str) -> String {
+    let without_line_comments = raw
+        .lines()
+        .map(|line| line.split("//").next().unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut out = String::with_capacity(without_line_comments.len());
+    let mut rest = without_line_comments.as_str();
+    while let Some(start) = rest.find("/*") {
+        out.push_str(&rest[..start]);
+        rest = rest[start + 2..]
+            .split_once("*/")
+            .map_or("", |(_, tail)| tail);
+    }
+    out.push_str(rest);
+    out
+}
+
+fn bare_include_args(args: &str) -> &str {
+    let mut end = 0;
+    for line in args.split_inclusive('\n') {
+        end += line.len();
+        if !line.trim_end().ends_with(',') {
+            break;
+        }
+    }
+    &args[..end]
+}
+
+fn quoted_strings(args: &str) -> Vec<&str> {
+    let mut strings = Vec::new();
+    let mut rest = args;
+    while let Some(open) = rest.find(['\'', '"']) {
+        let quote = if rest[open..].starts_with('"') {
+            '"'
+        } else {
+            '\''
+        };
+        let body = &rest[open + 1..];
+        let Some(close) = body.find(quote) else {
+            break;
+        };
+        strings.push(&body[..close]);
+        rest = &body[close + 1..];
+    }
+    strings
 }
 
 /// `pnpm-workspace.yaml` `packages` patterns (with `!` exclusions).

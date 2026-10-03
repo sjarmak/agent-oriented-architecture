@@ -5,8 +5,8 @@ use std::time::SystemTime;
 use aoa_budget::{count_budget, resolve_closure, Config, DEFAULT_CONTEXT_CEILING};
 use aoa_construct::BehavioralSignal;
 use aoa_metrics::{
-    compute_metrics, discover_partition, IndexQuality, MetricInput, MetricRecord, SubtreePartition,
-    SymbolGraph, TransformMap,
+    compute_metrics, declared_member_dirs, discover_partition, IndexQuality, MetricInput,
+    MetricRecord, SubtreePartition, SymbolGraph, TransformMap,
 };
 use aoa_trace::Trace;
 use serde::{Deserialize, Serialize};
@@ -163,6 +163,14 @@ pub fn audit(repo: &Path, cfg: &AuditConfig) -> Result<AuditReport, AuditError> 
             )),
         ),
     };
+    let subtree_discovery_warning = subtree_discovery_warning.or_else(|| {
+        declared_member_dirs(repo).err().map(|e| {
+            format!(
+                "workspace member discovery failed ({e}); package roots are counted from \
+                 conventional directories only"
+            )
+        })
+    });
 
     if let Some(item) = context_budget_item(repo, cfg)? {
         items.push(item);

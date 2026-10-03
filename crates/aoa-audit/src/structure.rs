@@ -44,8 +44,8 @@ pub use invariants::invariant_sites;
 use size_outliers::{module_size_outlier_item, module_size_outliers};
 pub use verification::verification_sites;
 
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Component, Path, PathBuf};
 
 use aoa_metrics::SubtreePartition;
 
@@ -69,6 +69,7 @@ const MANIFEST_MARKERS: &[&str] = &[
     "go.mod",
     "pom.xml",
     "build.gradle",
+    "build.gradle.kts",
 ];
 
 /// Directory names that conventionally hold workspace member packages one level
@@ -314,21 +315,6 @@ pub fn navigability_sites(repo: &Path) -> Result<Vec<PathBuf>, AuditError> {
     Ok(roots)
 }
 
-/// The package roots under `repo`: the repo root, every immediate child carrying
-/// a build manifest, and workspace members nested one level inside a well-known
-/// container dir (`crates/foo/`, `packages/bar/`; see [`WORKSPACE_CONTAINER_DIRS`]).
-///
-/// The single bounded package-root discovery shared by the structure probes that
-/// key on package roots ([`navigability_sites`] and [`verification_sites`]) — one
-/// walk, so the two cannot drift apart on what counts as a member.
-///
-/// Discovery is deliberately *bounded*, not a full-tree manifest sweep: an
-/// unbounded walk would fold in trybuild test-fixture crates, `examples/`
-/// sub-crates, and partially-vendored trees, inflating the count past the
-/// construct it names ("workspace member crate") and — because `aoa-migrate`
-/// *writes* READMEs into navigability sites — writing anchors into test
-/// fixtures. The container-dir convention captures real members while excluding
-/// those.
 fn package_roots(repo: &Path) -> Result<Vec<PathBuf>, AuditError> {
     let mut roots: Vec<PathBuf> = vec![repo.to_path_buf()];
     for entry in read_dir(repo)? {
@@ -352,7 +338,33 @@ fn package_roots(repo: &Path) -> Result<Vec<PathBuf>, AuditError> {
             roots.push(path);
         }
     }
+    let mut seen: BTreeSet<PathBuf> = roots.iter().cloned().collect();
+    for member in aoa_metrics::declared_member_dirs(repo).unwrap_or_default() {
+        if let Some(root) = declared_member_root(repo, &member) {
+            if seen.insert(root.clone()) {
+                roots.push(root);
+            }
+        }
+    }
     Ok(roots)
+}
+
+fn declared_member_root(repo: &Path, member: &str) -> Option<PathBuf> {
+    let mut root = repo.to_path_buf();
+    for component in Path::new(member).components() {
+        let Component::Normal(name) = component else {
+            return None;
+        };
+        let name = name.to_str()?;
+        if name.starts_with('.') || SKIP_DIRS.contains(&name) {
+            return None;
+        }
+        root.push(name);
+        if !std::fs::symlink_metadata(&root).is_ok_and(|meta| meta.is_dir()) {
+            return None;
+        }
+    }
+    Some(root)
 }
 
 /// Whether `dir`'s name is a conventional workspace-container dir
