@@ -106,7 +106,7 @@ fn collect_source_files(
     let mut files = Vec::new();
     for entry in walker {
         let entry = entry.map_err(|source| ScipGraphError::Io {
-            path: dir.to_path_buf(),
+            path: failing_path(&source).unwrap_or(dir).to_path_buf(),
             source: std::io::Error::other(source),
         })?;
         if let Some(unapplied) = entry.error() {
@@ -129,6 +129,17 @@ fn collect_source_files(
     }
     files.sort();
     Ok(files)
+}
+
+fn failing_path(error: &ignore::Error) -> Option<&Path> {
+    match error {
+        ignore::Error::WithPath { path, .. } => Some(path),
+        ignore::Error::Loop { child, .. } => Some(child),
+        ignore::Error::WithDepth { err, .. } | ignore::Error::WithLineNumber { err, .. } => {
+            failing_path(err)
+        }
+        _ => None,
+    }
 }
 
 fn is_walked_dir(entry: &DirEntry) -> bool {
@@ -297,6 +308,23 @@ fn called_names(line: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_walk_error_names_the_path_that_failed_however_deeply_it_is_wrapped() {
+        let error = ignore::Error::WithDepth {
+            depth: 2,
+            err: Box::new(ignore::Error::WithPath {
+                path: PathBuf::from("repo/svc/private"),
+                err: Box::new(ignore::Error::Io(std::io::Error::other("denied"))),
+            }),
+        };
+
+        assert_eq!(failing_path(&error), Some(Path::new("repo/svc/private")));
+        assert_eq!(
+            failing_path(&ignore::Error::Io(std::io::Error::other("denied"))),
+            None
+        );
+    }
 
     fn scan(module: &str, src: &str) -> (BTreeSet<String>, BTreeSet<(String, String)>) {
         let mut nodes = BTreeSet::new();

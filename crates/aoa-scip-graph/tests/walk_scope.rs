@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use aoa_scip_graph::{build_symbol_graph, index_best_effort, IndexSource};
+use aoa_scip_graph::{build_symbol_graph, index_best_effort, IndexSource, ScipGraphError};
 use aoa_trace::IndexQuality;
 use tempfile::TempDir;
 
@@ -260,4 +260,47 @@ fn ignore_file_that_is_not_text_fails_the_index_and_names_the_file() {
     let err = index_best_effort(repo.path()).expect_err("ignore file is not text");
 
     assert!(err.to_string().contains("svc/.gitignore"), "{err}");
+}
+
+#[test]
+fn source_extension_is_recognized_whatever_its_letter_case() {
+    let repo = TempDir::new().unwrap();
+    write(repo.path(), "svc/own.PY", "def own():\n    pass\n");
+    write(repo.path(), "web/view.TS", "export const view = 1;\n");
+
+    let indexed = index_best_effort(repo.path()).unwrap();
+
+    assert_eq!(indexed.graph.nodes, ["svc.own.own"]);
+    let coverage = indexed.coverage.expect("best-effort coverage");
+    assert_eq!(
+        coverage.indexed,
+        BTreeMap::from([("Python".to_string(), 1)])
+    );
+    assert_eq!(
+        coverage.unindexed,
+        BTreeMap::from([("TypeScript".to_string(), 1)])
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn directory_that_cannot_be_listed_fails_the_index_and_names_the_directory() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repo = TempDir::new().unwrap();
+    write(repo.path(), "svc/a.py", "def own():\n    pass\n");
+    let sealed = repo.path().join("svc/private");
+    std::fs::create_dir(&sealed).unwrap();
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o100)).unwrap();
+    let seal_took = std::fs::read_dir(&sealed).is_err();
+
+    let result = index_best_effort(repo.path());
+
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if seal_took {
+        match result.expect_err("unlistable directory") {
+            ScipGraphError::Io { path, .. } => assert_eq!(path, sealed),
+            other => panic!("expected an io error naming the directory, got {other}"),
+        }
+    }
 }

@@ -84,7 +84,7 @@ impl GraphCoverage {
 }
 
 pub(crate) fn language_of(extension: &OsStr) -> Option<&'static str> {
-    let language = match extension.to_str()? {
+    let language = match extension.to_str()?.to_ascii_lowercase().as_str() {
         "py" => INDEXED_LANGUAGE,
         "ts" | "tsx" | "mts" | "cts" => "TypeScript",
         "js" | "jsx" | "mjs" | "cjs" => "JavaScript",
