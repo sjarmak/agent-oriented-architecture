@@ -181,7 +181,7 @@ fn findings_for<'a>(report: &'a LintReport, file_name: &str) -> Vec<&'a Finding>
 fn section_rules_skip_non_markdown_closure_members() {
     let report = mixed_report();
 
-    for file_name in ["snapshot.toml", "sync.ts"] {
+    for file_name in ["snapshot.toml", "sync.ts", "deploy"] {
         assert!(
             report
                 .budget

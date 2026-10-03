@@ -18,7 +18,7 @@ pub struct LintedFile {
 /// stable order (detector order, then in-file order).
 pub fn run_all(file: &LintedFile) -> Vec<Finding> {
     let mut findings = Vec::new();
-    if is_markdown(&file.path) {
+    if is_markdown(file) {
         findings.extend(duplication::detect(file));
         findings.extend(verbosity::detect(file));
     }
@@ -30,7 +30,11 @@ pub fn run_all(file: &LintedFile) -> Vec<Finding> {
 
 const MARKDOWN_EXTENSIONS: [&str; 4] = ["md", "markdown", "mdc", "mdx"];
 
-fn is_markdown(path: &Path) -> bool {
+fn is_markdown(file: &LintedFile) -> bool {
+    has_markdown_name(&file.path) && !file.text.starts_with("#!")
+}
+
+fn has_markdown_name(path: &Path) -> bool {
     match path.extension() {
         None => true,
         Some(extension) => MARKDOWN_EXTENSIONS
@@ -41,8 +45,8 @@ fn is_markdown(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_markdown;
-    use std::path::Path;
+    use super::{has_markdown_name, is_markdown, LintedFile};
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn markdown_extensions_match_in_any_case() {
@@ -53,14 +57,14 @@ mod tests {
             "a.markdown",
             "b.mdx",
         ] {
-            assert!(is_markdown(Path::new(path)), "{path}");
+            assert!(has_markdown_name(Path::new(path)), "{path}");
         }
     }
 
     #[test]
     fn extensionless_context_files_are_markdown() {
         for path in [".cursorrules", "AGENTS"] {
-            assert!(is_markdown(Path::new(path)), "{path}");
+            assert!(has_markdown_name(Path::new(path)), "{path}");
         }
     }
 
@@ -72,7 +76,27 @@ mod tests {
             "notes.md.bak",
             "Cargo.lock",
         ] {
-            assert!(!is_markdown(Path::new(path)), "{path}");
+            assert!(!has_markdown_name(Path::new(path)), "{path}");
         }
+    }
+
+    #[test]
+    fn a_shebang_marks_a_script_whatever_its_name() {
+        for path in ["bin/deploy", "notes.md"] {
+            let script = LintedFile {
+                path: PathBuf::from(path),
+                text: "#!/usr/bin/env bash\necho hi\n".to_string(),
+            };
+            assert!(!is_markdown(&script), "{path}");
+        }
+    }
+
+    #[test]
+    fn a_heading_on_the_first_line_is_not_a_shebang() {
+        let context = LintedFile {
+            path: PathBuf::from(".cursorrules"),
+            text: "# Style\n".to_string(),
+        };
+        assert!(is_markdown(&context));
     }
 }
