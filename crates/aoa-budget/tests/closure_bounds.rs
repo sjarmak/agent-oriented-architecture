@@ -99,6 +99,56 @@ fn a_contained_closure_refuses_a_root_that_resolves_outside_the_boundary() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_contained_closure_checks_the_root_it_goes_on_to_read() {
+    let dir = TempDir::new().unwrap();
+    let secret = write(dir.path(), "secret.md", "outside the repository\n");
+    write(dir.path(), "repo/inside/AGENTS.md", "contained\n");
+    fs::create_dir_all(dir.path().join("repo/inside/deep")).unwrap();
+    fs::create_dir_all(dir.path().join("repo/sub")).unwrap();
+    std::os::unix::fs::symlink("../inside/deep", dir.path().join("repo/sub/link")).unwrap();
+    std::os::unix::fs::symlink(&secret, dir.path().join("repo/sub/AGENTS.md")).unwrap();
+
+    let err = resolve_contained_closure(
+        &dir.path().join("repo/sub/link/../AGENTS.md"),
+        &dir.path().join("repo"),
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, BudgetError::OutsideBoundary { .. }), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn file_aliases_stay_separate_members_and_expand_from_their_own_directory() {
+    let dir = TempDir::new().unwrap();
+    let root = write(
+        dir.path(),
+        "AGENTS.md",
+        "[a](a/doc.md) [b](b/doc.md) [alias](alias.txt) [real](shared.md)\n",
+    );
+    write(dir.path(), "shared.md", "[child](child.md)\n");
+    write(dir.path(), "a/child.md", "small\n");
+    write(dir.path(), "b/child.md", "large\n");
+    std::os::unix::fs::symlink("../shared.md", dir.path().join("a/doc.md")).unwrap();
+    std::os::unix::fs::symlink("../shared.md", dir.path().join("b/doc.md")).unwrap();
+    std::os::unix::fs::symlink("shared.md", dir.path().join("alias.txt")).unwrap();
+
+    assert_eq!(
+        member_names(&root, dir.path()),
+        [
+            "AGENTS.md",
+            "a/doc.md",
+            "a/child.md",
+            "b/doc.md",
+            "b/child.md",
+            "alias.txt",
+            "shared.md",
+        ]
+    );
+}
+
 #[test]
 fn a_nested_root_reaches_a_sibling_directory_inside_the_boundary() {
     let dir = TempDir::new().unwrap();

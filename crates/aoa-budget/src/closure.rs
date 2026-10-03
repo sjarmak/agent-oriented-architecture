@@ -49,7 +49,7 @@ pub fn resolve_contained_closure(root: &Path, boundary: &Path) -> Result<Closure
             source,
         })
     };
-    if !canonical(root)?.starts_with(canonical(boundary)?) {
+    if !canonical(&normalize_path(root))?.starts_with(canonical(boundary)?) {
         return Err(BudgetError::OutsideBoundary {
             path: root.to_path_buf(),
             boundary: boundary.to_path_buf(),
@@ -76,7 +76,7 @@ pub fn resolve_closure_within(root: &Path, boundary: &Path) -> Result<Closure, B
         }
         let text = if path == root {
             let text = read_regular_file(&path, &path)?;
-            resolved_members.extend(path.canonicalize());
+            resolved_members.extend(directory_resolved(&path));
             text
         } else {
             let Ok(resolved) = path.canonicalize() else {
@@ -88,7 +88,7 @@ pub fn resolve_closure_within(root: &Path, boundary: &Path) -> Result<Closure, B
                 }
                 continue;
             }
-            if !resolved_members.insert(resolved.clone()) {
+            if !directory_resolved(&path).is_some_and(|member| resolved_members.insert(member)) {
                 continue;
             }
             match read_regular_file(&resolved, &path) {
@@ -113,6 +113,14 @@ pub fn resolve_closure_within(root: &Path, boundary: &Path) -> Result<Closure, B
         files,
         outside_boundary,
     })
+}
+
+fn directory_resolved(path: &Path) -> Option<PathBuf> {
+    let parent = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    Some(parent.canonicalize().ok()?.join(path.file_name()?))
 }
 
 fn read_regular_file(path: &Path, reported: &Path) -> Result<String, BudgetError> {
