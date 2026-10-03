@@ -24,6 +24,12 @@ pub fn discover_context_roots(dir: &Path) -> Result<Vec<PathBuf>, LintError> {
             dir: dir.to_path_buf(),
             source,
         })?;
+        if let Some(unapplied) = entry.error() {
+            return Err(LintError::Walk {
+                dir: entry.path().to_path_buf(),
+                source: std::io::Error::other(unapplied.to_string()).into(),
+            });
+        }
         let is_file = entry.file_type().is_some_and(|kind| kind.is_file());
         if is_file && is_context_root_name(entry.path()) {
             roots.push(normalize_path(entry.path()));

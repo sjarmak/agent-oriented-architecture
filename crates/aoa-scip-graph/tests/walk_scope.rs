@@ -199,11 +199,19 @@ fn ignore_file_above_the_indexed_directory_does_not_hide_its_sources() {
 }
 
 #[test]
-fn ignore_line_the_matcher_cannot_parse_leaves_the_other_rules_in_force() {
+fn ignore_line_the_matcher_cannot_apply_fails_the_index_and_names_the_file() {
     let repo = TempDir::new().unwrap();
-    write(repo.path(), ".gitignore", "{foo\ngenerated/\n");
-    write(repo.path(), "src/a.py", "def own():\n    pass\n");
-    write(repo.path(), "generated/client.py", &functions(4));
+    write(repo.path(), "svc/.gitignore", "{foo\ngenerated/\n");
+    write(repo.path(), "svc/a.py", "def own():\n    pass\n");
+    write(repo.path(), "svc/generated/client.py", &functions(4));
 
-    assert_eq!(indexed_nodes(repo.path()), vec!["src.a.own".to_string()]);
+    let err = index_best_effort(repo.path()).expect_err("unapplied ignore rule");
+    assert!(err.to_string().contains(".gitignore"), "{err}");
+
+    let degraded = build_symbol_graph(IndexSource::BestEffort {
+        repo_dir: repo.path(),
+    });
+    assert_eq!(degraded.graph.quality, IndexQuality::Degraded);
+    let reason = degraded.degrade_reason.expect("degrade reason");
+    assert!(reason.contains(".gitignore"), "{reason}");
 }

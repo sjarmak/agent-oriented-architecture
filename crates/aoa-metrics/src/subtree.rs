@@ -380,6 +380,11 @@ fn strip_gradle_comments(raw: &str) -> String {
     let mut chars = raw.chars().peekable();
     while let Some(c) = chars.next() {
         match (quote, c, chars.peek().copied()) {
+            (Some(_), '\\', Some(escaped)) if escaped != '\n' => {
+                out.push(c);
+                out.push(escaped);
+                chars.next();
+            }
             (Some(open), _, _) => {
                 out.push(c);
                 if c == open || c == '\n' {

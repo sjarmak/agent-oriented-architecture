@@ -125,3 +125,12 @@ fn gradle_block_comment_holding_a_url_does_not_swallow_the_includes() {
     );
     assert_eq!(members, ["services/api", "tools"]);
 }
+
+#[test]
+fn gradle_escaped_quote_before_comment_punctuation_does_not_open_a_comment() {
+    let members = declared(
+        "settings.gradle.kts",
+        "println(\"escaped \\\"/*\")\ninclude(\":real\")\n",
+    );
+    assert_eq!(members, ["real"]);
+}

@@ -107,6 +107,12 @@ fn collect_source_files(
             path: dir.to_path_buf(),
             source: std::io::Error::other(source),
         })?;
+        if let Some(unapplied) = entry.error() {
+            return Err(ScipGraphError::Io {
+                path: entry.path().to_path_buf(),
+                source: std::io::Error::other(unapplied.to_string()),
+            });
+        }
         if !entry.file_type().is_some_and(|kind| kind.is_file()) {
             continue;
         }

@@ -198,3 +198,16 @@ fn ignore_file_above_the_linted_directory_does_not_hide_context_roots() {
         ]
     );
 }
+
+#[test]
+fn ignore_line_the_matcher_cannot_apply_fails_discovery_and_names_the_file() {
+    let dir = TempDir::new().expect("tempdir");
+    write(dir.path(), "services/.gitignore", "{foo\n");
+    write(dir.path(), "services/api/AGENTS.md", "# Api\n");
+
+    let err = discover_context_roots(dir.path()).expect_err("unapplied ignore rule");
+
+    assert!(matches!(err, LintError::Walk { .. }), "{err}");
+    let source = std::error::Error::source(&err).expect("source").to_string();
+    assert!(source.contains(".gitignore"), "{source}");
+}
