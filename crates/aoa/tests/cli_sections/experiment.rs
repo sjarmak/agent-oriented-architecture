@@ -44,6 +44,69 @@ fn experiment_edit_shape_emits_observations_but_no_measured_pairs() {
         .all(|line| line.contains("\"status\":\"excluded\"")));
 }
 
+fn copy_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).expect("create copied directory");
+    for entry in std::fs::read_dir(from).expect("read fixture directory") {
+        let entry = entry.expect("fixture entry");
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("fixture entry type").is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).expect("copy fixture file");
+        }
+    }
+}
+
+#[test]
+fn experiment_excludes_a_pair_whose_transcript_is_a_plain_text_answer() {
+    let dir = TempDir::new().expect("tempdir");
+    let experiment = dir.path().join("experiment_answer");
+    copy_tree(&fixture("experiment_answer"), &experiment);
+    std::fs::copy(
+        fixture("answer_scip_index.json"),
+        dir.path().join("answer_scip_index.json"),
+    )
+    .expect("copy index");
+    let transcript = experiment.join("seed1/repo_arm/comprehension-boolean-000/agent_output.txt");
+    std::fs::write(
+        &transcript,
+        "The flag is read in two places.\nBoth agree.\n",
+    )
+    .expect("plain-text transcript");
+    let input = dir.path().join("falsify_input.json");
+
+    aoa()
+        .args(["eval", "experiment", "--manifest"])
+        .arg(experiment.join("manifest.json"))
+        .arg("--tasks")
+        .arg(fixture("answer_tasks"))
+        .arg("--out")
+        .arg(&input)
+        .assert()
+        .success();
+
+    let build: Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join("falsify_input.build.json"))
+            .expect("build report written"),
+    )
+    .expect("valid build json");
+    let repo = build["repos"].get(0).unwrap_or(&build["dropped_repos"][0]);
+    let reason = repo["excluded_tasks"]
+        .as_array()
+        .expect("excluded array")
+        .iter()
+        .find(|e| e["task_id"] == "comprehension-boolean-000")
+        .expect("plain-text pair is excluded")["reason"]
+        .as_str()
+        .expect("reason text")
+        .to_string();
+    assert!(
+        reason.starts_with("seed 1: repo arm: cannot read trial transcript")
+            && reason.contains("no stream-json `assistant` or `user` event"),
+        "the reason names the arm and says why the transcript was refused, got {reason}"
+    );
+}
+
 // Answer-task conventions (pre-registered 2026-07-04, aoa-dhk.1): an
 // answer-shaped repo (task_shape "answer" + scip_index) gets REAL per-pair
 // trace-locality/trace-reach inputs joined from both arms' trial traces, the

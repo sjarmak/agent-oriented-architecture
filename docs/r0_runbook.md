@@ -356,6 +356,20 @@ convention set that is not structurally identical to the pre-registered one.
   resolves to no indexed file — is **excluded with the reason** in the build
   report; it is never given sentinel inputs. `convention_inputs_degraded` is
   false exactly when every admitted pair carries real inputs.
+- A transcript that is not stream-json counts as non-computable. When an
+  arm's transcript is the agent's plain-text answer (the trial was captured
+  without stream-json output, so the file holds prose and no `assistant` or
+  `user` event), the shim refuses it instead of reading it as a trial that
+  touched no file. `aoa eval experiment` then excludes the pair, and the build
+  report's `excluded_tasks` reason reads ``seed <n>: <arm> arm: cannot read
+  trial transcript <path>: transcript carries no stream-json `assistant` or
+  `user` event (<n> non-blank line(s) read), so no agent action is
+  observable``.
+  `aoa eval run` reports the same file as a per-task error. One plain-text arm
+  costs the whole pair, so a campaign captured in plain text loses every pair
+  and stops at `too_few_repos` or the power precondition. The remedy is to
+  re-capture the trial with stream-json transcripts, not to edit the
+  transcript.
 - Mixed task shapes in one manifest, or conventions whose family does not match
   the tasks' inputs, are hard errors. The configured conventions must equal the
   pre-registered admissible set exactly — `aoa falsify` hard-errors on any
