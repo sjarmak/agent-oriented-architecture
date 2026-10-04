@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
 use crate::category::SmellCategory;
@@ -40,15 +41,15 @@ enum Hop {
 }
 
 fn escapes(target: PathBuf, canonical_boundary: &Path) -> bool {
-    let mut followed = vec![target];
-    loop {
-        let current = &followed[followed.len() - 1];
-        match next_hop(current, canonical_boundary) {
+    let mut followed = HashSet::new();
+    let mut current = target;
+    while followed.insert(current.clone()) {
+        match next_hop(&current, canonical_boundary) {
             Hop::Settled { escapes } => return escapes,
-            Hop::Follow(next) if followed.contains(&next) => return false,
-            Hop::Follow(next) => followed.push(next),
+            Hop::Follow(next) => current = next,
         }
     }
+    false
 }
 
 fn next_hop(target: &Path, canonical_boundary: &Path) -> Hop {
