@@ -398,3 +398,76 @@ fn ignore_file_link_leaving_the_linted_directory_is_refused_without_being_read_t
         "repo/services/.ignore"
     );
 }
+
+#[cfg(unix)]
+fn roots_within_five_seconds(base: &Path) -> Vec<PathBuf> {
+    let (finished, outcome) = std::sync::mpsc::channel();
+    let base = base.to_path_buf();
+    std::thread::spawn(move || finished.send(relative_roots(&base.join("repo"))));
+    outcome
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("discovery finishes without opening anything above the linted directory")
+}
+
+#[cfg(unix)]
+#[test]
+fn ignore_files_above_the_linted_directory_are_never_opened() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    for name in [".gitignore", ".ignore"] {
+        let dir = TempDir::new().expect("tempdir");
+        let base = dir.path().canonicalize().expect("canonical");
+        write(&base, "repo/AGENTS.md", "# Root\n");
+        write(&base, "repo/.gitignore", "vendor/\n");
+        write(&base, "repo/vendor/CLAUDE.md", "# Vendored\n");
+        let above = base.join(name);
+        let expected = [PathBuf::from("AGENTS.md")];
+
+        assert_eq!(roots_within_five_seconds(&base), expected, "{name} absent");
+
+        let made = std::process::Command::new("mkfifo")
+            .arg(base.join("outside"))
+            .status()
+            .expect("run mkfifo");
+        assert!(made.success());
+        symlink("outside", &above).expect("link to a fifo");
+        assert_eq!(roots_within_five_seconds(&base), expected, "{name} fifo");
+
+        fs::remove_file(&above).expect("remove link");
+        symlink("/dev/zero", &above).expect("link to an endless device");
+        assert_eq!(roots_within_five_seconds(&base), expected, "{name} device");
+
+        fs::remove_file(&above).expect("remove link");
+        fs::write(&above, "AGENTS.md\n").expect("write ignore file above");
+        assert_eq!(roots_within_five_seconds(&base), expected, "{name} file");
+
+        fs::set_permissions(&above, fs::Permissions::from_mode(0o000)).expect("unreadable");
+        assert_eq!(
+            roots_within_five_seconds(&base),
+            expected,
+            "{name} unreadable"
+        );
+    }
+}
+
+#[test]
+fn ignore_files_inside_the_linted_directory_apply_with_dot_ignore_overriding_gitignore() {
+    let dir = TempDir::new().expect("tempdir");
+    write(dir.path(), "AGENTS.md", "# Root\n");
+    write(dir.path(), ".gitignore", "vendor/\nkept/\n");
+    write(dir.path(), ".ignore", "!kept/\n");
+    write(dir.path(), "vendor/CLAUDE.md", "# Vendored\n");
+    write(dir.path(), "kept/CLAUDE.md", "# Kept\n");
+    write(dir.path(), "services/.ignore", "generated/\n");
+    write(dir.path(), "services/generated/AGENTS.md", "# Generated\n");
+    write(dir.path(), "services/api/AGENTS.md", "# Api\n");
+
+    assert_eq!(
+        relative_roots(dir.path()),
+        [
+            PathBuf::from("AGENTS.md"),
+            PathBuf::from("kept/CLAUDE.md"),
+            PathBuf::from("services/api/AGENTS.md"),
+        ]
+    );
+}

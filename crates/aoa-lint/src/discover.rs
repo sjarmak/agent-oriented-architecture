@@ -14,15 +14,21 @@ const IGNORE_FILE_NAMES: [&str; 2] = [".gitignore", ".ignore"];
 pub fn discover_context_roots(dir: &Path) -> Result<Vec<PathBuf>, LintError> {
     refuse_ignore_file_links_leaving(dir, dir)?;
     let refused = Arc::new(Mutex::new(None));
-    let mut walker = WalkBuilder::new(dir)
+    let mut builder = WalkBuilder::new(dir);
+    builder
         .hidden(false)
         .require_git(false)
         .parents(false)
+        .ignore(false)
+        .git_ignore(false)
         .git_global(false)
         .git_exclude(false)
         .filter_entry(entered(dir, &refused))
-        .sort_by_file_path(Path::cmp)
-        .build();
+        .sort_by_file_path(Path::cmp);
+    for name in IGNORE_FILE_NAMES {
+        builder.add_custom_ignore_filename(name);
+    }
+    let mut walker = builder.build();
 
     let mut roots = Vec::new();
     loop {
