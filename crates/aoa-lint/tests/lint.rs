@@ -461,6 +461,62 @@ fn a_dangling_link_that_steps_back_within_the_linted_directory_is_a_stale_refere
 
 #[cfg(unix)]
 #[test]
+fn a_link_that_names_a_file_and_then_requires_a_directory_is_a_stale_reference() {
+    use std::os::unix::fs::symlink;
+
+    for target in ["safe.md/", "safe.md/.", "safe.md//", "safe.md/./"] {
+        let dir = tempfile::TempDir::new().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        std::fs::write(repo.join("AGENTS.md"), "[probe](probe.md)\n").unwrap();
+        std::fs::write(repo.join("safe.md"), "safe\n").unwrap();
+        symlink(target, repo.join("probe.md")).unwrap();
+        assert!(std::fs::read(repo.join("probe.md")).is_err(), "{target}");
+
+        let report =
+            aoa_lint::lint_context_roots(&[repo.join("AGENTS.md")], &repo, "o200k_base").unwrap();
+
+        let stale: Vec<&str> = report
+            .findings
+            .iter()
+            .filter(|finding| finding.category == SmellCategory::StaleReference)
+            .map(|finding| finding.message.as_str())
+            .collect();
+        assert_eq!(
+            stale,
+            ["stale reference: linked file 'probe.md' does not exist"],
+            "{target}"
+        );
+        assert_eq!(report.closures[0].files.len(), 1, "{target}");
+        assert_eq!(
+            report.closures[0].unread,
+            [aoa_budget::UnreadLink {
+                path: repo.join("probe.md"),
+                reason: aoa_budget::UnreadReason::BrokenSymlink,
+            }],
+            "{target}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_to_a_directory_that_ends_in_a_separator_still_reaches_what_is_beneath_it() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(repo.join("docs")).unwrap();
+    std::fs::write(repo.join("docs/kept.md"), "kept\n").unwrap();
+    symlink("docs/", repo.join("alias")).unwrap();
+
+    let stale = stale_references(&repo, "[kept](alias/kept.md)\n");
+
+    assert_eq!(stale, Vec::<String>::new());
+}
+
+#[cfg(unix)]
+#[test]
 fn a_stale_reference_is_found_when_the_root_is_named_through_a_link_to_its_directory() {
     use std::os::unix::fs::symlink;
 

@@ -108,6 +108,9 @@ impl Boundary {
             if !at_a_directory {
                 return Err(Lost::Absent);
             }
+            if name == "." {
+                continue;
+            }
             if name == ".." {
                 if at == self.path {
                     return Err(Lost::Outside);
@@ -126,6 +129,7 @@ impl Boundary {
             }
             *links_left = links_left.checked_sub(1).ok_or(Lost::Absent)?;
             let target = std::fs::read_link(&next).map_err(|_| Lost::Absent)?;
+            pending.extend(names_a_directory(&target).then(|| OsString::from(".")));
             let target = match target.has_root() {
                 false => target.as_path(),
                 true => {
@@ -178,6 +182,15 @@ impl Boundary {
     pub(crate) fn open_member(&self, resolved: &Path) -> io::Result<File> {
         self.beneath(resolved)?;
         File::open(resolved)
+    }
+}
+
+fn names_a_directory(target: &Path) -> bool {
+    let is_separator = |byte: &u8| std::path::is_separator(char::from(*byte));
+    match target.as_os_str().as_encoded_bytes() {
+        [.., last] if is_separator(last) => true,
+        [.., before, b'.'] => is_separator(before),
+        _ => false,
     }
 }
 
