@@ -29,8 +29,8 @@ pub use budget::{
     count_budget, BudgetReport, Config, FileBudget, Verdict, DEFAULT_CONTEXT_CEILING,
 };
 pub use closure::{
-    resolve_closure, resolve_closure_within, resolve_contained_closure, Closure, ContextFile,
-    UnreadLink, UnreadReason, MAX_CONTEXT_FILE_BYTES,
+    leaves_boundary, resolve_closure, resolve_closure_within, resolve_contained_closure, Closure,
+    ContextFile, UnreadLink, UnreadReason, MAX_CONTEXT_FILE_BYTES,
 };
 pub use error::BudgetError;
 pub use fix::{fix_oversized, FixOutcome};

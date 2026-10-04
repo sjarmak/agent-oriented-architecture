@@ -477,7 +477,7 @@ fn lint_context_names_a_link_that_leaves_the_directory_of_an_explicit_root() {
 }
 
 #[cfg(unix)]
-fn lint_outputs(dir: &Path) -> [std::process::Output; 2] {
+pub(super) fn lint_outputs(dir: &Path) -> [std::process::Output; 2] {
     [&["lint-context", "--json"][..], &["lint-context"][..]].map(|args| {
         aoa()
             .current_dir(dir)

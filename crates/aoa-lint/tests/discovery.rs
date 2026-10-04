@@ -264,3 +264,98 @@ fn ignore_file_that_is_not_text_fails_discovery_and_names_the_file() {
         "{err}"
     );
 }
+
+#[cfg(unix)]
+fn leaving_link_error(base: &Path, ignore_file: &str) -> String {
+    match discover_context_roots(&base.join("repo")) {
+        Err(LintError::IgnoreFileOutside { path, .. }) if path.ends_with(ignore_file) => path
+            .strip_prefix(base)
+            .expect("under base")
+            .display()
+            .to_string(),
+        other => panic!("expected a refused ignore file link, got {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn ignore_file_link_leaving_the_linted_directory_is_refused_whatever_it_reaches() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    let dir = TempDir::new().expect("tempdir");
+    let base = dir.path().canonicalize().expect("canonical");
+    write(&base, "repo/AGENTS.md", "# Root\n");
+    write(&base, "repo/services/api/AGENTS.md", "# Api\n");
+    symlink("../probed", base.join("repo/.gitignore")).expect("direct link");
+    let probed = base.join("probed");
+
+    let while_absent = leaving_link_error(&base, ".gitignore");
+    fs::write(&probed, "AGENTS.md\n").expect("write outside file");
+    let while_a_file = leaving_link_error(&base, ".gitignore");
+    fs::set_permissions(&probed, fs::Permissions::from_mode(0o000)).expect("unreadable");
+    let while_unreadable = leaving_link_error(&base, ".gitignore");
+    fs::remove_file(&probed).expect("remove outside file");
+    fs::create_dir(&probed).expect("create outside directory");
+    let while_a_directory = leaving_link_error(&base, ".gitignore");
+
+    assert_eq!(while_absent, "repo/.gitignore");
+    assert_eq!(while_absent, while_a_file);
+    assert_eq!(while_absent, while_unreadable);
+    assert_eq!(while_absent, while_a_directory);
+}
+
+#[cfg(unix)]
+#[test]
+fn ignore_file_link_leaving_through_a_chain_a_subdirectory_or_an_absolute_target_is_refused() {
+    use std::os::unix::fs::symlink;
+
+    let dir = TempDir::new().expect("tempdir");
+    let base = dir.path().canonicalize().expect("canonical");
+    fs::write(base.join("probed"), "AGENTS.md\n").expect("write outside file");
+
+    write(&base, "chained/repo/AGENTS.md", "# Root\n");
+    symlink("hop", base.join("chained/repo/.ignore")).expect("first hop");
+    symlink("../probed", base.join("chained/repo/hop")).expect("second hop");
+    assert_eq!(
+        leaving_link_error(&base.join("chained"), ".ignore"),
+        "repo/.ignore"
+    );
+
+    write(&base, "nested/repo/services/AGENTS.md", "# Services\n");
+    symlink(
+        "../../../probed",
+        base.join("nested/repo/services/.gitignore"),
+    )
+    .expect("link from a subdirectory");
+    assert_eq!(
+        leaving_link_error(&base.join("nested"), ".gitignore"),
+        "repo/services/.gitignore"
+    );
+
+    write(&base, "absolute/repo/AGENTS.md", "# Root\n");
+    symlink(base.join("probed"), base.join("absolute/repo/.gitignore")).expect("absolute link");
+    assert_eq!(
+        leaving_link_error(&base.join("absolute"), ".gitignore"),
+        "repo/.gitignore"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn ignore_file_link_that_stays_inside_the_linted_directory_still_applies() {
+    let dir = TempDir::new().expect("tempdir");
+    write(dir.path(), "AGENTS.md", "# Root\n");
+    write(dir.path(), "rules/shared", "vendor/\n");
+    write(dir.path(), "services/vendor/CLAUDE.md", "# Vendored\n");
+    write(dir.path(), "services/api/AGENTS.md", "# Api\n");
+    std::os::unix::fs::symlink("../rules/shared", dir.path().join("services/.gitignore"))
+        .expect("link inside the directory");
+
+    assert_eq!(
+        relative_roots(dir.path()),
+        [
+            PathBuf::from("AGENTS.md"),
+            PathBuf::from("services/api/AGENTS.md"),
+        ]
+    );
+}

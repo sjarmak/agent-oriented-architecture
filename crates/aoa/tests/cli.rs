@@ -48,6 +48,8 @@ mod falsify_policy;
 mod gap_recommend;
 #[path = "cli_sections/input_boundaries.rs"]
 mod input_boundaries;
+#[path = "cli_sections/lint_discovery.rs"]
+mod lint_discovery;
 #[path = "cli_sections/migrate.rs"]
 mod migrate;
 #[path = "cli_sections/ownership.rs"]

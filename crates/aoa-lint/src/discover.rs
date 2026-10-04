@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-use aoa_budget::normalize_path;
+use aoa_budget::{leaves_boundary, normalize_path};
 use ignore::{DirEntry, WalkBuilder};
 
 use crate::error::LintError;
@@ -27,13 +27,17 @@ pub fn discover_context_roots(dir: &Path) -> Result<Vec<PathBuf>, LintError> {
             dir: dir.to_path_buf(),
             source,
         })?;
+        let walked_dir = is_walked_dir(&entry);
+        if walked_dir {
+            refuse_ignore_file_links_leaving(dir, entry.path())?;
+        }
         if let Some(unapplied) = entry.error() {
             return Err(LintError::Walk {
                 dir: entry.path().to_path_buf(),
                 source: std::io::Error::other(unapplied.to_string()).into(),
             });
         }
-        if is_walked_dir(&entry) {
+        if walked_dir {
             require_readable_ignore_files(entry.path())?;
         }
         let is_file = entry.file_type().is_some_and(|kind| kind.is_file());
@@ -47,6 +51,22 @@ pub fn discover_context_roots(dir: &Path) -> Result<Vec<PathBuf>, LintError> {
 fn is_walked_dir(entry: &DirEntry) -> bool {
     entry.file_type().is_some_and(|kind| kind.is_dir())
         || (entry.depth() == 0 && entry.path().is_dir())
+}
+
+fn refuse_ignore_file_links_leaving(linted: &Path, dir: &Path) -> Result<(), LintError> {
+    for name in IGNORE_FILE_NAMES {
+        let path = dir.join(name);
+        let is_link = path
+            .symlink_metadata()
+            .is_ok_and(|found| found.file_type().is_symlink());
+        if is_link && leaves_boundary(&path, linted)? {
+            return Err(LintError::IgnoreFileOutside {
+                path,
+                dir: linted.to_path_buf(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn require_readable_ignore_files(dir: &Path) -> Result<(), LintError> {
