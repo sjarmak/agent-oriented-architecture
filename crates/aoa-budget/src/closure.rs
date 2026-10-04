@@ -136,8 +136,8 @@ fn resolve(
             text
         } else {
             let resolved = match path.canonicalize() {
-                Ok(resolved) => resolved,
-                Err(_) => {
+                Ok(resolved) if boundary.contains(&resolved) => resolved,
+                Err(_) if !boundary.leaves(&path) => {
                     let first_inside_boundary =
                         resolved_to_deepest_directory(&path).is_some_and(|member| {
                             boundary.contains(&member) && resolved_members.insert(member)
@@ -147,13 +147,11 @@ fn resolve(
                     }
                     continue;
                 }
-            };
-            if !boundary.contains(&resolved) {
-                if resolved.is_file() {
+                _ => {
                     outside_boundary.push(path);
+                    continue;
                 }
-                continue;
-            }
+            };
             if !resolved_to_deepest_directory(&path)
                 .is_some_and(|member| resolved_members.insert(member))
             {

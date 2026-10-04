@@ -476,6 +476,53 @@ fn lint_context_names_a_link_that_leaves_the_directory_of_an_explicit_root() {
         ));
 }
 
+#[cfg(unix)]
+fn lint_outputs(dir: &Path) -> [std::process::Output; 2] {
+    [&["lint-context", "--json"][..], &["lint-context"][..]].map(|args| {
+        aoa()
+            .current_dir(dir)
+            .args(args)
+            .output()
+            .expect("run lint-context")
+    })
+}
+
+#[cfg(unix)]
+#[test]
+fn lint_context_output_does_not_depend_on_what_a_link_leaving_the_directory_reaches() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo = dir.path().join("repo");
+    std::fs::create_dir(&repo).expect("create repo");
+    std::fs::write(
+        repo.join("AGENTS.md"),
+        "[member](probe.md) [written](../written.md)\n",
+    )
+    .expect("write root");
+    std::os::unix::fs::symlink("../outside.md", repo.join("probe.md")).expect("link the member");
+    let outside = [dir.path().join("outside.md"), dir.path().join("written.md")];
+
+    let while_absent = lint_outputs(&repo);
+    for path in &outside {
+        std::fs::write(path, "outside\n").expect("write outside file");
+    }
+    let while_files = lint_outputs(&repo);
+    for path in &outside {
+        std::fs::remove_file(path).expect("remove outside file");
+        std::fs::create_dir(path).expect("create outside directory");
+    }
+    let while_directories = lint_outputs(&repo);
+
+    assert_eq!(while_absent, while_files);
+    assert_eq!(while_absent, while_directories);
+    let json: Value = serde_json::from_slice(&while_absent[0].stdout).expect("valid json");
+    let closure = &json["budget"]["closures"][0];
+    assert_eq!(
+        json_strings(&closure["outside_boundary"]),
+        ["probe.md", "../written.md"]
+    );
+    assert_eq!(closure["unread"], serde_json::json!([]));
+}
+
 #[test]
 fn lint_context_human_reports_how_many_roots_were_linted() {
     let dir = TempDir::new().expect("tempdir");

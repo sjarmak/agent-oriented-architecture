@@ -57,7 +57,41 @@ fn a_link_leaving_the_boundary_is_named_by_the_path_that_was_written() {
 
     let closure = resolve_closure_within(&root, &dir.path().join("repo")).unwrap();
 
-    assert_eq!(closure.outside_boundary, [dir.path().join("outside.md")]);
+    assert_eq!(
+        closure.outside_boundary,
+        [
+            dir.path().join("outside.md"),
+            dir.path().join("absent.md"),
+            dir.path().to_path_buf(),
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_member_linking_outside_the_boundary_reads_the_same_whatever_it_reaches() {
+    let dir = TempDir::new().unwrap();
+    let root = write(dir.path(), "repo/AGENTS.md", "[probe](probe.md)\n");
+    std::os::unix::fs::symlink("../outside.md", dir.path().join("repo/probe.md")).unwrap();
+    let outside = dir.path().join("outside.md");
+    let reported = || {
+        let closure = resolve_closure_within(&root, &dir.path().join("repo")).unwrap();
+        (closure.outside_boundary, closure.unread)
+    };
+
+    let while_absent = reported();
+    fs::write(&outside, "outside\n").unwrap();
+    let while_a_file = reported();
+    fs::remove_file(&outside).unwrap();
+    fs::create_dir(&outside).unwrap();
+    let while_a_directory = reported();
+
+    assert_eq!(
+        while_absent,
+        (vec![dir.path().join("repo/probe.md")], Vec::new())
+    );
+    assert_eq!(while_a_file, while_absent);
+    assert_eq!(while_a_directory, while_absent);
 }
 
 #[cfg(unix)]
@@ -281,7 +315,7 @@ fn a_member_that_cannot_be_counted_is_reported_with_the_reason() {
 
 #[cfg(unix)]
 #[test]
-fn a_broken_symlink_outside_the_boundary_is_not_reported() {
+fn a_broken_symlink_outside_the_boundary_is_named_as_outside_and_not_as_unread() {
     let dir = TempDir::new().unwrap();
     let root = write(dir.path(), "repo/AGENTS.md", "[gone](../gone.md)\n");
     std::os::unix::fs::symlink("removed.md", dir.path().join("gone.md")).unwrap();
@@ -289,7 +323,7 @@ fn a_broken_symlink_outside_the_boundary_is_not_reported() {
     let closure = resolve_closure_within(&root, &dir.path().join("repo")).unwrap();
 
     assert!(closure.unread.is_empty(), "{:?}", closure.unread);
-    assert!(closure.outside_boundary.is_empty());
+    assert_eq!(closure.outside_boundary, [dir.path().join("gone.md")]);
 }
 
 #[cfg(unix)]

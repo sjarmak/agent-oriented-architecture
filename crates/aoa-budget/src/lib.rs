@@ -19,6 +19,7 @@ mod boundary;
 mod budget;
 mod closure;
 mod error;
+mod escape;
 mod fix;
 mod path;
 mod reference;
@@ -33,6 +34,7 @@ pub use closure::{
     UnreadLink, UnreadReason, MAX_CONTEXT_FILE_BYTES,
 };
 pub use error::BudgetError;
+pub use escape::leaves_boundary;
 pub use fix::{fix_oversized, FixOutcome};
 pub use path::normalize_path;
 pub use reference::{extract_references, markdown_link_paths, Reference};

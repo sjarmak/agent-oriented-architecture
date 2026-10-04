@@ -2,6 +2,8 @@ use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::escape::leaves_boundary;
+
 pub(crate) struct Boundary {
     path: PathBuf,
     #[cfg(unix)]
@@ -23,6 +25,10 @@ impl Boundary {
 
     pub(crate) fn contains(&self, resolved: &Path) -> bool {
         resolved.starts_with(&self.path)
+    }
+
+    pub(crate) fn leaves(&self, target: &Path) -> bool {
+        leaves_boundary(target, &self.path)
     }
 
     fn beneath<'a>(&self, resolved: &'a Path) -> io::Result<&'a Path> {
