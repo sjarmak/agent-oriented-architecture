@@ -54,11 +54,9 @@ fn installed_pre_commit_hook(repo: &Path) -> bool {
     if !git_dir.exists() {
         return false;
     }
-    let location = git_hook_location(&repo).unwrap_or_else(|| HookLocation {
-        hook: git_dir.join(DEFAULT_PRE_COMMIT_HOOK),
-        common_dir: git_dir.clone(),
-        git_dir: git_dir.clone(),
-    });
+    let Some(location) = git_hook_location(&repo) else {
+        return false;
+    };
     let Ok(hook) = location.hook.canonicalize() else {
         return false;
     };
@@ -178,6 +176,7 @@ fn git_hook_location(repo: &Path) -> Option<HookLocation> {
     let output = git(repo)
         .args([
             "rev-parse",
+            "--is-inside-work-tree",
             "--git-common-dir",
             "--git-dir",
             "--git-path",
@@ -190,7 +189,11 @@ fn git_hook_location(repo: &Path) -> Option<HookLocation> {
     }
     let reported = std::str::from_utf8(&output.stdout).ok()?;
     let mut lines = reported.lines();
-    let (common_dir, git_dir, hook) = (lines.next()?, lines.next()?, lines.next()?);
+    let (inside_work_tree, common_dir, git_dir, hook) =
+        (lines.next()?, lines.next()?, lines.next()?, lines.next()?);
+    if inside_work_tree != "true" {
+        return None;
+    }
     if common_dir.is_empty() || git_dir.is_empty() || hook.is_empty() || lines.next().is_some() {
         return None;
     }

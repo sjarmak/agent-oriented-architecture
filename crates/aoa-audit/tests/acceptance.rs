@@ -1702,11 +1702,30 @@ fn a_symlinked_hook_counts_only_when_its_target_is_inside_the_repository() {
 }
 
 #[test]
-fn a_repository_git_cannot_answer_for_is_read_at_the_default_hook_location() {
+fn a_hook_in_a_git_directory_that_is_not_a_repository_is_a_missing_plane() {
     let repo = fixture_repo();
-    std::fs::create_dir_all(repo.path().join(".git")).expect("create unreadable git dir");
-    assert!(pre_commit_plane_missing(repo.path()));
+    write_hook(&repo.path().join(".git/hooks/pre-commit"));
 
+    assert!(pre_commit_plane_missing(repo.path()));
+}
+
+#[test]
+fn a_hook_in_a_bare_layout_beside_an_empty_git_directory_is_a_missing_plane() {
+    let repo = fixture_repo();
+    git(repo.path(), &["init", "--quiet", "--template=", "--bare"]);
+    std::fs::create_dir(repo.path().join(".git")).expect("create the empty git dir");
+    write_hook(&repo.path().join("hooks/pre-commit"));
+    write_hook(&repo.path().join(".git/hooks/pre-commit"));
+
+    assert!(pre_commit_plane_missing(repo.path()));
+}
+
+#[test]
+fn a_hook_in_a_repository_whose_config_git_cannot_parse_is_a_missing_plane() {
+    let repo = git_fixture_repo();
     write_hook(&repo.path().join(".git/hooks/pre-commit"));
     assert!(!pre_commit_plane_missing(repo.path()));
+
+    std::fs::write(repo.path().join(".git/config"), "[core\n").expect("corrupt the config");
+    assert!(pre_commit_plane_missing(repo.path()));
 }
