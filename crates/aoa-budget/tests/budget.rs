@@ -306,6 +306,79 @@ fn angle_bracket_destinations_are_unwrapped_before_classification() {
     assert_eq!(names, ["AGENTS.md", "present (v2).md"]);
 }
 
+fn oversized_body() -> String {
+    "A paragraph of guidance that every package must follow.\n\n".repeat(200)
+}
+
+#[test]
+fn fix_refuses_a_root_outside_the_boundary_and_leaves_it_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = oversized_body();
+    std::fs::create_dir_all(dir.path().join("repo")).unwrap();
+    std::fs::create_dir_all(dir.path().join("outside")).unwrap();
+    let root = dir.path().join("outside/big.md");
+    std::fs::write(&root, &body).unwrap();
+
+    let err = fix_oversized(&root, &dir.path().join("repo"), 200, "gpt-4o").unwrap_err();
+
+    assert!(matches!(err, BudgetError::OutsideBoundary { .. }), "{err}");
+    assert_eq!(std::fs::read_to_string(&root).unwrap(), body);
+    assert!(!dir.path().join("outside/big.archive.md").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn fix_refuses_an_archive_linked_outside_the_boundary_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = oversized_body();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let root = repo.join("big.md");
+    std::fs::write(&root, &body).unwrap();
+    let planted = dir.path().join("planted.md");
+    std::fs::write(&planted, "planted\n").unwrap();
+    std::os::unix::fs::symlink(&planted, repo.join("big.archive.md")).unwrap();
+    let dangling = dir.path().join("created.md");
+    let other = repo.join("other.md");
+    std::fs::write(&other, &body).unwrap();
+    std::os::unix::fs::symlink(&dangling, repo.join("other.archive.md")).unwrap();
+
+    let linked = fix_oversized(&root, &repo, 200, "gpt-4o").unwrap_err();
+    let unresolved = fix_oversized(&other, &repo, 200, "gpt-4o").unwrap_err();
+
+    assert!(
+        matches!(linked, BudgetError::OutsideBoundary { .. }),
+        "{linked}"
+    );
+    assert!(
+        matches!(unresolved, BudgetError::OutsideBoundary { .. }),
+        "{unresolved}"
+    );
+    assert_eq!(std::fs::read_to_string(&planted).unwrap(), "planted\n");
+    assert!(!dangling.exists());
+    assert_eq!(std::fs::read_to_string(&root).unwrap(), body);
+    assert_eq!(std::fs::read_to_string(&other).unwrap(), body);
+}
+
+#[cfg(unix)]
+#[test]
+fn fix_refuses_a_root_reached_through_a_link_from_outside_the_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = oversized_body();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::create_dir_all(dir.path().join("outside")).unwrap();
+    std::fs::write(repo.join("big.md"), &body).unwrap();
+    let alias = dir.path().join("outside/alias.md");
+    std::os::unix::fs::symlink(repo.join("big.md"), &alias).unwrap();
+
+    let err = fix_oversized(&alias, &repo, 200, "gpt-4o").unwrap_err();
+
+    assert!(matches!(err, BudgetError::OutsideBoundary { .. }), "{err}");
+    assert_eq!(std::fs::read_to_string(repo.join("big.md")).unwrap(), body);
+    assert!(!dir.path().join("outside/alias.archive.md").exists());
+}
+
 #[test]
 fn fix_recheck_counts_what_the_root_links_in_a_sibling_directory() {
     let dir = scratch("fix-sibling");

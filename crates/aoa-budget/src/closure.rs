@@ -258,8 +258,21 @@ impl ReadFailure {
     }
 }
 
+#[cfg(unix)]
+fn refused_as_special_file(source: &std::io::Error) -> bool {
+    source.raw_os_error() == Some(rustix::io::Errno::NXIO.raw_os_error())
+}
+
+#[cfg(not(unix))]
+fn refused_as_special_file(_source: &std::io::Error) -> bool {
+    false
+}
+
 fn read_regular_file(opened: std::io::Result<std::fs::File>) -> Result<String, ReadFailure> {
-    let file = opened.map_err(ReadFailure::Io)?;
+    let file = opened.map_err(|source| match refused_as_special_file(&source) {
+        true => ReadFailure::NotRegularFile,
+        false => ReadFailure::Io(source),
+    })?;
     let kind = file.metadata().map_err(ReadFailure::Io)?.file_type();
     if kind.is_dir() {
         return Err(ReadFailure::Directory);

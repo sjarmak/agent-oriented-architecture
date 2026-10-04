@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
+use crate::boundary::Boundary;
 use crate::budget::{count_budget, Config, Verdict};
-use crate::closure::resolve_closure_within;
+use crate::closure::{resolve_closure_within, resolve_contained_closure};
 use crate::error::BudgetError;
 use crate::tokenizer::{count_tokens, target_encoder};
 
@@ -35,10 +36,12 @@ pub fn fix_oversized(
     ceiling: usize,
     target: &str,
 ) -> Result<FixOutcome, BudgetError> {
-    let original = std::fs::read_to_string(path).map_err(|source| BudgetError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let original = resolve_contained_closure(path, boundary)?
+        .files
+        .into_iter()
+        .next()
+        .map(|root| root.text)
+        .unwrap_or_default();
     let encoder = target_encoder(target)?;
 
     let stem = path
@@ -48,6 +51,18 @@ pub fn fix_oversized(
     let dir = path.parent().unwrap_or(Path::new("."));
     let archive_name = format!("{stem}.archive.md");
     let archive_path = dir.join(&archive_name);
+    let opened = Boundary::open(boundary).map_err(|source| BudgetError::Io {
+        path: boundary.to_path_buf(),
+        source,
+    })?;
+    for written in [dir, &archive_path] {
+        if lands_outside(written, &opened) {
+            return Err(BudgetError::OutsideBoundary {
+                path: written.to_path_buf(),
+                boundary: boundary.to_path_buf(),
+            });
+        }
+    }
 
     let summary = summarize_under(&original, ceiling, &archive_name, |t| {
         count_tokens(&encoder, t)
@@ -76,6 +91,17 @@ pub fn fix_oversized(
         archive: archive_path,
         target_tokens: report.gating_target_tokens,
     })
+}
+
+fn lands_outside(written: &Path, boundary: &Boundary) -> bool {
+    let named = match written.as_os_str().is_empty() {
+        true => Path::new("."),
+        false => written,
+    };
+    match named.canonicalize() {
+        Ok(resolved) => !boundary.contains(&resolved),
+        Err(_) => named.is_symlink(),
+    }
 }
 
 /// Build an extractive summary that counts under `ceiling`.

@@ -216,6 +216,25 @@ fn a_link_to_a_pipe_is_reported_and_a_directory_is_skipped_without_being_read() 
 
 #[cfg(unix)]
 #[test]
+fn a_link_to_a_socket_is_reported_as_not_a_regular_file() {
+    let dir = TempDir::new().unwrap();
+    let root = write(dir.path(), "AGENTS.md", "[socket](socket.md)\n");
+    let _listener = std::os::unix::net::UnixListener::bind(dir.path().join("socket.md")).unwrap();
+
+    let closure = resolve_closure_within(&root, dir.path()).unwrap();
+
+    assert_eq!(closure.files.len(), 1);
+    assert_eq!(
+        closure.unread,
+        [unread(
+            dir.path().join("socket.md"),
+            UnreadReason::NotRegularFile
+        )]
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn a_device_inside_the_boundary_is_refused_by_its_file_type() {
     let dir = TempDir::new().unwrap();
     let root = write(dir.path(), "AGENTS.md", "[zero](zero.md)\n");

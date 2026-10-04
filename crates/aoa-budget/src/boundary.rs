@@ -10,7 +10,10 @@ pub(crate) struct Boundary {
 
 impl Boundary {
     pub(crate) fn open(path: &Path) -> io::Result<Self> {
-        let path = path.canonicalize()?;
+        Self::at(path.canonicalize()?)
+    }
+
+    fn at(path: PathBuf) -> io::Result<Self> {
         Ok(Self {
             #[cfg(unix)]
             directory: open_directory(&path)?,
@@ -124,32 +127,61 @@ mod descend {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::open_directory;
+    use std::io::Read;
+
+    use super::Boundary;
 
     #[test]
-    fn a_directory_reached_without_links_opens() {
+    fn a_directory_reached_without_links_opens_and_serves_its_members() {
         let dir = tempfile::tempdir().expect("tempdir");
         let docs = dir.path().canonicalize().expect("canonical").join("docs");
         std::fs::create_dir(&docs).expect("create docs");
+        std::fs::write(docs.join("member.md"), "inside\n").expect("write member");
 
-        assert!(open_directory(&docs).is_ok());
+        let boundary = Boundary::at(docs.clone()).expect("open the boundary");
+        let mut text = String::new();
+        boundary
+            .open_member(&docs.join("member.md"))
+            .expect("open the member")
+            .read_to_string(&mut text)
+            .expect("read the member");
+
+        assert_eq!(text, "inside\n");
     }
 
     #[test]
     fn a_directory_swapped_for_a_link_after_it_was_resolved_does_not_open() {
         let dir = tempfile::tempdir().expect("tempdir");
         let base = dir.path().canonicalize().expect("canonical");
-        std::fs::create_dir(base.join("outside")).expect("create outside");
+        std::fs::create_dir_all(base.join("outside/nested")).expect("create outside");
         std::fs::create_dir(base.join("repo")).expect("create repo");
         std::os::unix::fs::symlink(base.join("outside"), base.join("repo/docs"))
             .expect("swap docs for a link");
+        assert!(base.join("repo/docs/nested").is_dir());
 
-        assert!(open_directory(&base.join("repo/docs")).is_err());
-        assert!(open_directory(&base.join("repo/docs/nested")).is_err());
+        assert!(Boundary::at(base.join("repo/docs")).is_err());
+        assert!(Boundary::at(base.join("repo/docs/nested")).is_err());
+    }
+
+    #[test]
+    fn a_member_whose_directory_is_swapped_for_a_link_after_the_boundary_opened_does_not_open() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path().canonicalize().expect("canonical");
+        std::fs::create_dir(base.join("outside")).expect("create outside");
+        std::fs::write(base.join("outside/member.md"), "outside\n").expect("write outside member");
+        std::fs::create_dir(base.join("repo")).expect("create repo");
+        let boundary = Boundary::at(base.join("repo")).expect("open the boundary");
+        std::os::unix::fs::symlink(base.join("outside"), base.join("repo/docs"))
+            .expect("swap docs for a link");
+        assert!(base.join("repo/docs/member.md").is_file());
+
+        assert!(boundary
+            .open_member(&base.join("repo/docs/member.md"))
+            .is_err());
     }
 
     #[test]
     fn a_relative_directory_does_not_open() {
-        assert!(open_directory(std::path::Path::new("docs")).is_err());
+        assert!(Boundary::at(std::path::PathBuf::from("docs")).is_err());
     }
 }
