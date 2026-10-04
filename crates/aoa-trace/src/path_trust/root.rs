@@ -366,15 +366,23 @@ pub fn linked_worktree_points_back(
 }
 
 fn open_regular_file(path: &Path) -> std::io::Result<File> {
-    let file = open_without_blocking(path)?;
+    let file = match open_without_blocking(path) {
+        Ok(file) => file,
+        Err(source) => {
+            let linked = std::fs::symlink_metadata(path)
+                .is_ok_and(|metadata| metadata.file_type().is_symlink());
+            return Err(if linked { not_a_regular_file() } else { source });
+        }
+    };
     if file.metadata()?.is_file() {
         Ok(file)
     } else {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "not a regular file",
-        ))
+        Err(not_a_regular_file())
     }
+}
+
+fn not_a_regular_file() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a regular file")
 }
 
 #[cfg(unix)]
@@ -382,7 +390,7 @@ fn open_without_blocking(path: &Path) -> std::io::Result<File> {
     use rustix::fs::{Mode, OFlags};
     let descriptor = rustix::fs::open(
         path,
-        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC,
+        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
         Mode::empty(),
     )?;
     Ok(File::from(descriptor))
@@ -390,6 +398,9 @@ fn open_without_blocking(path: &Path) -> std::io::Result<File> {
 
 #[cfg(not(unix))]
 fn open_without_blocking(path: &Path) -> std::io::Result<File> {
+    if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(not_a_regular_file());
+    }
     File::open(path)
 }
 
@@ -646,6 +657,40 @@ mod tests {
             matches!(refusal, RepositoryRootError::Backlink { .. }),
             "{refusal}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_a_linked_backlink_the_same_way_whatever_the_link_names() {
+        let (_fixture, candidate) = candidate_fixture();
+        let git_dir = candidate.join("admin/worktrees/fixture");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        std::fs::write(candidate.join(".git"), "gitdir: ignored\n").unwrap();
+        let regular = candidate.join("regular");
+        std::fs::write(&regular, format!("{}\n", candidate.join(".git").display())).unwrap();
+        let directory = candidate.join("directory");
+        std::fs::create_dir(&directory).unwrap();
+        let backlink = git_dir.join("gitdir");
+
+        let refusals: Vec<String> = [regular, directory, candidate.join("absent")]
+            .iter()
+            .map(|target| {
+                std::os::unix::fs::symlink(target, &backlink).unwrap();
+                let refusal = linked_worktree_points_back(&candidate, &git_dir).unwrap_err();
+                std::fs::remove_file(&backlink).unwrap();
+                let RepositoryRootError::Backlink { source, .. } = &refusal else {
+                    panic!("{refusal}");
+                };
+                assert_eq!(source.kind(), std::io::ErrorKind::InvalidInput, "{refusal}");
+                refusal.to_string()
+            })
+            .collect();
+        assert_eq!(refusals[0], refusals[1]);
+        assert_eq!(refusals[0], refusals[2]);
+
+        std::fs::create_dir(&backlink).unwrap();
+        let not_regular = linked_worktree_points_back(&candidate, &git_dir).unwrap_err();
+        assert_eq!(not_regular.to_string(), refusals[0]);
     }
 
     #[cfg(unix)]
