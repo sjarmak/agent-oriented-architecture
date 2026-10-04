@@ -357,16 +357,12 @@ pub fn linked_worktree_points_back(
     } else {
         git_dir.join(backlink)
     };
-    // Either side failing to resolve is a mismatch. Comparing the two
-    // `canonicalize().ok()` values instead reads as equal when *both* fail,
-    // accepting a backlink that points nowhere as pointing back.
-    let (Ok(resolved_backlink), Ok(marker)) = (
-        backlink.canonicalize(),
-        candidate.join(".git").canonicalize(),
-    ) else {
+    let (Ok(resolved_backlink), Ok(canonical_candidate)) =
+        (backlink.canonicalize(), candidate.canonicalize())
+    else {
         return Ok(false);
     };
-    Ok(resolved_backlink == marker)
+    Ok(resolved_backlink == canonical_candidate.join(".git"))
 }
 
 fn open_regular_file(path: &Path) -> std::io::Result<File> {
@@ -650,6 +646,26 @@ mod tests {
             matches!(refusal, RepositoryRootError::Backlink { .. }),
             "{refusal}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_a_marker_linked_to_the_marker_the_backlink_names() {
+        let (_fixture, candidate) = candidate_fixture();
+        let other = candidate.join("other");
+        let git_dir = other.join("admin/worktrees/fixture");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let other_marker = other.join(".git");
+        std::fs::write(&other_marker, format!("gitdir: {}\n", git_dir.display())).unwrap();
+        std::fs::write(
+            git_dir.join("gitdir"),
+            format!("{}\n", other_marker.display()),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&other_marker, candidate.join(".git")).unwrap();
+
+        assert!(linked_worktree_points_back(&other, &git_dir).unwrap());
+        assert!(!linked_worktree_points_back(&candidate, &git_dir).unwrap());
     }
 
     /// A `.git` that Git itself disowns is not a trust root, and asking must not
