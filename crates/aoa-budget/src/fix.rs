@@ -4,6 +4,7 @@ use crate::boundary::Boundary;
 use crate::budget::{count_budget, Config, Verdict};
 use crate::closure::{resolve_closure_within, resolve_contained_closure};
 use crate::error::BudgetError;
+use crate::path::normalize_path;
 use crate::tokenizer::{count_tokens, target_encoder};
 
 /// The outcome of a [`fix_oversized`] operation.
@@ -36,6 +37,7 @@ pub fn fix_oversized(
     ceiling: usize,
     target: &str,
 ) -> Result<FixOutcome, BudgetError> {
+    let path = &normalize_path(path);
     let original = resolve_contained_closure(path, boundary)?
         .files
         .into_iter()

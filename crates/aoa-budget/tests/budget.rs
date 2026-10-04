@@ -379,6 +379,30 @@ fn fix_refuses_a_root_reached_through_a_link_from_outside_the_boundary() {
     assert!(!dir.path().join("outside/alias.archive.md").exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn fix_rewrites_the_file_it_read_when_the_root_steps_back_out_of_a_linked_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = oversized_body();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(repo.join("a/b")).unwrap();
+    std::fs::write(repo.join("x.md"), &body).unwrap();
+    std::fs::write(repo.join("a/x.md"), "kept\n").unwrap();
+    std::os::unix::fs::symlink(repo.join("a/b"), repo.join("link")).unwrap();
+
+    let fixed = fix_oversized(&repo.join("link/../x.md"), &repo, 200, "gpt-4o").unwrap();
+
+    assert_eq!(fixed.root, repo.join("x.md"));
+    assert_eq!(fixed.archive, repo.join("x.archive.md"));
+    assert_eq!(std::fs::read_to_string(&fixed.archive).unwrap(), body);
+    assert_ne!(std::fs::read_to_string(repo.join("x.md")).unwrap(), body);
+    assert_eq!(
+        std::fs::read_to_string(repo.join("a/x.md")).unwrap(),
+        "kept\n"
+    );
+    assert!(!repo.join("a/x.archive.md").exists());
+}
+
 #[test]
 fn fix_recheck_counts_what_the_root_links_in_a_sibling_directory() {
     let dir = scratch("fix-sibling");
