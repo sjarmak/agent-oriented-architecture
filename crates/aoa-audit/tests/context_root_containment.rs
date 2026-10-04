@@ -104,6 +104,42 @@ fn a_member_linked_out_of_the_repository_and_back_in_is_outside_whatever_it_step
     }
 }
 
+#[test]
+fn a_context_root_beneath_a_directory_the_process_may_not_search_fails_the_audit() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    let sealed = repo.join(".agents");
+    std::fs::create_dir_all(&sealed).unwrap();
+    std::fs::write(sealed.join("AGENTS.md"), "rules\n").unwrap();
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let searchable = std::fs::symlink_metadata(sealed.join("AGENTS.md")).is_ok();
+    let cfg = AuditConfig {
+        context_root: Some(PathBuf::from(".agents/AGENTS.md")),
+        ..AuditConfig::default()
+    };
+
+    let audited = audit(&repo, &cfg).map(|report| report.items.len());
+
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if searchable {
+        eprintln!(
+            "SKIP (docs/adr/0004-environment-dependent-test-skips.md): this process searches a \
+             mode-000 directory, so it cannot be denied a lookup"
+        );
+        return;
+    }
+    assert!(
+        matches!(
+            &audited,
+            Err(AuditError::Budget(BudgetError::Io { source, .. }))
+                if source.kind() == std::io::ErrorKind::PermissionDenied
+        ),
+        "{audited:?}"
+    );
+}
+
 fn repo_linking(dir: &std::path::Path, root_text: &str) -> PathBuf {
     let repo = dir.join("repo");
     std::fs::create_dir(&repo).unwrap();

@@ -23,6 +23,16 @@ pub(crate) enum Reached {
 enum Lost {
     Outside,
     Absent,
+    Failed(io::Error),
+}
+
+impl From<io::Error> for Lost {
+    fn from(error: io::Error) -> Self {
+        match error.kind() {
+            io::ErrorKind::NotFound | io::ErrorKind::NotADirectory => Self::Absent,
+            _ => Self::Failed(error),
+        }
+    }
 }
 
 impl Boundary {
@@ -69,13 +79,13 @@ impl Boundary {
         })
     }
 
-    pub(crate) fn reach(&self, target: &Path) -> Reached {
+    pub(crate) fn reach(&self, target: &Path) -> io::Result<Reached> {
         let Ok(absolute) = std::path::absolute(target) else {
-            return Reached::Outside;
+            return Ok(Reached::Outside);
         };
         let absolute = normalize_path(&absolute);
         let Some((directory, beneath)) = self.locate(&absolute) else {
-            return Reached::Outside;
+            return Ok(Reached::Outside);
         };
         let mut links_left = MAX_LINKS_FOLLOWED;
         let mut resolved = directory.to_path_buf();
@@ -85,15 +95,16 @@ impl Boundary {
             entry = resolved.join(name);
             match self.step(resolved, name, &mut links_left) {
                 Ok(next) => resolved = next,
-                Err(Lost::Outside) => return Reached::Outside,
+                Err(Lost::Outside) => return Ok(Reached::Outside),
                 Err(Lost::Absent) => {
-                    return Reached::Absent {
+                    return Ok(Reached::Absent {
                         entry: entry.join(names.as_path()),
-                    }
+                    })
                 }
+                Err(Lost::Failed(error)) => return Err(error),
             }
         }
-        Reached::Member { entry, resolved }
+        Ok(Reached::Member { entry, resolved })
     }
 
     fn step(
@@ -119,16 +130,14 @@ impl Boundary {
                 continue;
             }
             let next = at.join(&name);
-            let kind = std::fs::symlink_metadata(&next)
-                .map_err(|_| Lost::Absent)?
-                .file_type();
+            let kind = std::fs::symlink_metadata(&next)?.file_type();
             if !kind.is_symlink() {
                 at_a_directory = kind.is_dir();
                 at = next;
                 continue;
             }
             *links_left = links_left.checked_sub(1).ok_or(Lost::Absent)?;
-            let target = std::fs::read_link(&next).map_err(|_| Lost::Absent)?;
+            let target = std::fs::read_link(&next)?;
             pending.extend(names_a_directory(&target).then(|| OsString::from(".")));
             let target = match target.has_root() {
                 false => target.as_path(),

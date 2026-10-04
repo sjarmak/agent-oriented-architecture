@@ -76,7 +76,13 @@ pub fn resolve_closure(root: &Path) -> Result<Closure, BudgetError> {
 pub fn resolve_contained_closure(root: &Path, boundary: &Path) -> Result<Closure, BudgetError> {
     let opened = open_boundary(boundary)?;
     let normalized = normalize_path(root);
-    match opened.reach(&normalized) {
+    let reached = opened
+        .reach(&normalized)
+        .map_err(|source| BudgetError::Io {
+            path: normalized.clone(),
+            source,
+        })?;
+    match reached {
         Reached::Member { resolved, .. } => {
             resolve(normalized, &opened, RootRead::Beneath(resolved))
         }
@@ -132,24 +138,35 @@ fn resolve(
                 RootRead::Beneath(resolved) => boundary.open_member(resolved),
             };
             let text = read_regular_file(opened).map_err(|failure| failure.into_error(&path))?;
-            if let Reached::Member { entry, .. } = boundary.reach(&path) {
+            let reached = boundary.reach(&path).map_err(|source| BudgetError::Io {
+                path: path.clone(),
+                source,
+            })?;
+            if let Reached::Member { entry, .. } = reached {
                 resolved_members.insert(entry);
             }
             text
         } else {
             let resolved = match boundary.reach(&path) {
-                Reached::Outside => {
+                Err(_) => {
+                    unread.push(UnreadLink {
+                        path,
+                        reason: UnreadReason::Unreadable,
+                    });
+                    continue;
+                }
+                Ok(Reached::Outside) => {
                     outside_boundary.push(path);
                     continue;
                 }
-                Reached::Absent { entry } => {
+                Ok(Reached::Absent { entry }) => {
                     if resolved_members.insert(entry) {
                         unread.extend(unresolved_link(&path));
                     }
                     absent.insert(path);
                     continue;
                 }
-                Reached::Member { entry, resolved } => {
+                Ok(Reached::Member { entry, resolved }) => {
                     if !resolved_members.insert(entry) {
                         continue;
                     }

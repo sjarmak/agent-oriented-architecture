@@ -483,6 +483,34 @@ fn a_member_the_process_may_not_open_is_reported_as_unreadable() {
     assert_eq!(closure.unread, [unread(sealed, UnreadReason::Unreadable)]);
 }
 
+#[cfg(unix)]
+#[test]
+fn a_link_beneath_a_directory_the_process_may_not_search_is_unreadable_not_absent() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    let root = write(dir.path(), "AGENTS.md", "[sealed](sealed/rules.md)\n");
+    let rules = write(dir.path(), "sealed/rules.md", "rules\n");
+    let sealed = dir.path().join("sealed");
+    fs::set_permissions(&sealed, fs::Permissions::from_mode(0o000)).unwrap();
+    let searchable = fs::symlink_metadata(&rules).is_ok();
+
+    let closure = resolve_closure_within(&root, dir.path());
+
+    fs::set_permissions(&sealed, fs::Permissions::from_mode(0o755)).unwrap();
+    if searchable {
+        eprintln!(
+            "SKIP (docs/adr/0004-environment-dependent-test-skips.md): this process searches a \
+             mode-000 directory, so it cannot be denied a lookup"
+        );
+        return;
+    }
+    let closure = closure.unwrap();
+    assert_eq!(closure.files.len(), 1);
+    assert_eq!(closure.unread, [unread(rules, UnreadReason::Unreadable)]);
+    assert!(closure.absent.is_empty(), "{:?}", closure.absent);
+}
+
 #[test]
 fn a_member_of_exactly_the_size_limit_is_counted() {
     let dir = TempDir::new().unwrap();

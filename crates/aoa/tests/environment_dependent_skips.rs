@@ -84,13 +84,18 @@ struct Classified {
 ///   separately.
 const CLASSIFIED: &[Classified] = &[
     Classified {
+        path: "crates/aoa-audit/tests/context_root_containment.rs",
+        notices: 1,
+        ignored: 0,
+    },
+    Classified {
         path: "crates/aoa-bench/tests/exposure_scan.rs",
         notices: 1,
         ignored: 1,
     },
     Classified {
         path: "crates/aoa-budget/tests/closure_bounds.rs",
-        notices: 1,
+        notices: 2,
         ignored: 0,
     },
     Classified {

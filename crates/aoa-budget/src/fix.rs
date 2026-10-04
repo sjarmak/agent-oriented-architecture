@@ -100,7 +100,13 @@ fn contained_archive(path: &Path, boundary: &Path) -> Result<(String, PathBuf), 
         path: boundary.to_path_buf(),
         source,
     })?;
-    match opened.reach(&archive_path) {
+    let reached = opened
+        .reach(&archive_path)
+        .map_err(|source| BudgetError::Io {
+            path: archive_path.clone(),
+            source,
+        })?;
+    match reached {
         Reached::Outside => Err(BudgetError::OutsideBoundary {
             path: archive_path,
             boundary: boundary.to_path_buf(),
