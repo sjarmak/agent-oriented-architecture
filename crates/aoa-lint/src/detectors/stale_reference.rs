@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Component, Path};
 
 use crate::category::SmellCategory;
 use crate::detectors::LintedFile;
@@ -42,7 +42,7 @@ fn escapes(target: &Path, canonical_boundary: &Path, hops: usize) -> bool {
             return !resolved.starts_with(canonical_boundary);
         }
         if let Ok(named) = std::fs::read_link(ancestor) {
-            if steps_back(&named) {
+            if steps_back_past_a_name(&named) {
                 return true;
             }
             let directory = ancestor
@@ -50,7 +50,12 @@ fn escapes(target: &Path, canonical_boundary: &Path, hops: usize) -> bool {
                 .and_then(|parent| parent.canonicalize().ok());
             return match directory {
                 Some(directory) if directory.starts_with(canonical_boundary) => {
-                    hops > 0 && escapes(&directory.join(named), canonical_boundary, hops - 1)
+                    hops > 0
+                        && escapes(
+                            &normalize_path(&directory.join(named)),
+                            canonical_boundary,
+                            hops - 1,
+                        )
                 }
                 _ => true,
             };
@@ -59,8 +64,9 @@ fn escapes(target: &Path, canonical_boundary: &Path, hops: usize) -> bool {
     true
 }
 
-fn steps_back(named: &Path) -> bool {
+fn steps_back_past_a_name(named: &Path) -> bool {
     named
         .components()
-        .any(|component| component == std::path::Component::ParentDir)
+        .skip_while(|component| !matches!(component, Component::Normal(_)))
+        .any(|component| component == Component::ParentDir)
 }

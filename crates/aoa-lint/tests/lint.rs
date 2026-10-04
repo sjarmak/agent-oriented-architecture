@@ -396,6 +396,31 @@ fn a_dangling_link_that_steps_through_a_path_outside_reads_the_same_whether_or_n
 
 #[cfg(unix)]
 #[test]
+fn a_dangling_link_that_only_climbs_before_naming_a_path_inside_is_still_a_stale_reference() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(repo.join("docs/deep")).unwrap();
+    symlink("../gone.md", repo.join("docs/up.md")).unwrap();
+    symlink("../../removed", repo.join("docs/deep/through")).unwrap();
+
+    let stale = stale_references(
+        &repo,
+        "[up](docs/up.md) [through](docs/deep/through/member.md)\n",
+    );
+
+    assert_eq!(
+        stale,
+        [
+            "stale reference: linked file 'docs/up.md' does not exist",
+            "stale reference: linked file 'docs/deep/through/member.md' does not exist",
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn a_dangling_or_looping_link_that_stays_inside_is_still_a_stale_reference() {
     use std::os::unix::fs::symlink;
 
