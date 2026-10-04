@@ -1488,6 +1488,63 @@ fn a_git_file_pointing_at_another_checkout_linked_worktree_does_not_borrow_its_h
     assert!(pre_commit_plane_missing(repo.path()));
 }
 
+fn repo_with_git_dir_sharing(other: &Path) -> (TempDir, std::path::PathBuf) {
+    let repo = fixture_repo();
+    let git_dir = repo.path().join("admin");
+    std::fs::create_dir(&git_dir).expect("create git dir");
+    std::fs::write(
+        repo.path().join(".git"),
+        format!("gitdir: {}\n", git_dir.display()),
+    )
+    .expect("plant .git file");
+    std::fs::write(
+        git_dir.join("commondir"),
+        format!("{}\n", other.join(".git").display()),
+    )
+    .expect("name the common dir");
+    std::fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
+    (repo, git_dir)
+}
+
+#[test]
+fn a_git_dir_sharing_another_repository_does_not_borrow_its_hook_by_pointing_back() {
+    let other = git_fixture_repo();
+    write_hook(&other.path().join(".git/hooks/pre-commit"));
+    let (repo, git_dir) = repo_with_git_dir_sharing(other.path());
+    std::fs::write(
+        git_dir.join("gitdir"),
+        format!("{}\n", repo.path().join(".git").display()),
+    )
+    .expect("point back at the checkout");
+
+    assert!(pre_commit_plane_missing(repo.path()));
+}
+
+#[test]
+fn a_git_dir_sharing_another_repository_does_not_borrow_its_hook_without_a_back_pointer() {
+    let other = git_fixture_repo();
+    write_hook(&other.path().join(".git/hooks/pre-commit"));
+    let (repo, git_dir) = repo_with_git_dir_sharing(other.path());
+    std::fs::write(git_dir.join("config"), "").expect("write an empty config");
+
+    assert!(pre_commit_plane_missing(repo.path()));
+}
+
+#[test]
+fn a_worktree_named_with_a_trailing_space_is_not_the_checkout() {
+    let git_dirs = tempfile::tempdir().expect("git dir parent");
+    let git_dir = git_dirs.path().join("module");
+    let repo = separate_git_dir_repo(&git_dir);
+    write_hook(&git_dir.join("hooks/pre-commit"));
+    let padded = format!("{} ", repo.path().to_str().expect("utf-8 path"));
+    std::fs::create_dir(&padded).expect("create the padded sibling");
+    config_file(&git_dir.join("config"), "core.worktree", &padded);
+
+    let missing = pre_commit_plane_missing(repo.path());
+    std::fs::remove_dir(&padded).expect("remove the padded sibling");
+    assert!(missing);
+}
+
 #[test]
 fn a_hook_under_core_hooks_path_satisfies_the_pre_commit_plane() {
     let repo = git_fixture_repo();

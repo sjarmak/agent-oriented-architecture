@@ -63,15 +63,20 @@ fn installed_pre_commit_hook(repo: &Path) -> bool {
         return false;
     };
     let contained = hook.starts_with(&repo)
-        || (location
-            .common_dir
-            .canonicalize()
-            .is_ok_and(|common_dir| hook.starts_with(common_dir))
-            && names_worktree(&location.git_dir, &repo));
+        || location.common_dir.canonicalize().is_ok_and(|common_dir| {
+            hook.starts_with(&common_dir) && names_worktree(&location.git_dir, &common_dir, &repo)
+        });
     contained && std::fs::metadata(&hook).is_ok_and(|meta| meta.is_file() && is_executable(&meta))
 }
 
-fn names_worktree(git_dir: &Path, repo: &Path) -> bool {
+fn names_worktree(git_dir: &Path, common_dir: &Path, repo: &Path) -> bool {
+    let Ok(resolved) = git_dir.canonicalize() else {
+        return false;
+    };
+    if resolved != common_dir {
+        return resolved.parent() == Some(&common_dir.join("worktrees"))
+            && linked_worktree_points_back(repo, git_dir).is_ok_and(|points_back| points_back);
+    }
     match linked_worktree_points_back(repo, git_dir) {
         Ok(points_back) => points_back,
         Err(RepositoryRootError::Backlink { source, .. })
@@ -127,7 +132,9 @@ fn config_value(repo: &Path, git_dir: &Path, query: &[&str]) -> ConfigValue {
         return ConfigValue::Unreadable;
     };
     match (output.status.code(), std::str::from_utf8(&output.stdout)) {
-        (Some(0), Ok(value)) => ConfigValue::Set(value.trim_end().to_string()),
+        (Some(0), Ok(value)) => {
+            ConfigValue::Set(value.strip_suffix('\n').unwrap_or(value).to_string())
+        }
         (Some(GIT_CONFIG_KEY_UNSET), _) => ConfigValue::Unset,
         _ => ConfigValue::Unreadable,
     }
