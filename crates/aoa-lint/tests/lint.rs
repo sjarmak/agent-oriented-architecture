@@ -572,6 +572,44 @@ fn a_dangling_or_looping_link_that_stays_inside_is_still_a_stale_reference() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_link_back_out_of_a_directory_the_process_may_not_search_is_unread_not_followed() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let repo = dir.path().join("repo");
+    let sealed = repo.join("sealed");
+    std::fs::create_dir_all(&sealed).unwrap();
+    std::fs::write(repo.join("safe.md"), "safe\n").unwrap();
+    let root = repo.join("AGENTS.md");
+    std::fs::write(&root, "[probe](probe.md)\n").unwrap();
+    let probe = repo.join("probe.md");
+    std::os::unix::fs::symlink("sealed/../safe.md", &probe).unwrap();
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let searchable = std::fs::File::open(&probe).is_ok();
+
+    let report = aoa_lint::lint_context_roots(&[root], &repo, "o200k_base");
+
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if searchable {
+        eprintln!(
+            "SKIP (docs/adr/0004-environment-dependent-test-skips.md): this process searches a \
+             mode-000 directory, so it cannot be denied a lookup"
+        );
+        return;
+    }
+    let report = report.unwrap();
+    assert_eq!(report.closures[0].files.len(), 1);
+    assert_eq!(
+        report.closures[0].unread,
+        [aoa_budget::UnreadLink {
+            path: probe,
+            reason: aoa_budget::UnreadReason::Unreadable,
+        }]
+    );
+}
+
 #[test]
 fn a_linked_build_file_is_counted_but_not_linted_as_prose() {
     let dir = tempfile::TempDir::new().unwrap();

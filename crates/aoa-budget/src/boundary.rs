@@ -126,6 +126,7 @@ impl Boundary {
                 if at == self.path {
                     return Err(Lost::Outside);
                 }
+                std::fs::symlink_metadata(at.join(".."))?;
                 at.pop();
                 continue;
             }

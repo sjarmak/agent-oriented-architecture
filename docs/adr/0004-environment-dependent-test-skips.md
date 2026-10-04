@@ -58,12 +58,14 @@ than an accident:
   `AOA_R0_CAMPAIGN_RUNS` in its reason string.
 
 - `crates/aoa-scip-graph/tests/walk_scope.rs`,
-  `crates/aoa-budget/tests/closure_bounds.rs` and
+  `crates/aoa-budget/tests/closure_bounds.rs`,
+  `crates/aoa-lint/tests/lint.rs` and
   `crates/aoa-audit/tests/context_root_containment.rs` hold tests that need the
   kernel to refuse the process a read: an unlistable directory in the first, a
-  mode-000 file and a mode-000 directory a link points beneath in the second,
-  and a mode-000 directory above the audit's context root in the third. A
-  process running as root is refused none of them, so
+  mode-000 file, a mode-000 directory a link points beneath and a mode-000
+  directory a link steps back out of in the second, the same step back out in
+  the third, and a mode-000 directory above the audit's context root in the
+  fourth. A process running as root is refused none of them, so
   each test probes whether the seal took and prints the notice when it did not.
   CI satisfies the precondition without an install step, because the hosted
   runner executes the suite as an unprivileged user; the notice is for a

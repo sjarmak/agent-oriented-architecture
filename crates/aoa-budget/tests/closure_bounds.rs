@@ -511,6 +511,41 @@ fn a_link_beneath_a_directory_the_process_may_not_search_is_unreadable_not_absen
     assert!(closure.absent.is_empty(), "{:?}", closure.absent);
 }
 
+#[cfg(unix)]
+#[test]
+fn a_contained_root_linked_back_out_of_a_directory_the_process_may_not_search_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path().join("repo");
+    write(&repo, "safe.md", "safe\n");
+    let sealed = repo.join("sealed");
+    fs::create_dir(&sealed).unwrap();
+    let probe = repo.join("probe.md");
+    std::os::unix::fs::symlink("sealed/../safe.md", &probe).unwrap();
+    fs::set_permissions(&sealed, fs::Permissions::from_mode(0o000)).unwrap();
+    let searchable = fs::File::open(&probe).is_ok();
+
+    let closure = resolve_contained_closure(&probe, &repo).map(|closure| closure.files.len());
+
+    fs::set_permissions(&sealed, fs::Permissions::from_mode(0o755)).unwrap();
+    if searchable {
+        eprintln!(
+            "SKIP (docs/adr/0004-environment-dependent-test-skips.md): this process searches a \
+             mode-000 directory, so it cannot be denied a lookup"
+        );
+        return;
+    }
+    assert!(
+        matches!(
+            &closure,
+            Err(BudgetError::Io { source, .. })
+                if source.kind() == std::io::ErrorKind::PermissionDenied
+        ),
+        "{closure:?}"
+    );
+}
+
 #[test]
 fn a_member_of_exactly_the_size_limit_is_counted() {
     let dir = TempDir::new().unwrap();

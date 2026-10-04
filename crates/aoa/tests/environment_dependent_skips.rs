@@ -95,7 +95,12 @@ const CLASSIFIED: &[Classified] = &[
     },
     Classified {
         path: "crates/aoa-budget/tests/closure_bounds.rs",
-        notices: 2,
+        notices: 3,
+        ignored: 0,
+    },
+    Classified {
+        path: "crates/aoa-lint/tests/lint.rs",
+        notices: 1,
         ignored: 0,
     },
     Classified {
