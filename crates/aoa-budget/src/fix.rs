@@ -52,7 +52,7 @@ pub fn fix_oversized(
         count_tokens(&encoder, t)
     });
 
-    std::fs::write(&archive_path, &original).map_err(|source| BudgetError::Io {
+    write_without_following_a_link(&archive_path, &original).map_err(|source| BudgetError::Io {
         path: archive_path.clone(),
         source,
     })?;
@@ -75,6 +75,17 @@ pub fn fix_oversized(
         archive: archive_path,
         target_tokens: report.gating_target_tokens,
     })
+}
+
+fn write_without_following_a_link(path: &Path, body: &str) -> std::io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(
+        &mut options,
+        rustix::fs::OFlags::NOFOLLOW.bits() as i32,
+    );
+    std::io::Write::write_all(&mut options.open(path)?, body.as_bytes())
 }
 
 fn contained_archive(path: &Path, boundary: &Path) -> Result<(String, PathBuf), BudgetError> {

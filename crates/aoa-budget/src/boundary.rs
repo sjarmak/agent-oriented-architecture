@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::normalize_path;
 
-const MAX_LINKS_FOLLOWED: usize = 4096;
+const MAX_LINKS_FOLLOWED: usize = 256;
 
 pub(crate) struct Boundary {
     path: PathBuf,

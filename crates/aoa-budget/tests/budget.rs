@@ -391,6 +391,38 @@ fn fix_refuses_an_archive_linked_out_of_the_boundary_and_back_in_whatever_it_ste
 
 #[cfg(unix)]
 #[test]
+fn fix_refuses_an_archive_that_is_a_link_inside_the_boundary_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = oversized_body();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(repo.join("hooks")).unwrap();
+    let root = repo.join("big.md");
+    std::fs::write(&root, &body).unwrap();
+    std::fs::write(repo.join("kept.md"), "kept\n").unwrap();
+    std::os::unix::fs::symlink("kept.md", repo.join("big.archive.md")).unwrap();
+    let other = repo.join("other.md");
+    std::fs::write(&other, &body).unwrap();
+    std::os::unix::fs::symlink("hooks/created", repo.join("other.archive.md")).unwrap();
+
+    let linked = fix_oversized(&root, &repo, 200, "gpt-4o");
+    let dangling = fix_oversized(&other, &repo, 200, "gpt-4o");
+
+    assert!(matches!(linked, Err(BudgetError::Io { .. })), "{linked:?}");
+    assert!(
+        matches!(dangling, Err(BudgetError::Io { .. })),
+        "{dangling:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.join("kept.md")).unwrap(),
+        "kept\n"
+    );
+    assert!(!repo.join("hooks/created").exists());
+    assert_eq!(std::fs::read_to_string(&root).unwrap(), body);
+    assert_eq!(std::fs::read_to_string(&other).unwrap(), body);
+}
+
+#[cfg(unix)]
+#[test]
 fn fix_refuses_a_root_reached_through_a_link_from_outside_the_boundary() {
     let dir = tempfile::tempdir().unwrap();
     let body = oversized_body();
