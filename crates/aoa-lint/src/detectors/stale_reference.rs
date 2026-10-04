@@ -1,4 +1,4 @@
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use crate::category::SmellCategory;
 use crate::detectors::LintedFile;
@@ -28,40 +28,52 @@ pub fn detect(file: &LintedFile, canonical_boundary: &Path) -> Vec<Finding> {
     findings
 }
 
-const MAX_LINK_HOPS: usize = 40;
-
 fn leaves(target: &Path, canonical_boundary: &Path) -> bool {
     std::path::absolute(target).map_or(true, |target| {
-        escapes(&normalize_path(&target), canonical_boundary, MAX_LINK_HOPS)
+        escapes(normalize_path(&target), canonical_boundary)
     })
 }
 
-fn escapes(target: &Path, canonical_boundary: &Path, hops: usize) -> bool {
+enum Hop {
+    Settled { escapes: bool },
+    Follow(PathBuf),
+}
+
+fn escapes(target: PathBuf, canonical_boundary: &Path) -> bool {
+    let mut followed = vec![target];
+    loop {
+        let current = &followed[followed.len() - 1];
+        match next_hop(current, canonical_boundary) {
+            Hop::Settled { escapes } => return escapes,
+            Hop::Follow(next) if followed.contains(&next) => return false,
+            Hop::Follow(next) => followed.push(next),
+        }
+    }
+}
+
+fn next_hop(target: &Path, canonical_boundary: &Path) -> Hop {
     for ancestor in target.ancestors() {
         if let Ok(resolved) = ancestor.canonicalize() {
-            return !resolved.starts_with(canonical_boundary);
+            return Hop::Settled {
+                escapes: !resolved.starts_with(canonical_boundary),
+            };
         }
         if let Ok(named) = std::fs::read_link(ancestor) {
             if steps_back_past_a_name(&named) {
-                return true;
+                return Hop::Settled { escapes: true };
             }
             let directory = ancestor
                 .parent()
                 .and_then(|parent| parent.canonicalize().ok());
             return match directory {
                 Some(directory) if directory.starts_with(canonical_boundary) => {
-                    hops > 0
-                        && escapes(
-                            &normalize_path(&directory.join(named)),
-                            canonical_boundary,
-                            hops - 1,
-                        )
+                    Hop::Follow(normalize_path(&directory.join(named)))
                 }
-                _ => true,
+                _ => Hop::Settled { escapes: true },
             };
         }
     }
-    true
+    Hop::Settled { escapes: true }
 }
 
 fn steps_back_past_a_name(named: &Path) -> bool {

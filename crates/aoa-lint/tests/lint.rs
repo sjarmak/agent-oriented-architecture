@@ -396,6 +396,28 @@ fn a_dangling_link_that_steps_through_a_path_outside_reads_the_same_whether_or_n
 
 #[cfg(unix)]
 #[test]
+fn a_long_chain_of_links_ending_outside_reads_the_same_whether_or_not_its_end_exists() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    for hop in 0..45 {
+        symlink(format!("h{}", hop + 1), repo.join(format!("h{hop}"))).unwrap();
+    }
+    symlink("../probed", repo.join("h45")).unwrap();
+    let body = "[first](h0) [later](h4)\n";
+
+    let while_absent = stale_references(&repo, body);
+    std::fs::write(dir.path().join("probed"), "outside\n").unwrap();
+    let while_present = stale_references(&repo, body);
+
+    assert_eq!(while_absent, Vec::<String>::new());
+    assert_eq!(while_present, Vec::<String>::new());
+}
+
+#[cfg(unix)]
+#[test]
 fn a_dangling_link_that_only_climbs_before_naming_a_path_inside_is_still_a_stale_reference() {
     use std::os::unix::fs::symlink;
 
