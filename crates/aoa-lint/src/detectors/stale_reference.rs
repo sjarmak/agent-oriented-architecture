@@ -42,6 +42,9 @@ fn escapes(target: &Path, canonical_boundary: &Path, hops: usize) -> bool {
             return !resolved.starts_with(canonical_boundary);
         }
         if let Ok(named) = std::fs::read_link(ancestor) {
+            if steps_back(&named) {
+                return true;
+            }
             let directory = ancestor
                 .parent()
                 .and_then(|parent| parent.canonicalize().ok());
@@ -54,4 +57,10 @@ fn escapes(target: &Path, canonical_boundary: &Path, hops: usize) -> bool {
         }
     }
     true
+}
+
+fn steps_back(named: &Path) -> bool {
+    named
+        .components()
+        .any(|component| component == std::path::Component::ParentDir)
 }
