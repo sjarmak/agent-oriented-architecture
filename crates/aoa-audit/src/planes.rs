@@ -473,6 +473,49 @@ mod tests {
         assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::Missing);
     }
 
+    fn separate_git_dir_checkout() -> (tempfile::TempDir, tempfile::TempDir, PathBuf) {
+        let git_dirs = tempfile::tempdir().unwrap();
+        let git_dir = git_dirs.path().canonicalize().unwrap().join("module");
+        let repo = tempfile::tempdir().unwrap();
+        let initialized = git(repo.path())
+            .args(["init", "--quiet", "--template=", "--separate-git-dir"])
+            .arg(&git_dir)
+            .status()
+            .unwrap();
+        assert!(initialized.success(), "git init failed");
+        assert!(names_worktree(&git_dir, &git_dir, repo.path()));
+        (git_dirs, repo, git_dir)
+    }
+
+    #[test]
+    fn a_git_dir_whose_config_cannot_be_read_names_no_worktree() {
+        let (_git_dirs, repo, git_dir) = separate_git_dir_checkout();
+        std::fs::write(git_dir.join("config"), "[core\n").unwrap();
+
+        assert!(matches!(
+            config_value(repo.path(), &git_dir, &["--get", "core.worktree"]),
+            ConfigValue::Unreadable
+        ));
+        assert!(!names_worktree(&git_dir, &git_dir, repo.path()));
+        assert!(!names_no_worktree(&git_dir, repo.path()));
+    }
+
+    #[test]
+    fn a_git_dir_whose_bare_setting_is_not_a_boolean_names_no_worktree() {
+        let (_git_dirs, repo, git_dir) = separate_git_dir_checkout();
+        std::fs::write(git_dir.join("config"), "[core]\n\tbare = perhaps\n").unwrap();
+
+        assert!(matches!(
+            config_value(
+                repo.path(),
+                &git_dir,
+                &["--type=bool", "--get", "core.bare"]
+            ),
+            ConfigValue::Unreadable
+        ));
+        assert!(!names_no_worktree(&git_dir, repo.path()));
+    }
+
     const FOREIGN_SETTINGS: &str = r#"{"hooks":{
         "PreToolUse":[{"matcher":"Edit|Write","hooks":[
             {"type":"command","command":"\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard.sh pre"}

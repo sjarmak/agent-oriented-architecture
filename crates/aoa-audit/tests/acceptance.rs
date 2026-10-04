@@ -1515,6 +1515,87 @@ fn a_worktree_named_in_the_per_worktree_config_is_the_one_the_hook_belongs_to() 
 }
 
 #[test]
+fn a_worktree_named_relative_to_the_git_dir_is_resolved_from_the_git_dir() {
+    let repo = fixture_repo();
+    let git_dir = repo.path().join("storage");
+    git(
+        repo.path(),
+        &[
+            "init",
+            "--quiet",
+            "--template=",
+            "--separate-git-dir",
+            git_dir.to_str().expect("utf-8 path"),
+        ],
+    );
+    write_hook(&git_dir.join("hooks/pre-commit"));
+
+    config_file(&git_dir.join("config"), "core.worktree", "..");
+    assert!(!pre_commit_plane_missing(repo.path()));
+
+    config_file(&git_dir.join("config"), "core.worktree", "../..");
+    assert!(pre_commit_plane_missing(repo.path()));
+}
+
+fn separate_git_dir_repo_with_hook() -> (TempDir, TempDir, std::path::PathBuf) {
+    let git_dirs = tempfile::tempdir().expect("git dir parent");
+    let git_dir = git_dirs.path().join("module");
+    let repo = separate_git_dir_repo(&git_dir);
+    write_hook(&git_dir.join("hooks/pre-commit"));
+    assert!(!pre_commit_plane_missing(repo.path()));
+    (git_dirs, repo, git_dir)
+}
+
+#[test]
+fn a_back_pointer_in_a_separate_git_dir_lends_the_hook_only_to_the_checkout_it_names() {
+    let (_git_dirs, repo, git_dir) = separate_git_dir_repo_with_hook();
+    let elsewhere = fixture_repo();
+    std::fs::copy(repo.path().join(".git"), elsewhere.path().join(".git"))
+        .expect("name the git dir from another checkout");
+    let back_pointer = git_dir.join("gitdir");
+
+    std::fs::write(
+        &back_pointer,
+        format!("{}\n", elsewhere.path().join(".git").display()),
+    )
+    .expect("point back at the other checkout");
+    assert!(pre_commit_plane_missing(repo.path()));
+    assert!(!pre_commit_plane_missing(elsewhere.path()));
+
+    std::fs::write(
+        &back_pointer,
+        format!("{}\n", repo.path().join(".git").display()),
+    )
+    .expect("point back at the checkout");
+    assert!(!pre_commit_plane_missing(repo.path()));
+    assert!(pre_commit_plane_missing(elsewhere.path()));
+}
+
+#[test]
+fn a_back_pointer_in_a_separate_git_dir_that_is_a_directory_is_refused() {
+    let (_git_dirs, repo, git_dir) = separate_git_dir_repo_with_hook();
+    std::fs::create_dir(git_dir.join("gitdir")).expect("plant a directory as the back-pointer");
+
+    assert!(pre_commit_plane_missing(repo.path()));
+}
+
+#[test]
+fn a_back_pointer_in_a_separate_git_dir_that_is_not_text_is_refused() {
+    let (_git_dirs, repo, git_dir) = separate_git_dir_repo_with_hook();
+    std::fs::write(git_dir.join("gitdir"), [0xff, 0xfe, b'\n']).expect("write the back-pointer");
+
+    assert!(pre_commit_plane_missing(repo.path()));
+}
+
+#[test]
+fn a_separate_git_dir_with_no_config_file_does_not_lend_its_hook() {
+    let (_git_dirs, repo, git_dir) = separate_git_dir_repo_with_hook();
+    std::fs::remove_file(git_dir.join("config")).expect("remove the config");
+
+    assert!(pre_commit_plane_missing(repo.path()));
+}
+
+#[test]
 fn a_git_file_pointing_at_a_bare_repository_does_not_borrow_its_hook() {
     let bare = tempfile::tempdir().expect("bare repository");
     git(bare.path(), &["init", "--quiet", "--template=", "--bare"]);
