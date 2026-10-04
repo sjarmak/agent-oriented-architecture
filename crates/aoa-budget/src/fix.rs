@@ -44,25 +44,7 @@ pub fn fix_oversized(
         .unwrap_or_default();
     let encoder = target_encoder(target)?;
 
-    let stem = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "context".to_string());
-    let dir = path.parent().unwrap_or(Path::new("."));
-    let archive_name = format!("{stem}.archive.md");
-    let archive_path = dir.join(&archive_name);
-    let opened = Boundary::open(boundary).map_err(|source| BudgetError::Io {
-        path: boundary.to_path_buf(),
-        source,
-    })?;
-    for written in [dir, &archive_path] {
-        if lands_outside(written, &opened) {
-            return Err(BudgetError::OutsideBoundary {
-                path: written.to_path_buf(),
-                boundary: boundary.to_path_buf(),
-            });
-        }
-    }
+    let (archive_name, archive_path) = contained_archive(path, boundary)?;
 
     let summary = summarize_under(&original, ceiling, &archive_name, |t| {
         count_tokens(&encoder, t)
@@ -91,6 +73,31 @@ pub fn fix_oversized(
         archive: archive_path,
         target_tokens: report.gating_target_tokens,
     })
+}
+
+fn contained_archive(path: &Path, boundary: &Path) -> Result<(String, PathBuf), BudgetError> {
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "context".to_string());
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let archive_name = format!("{stem}.archive.md");
+    let archive_path = dir.join(&archive_name);
+    let opened = Boundary::open(boundary).map_err(|source| BudgetError::Io {
+        path: boundary.to_path_buf(),
+        source,
+    })?;
+    let outside = [dir, archive_path.as_path()]
+        .into_iter()
+        .find(|written| lands_outside(written, &opened))
+        .map(Path::to_path_buf);
+    match outside {
+        Some(path) => Err(BudgetError::OutsideBoundary {
+            path,
+            boundary: boundary.to_path_buf(),
+        }),
+        None => Ok((archive_name, archive_path)),
+    }
 }
 
 fn lands_outside(written: &Path, boundary: &Boundary) -> bool {
