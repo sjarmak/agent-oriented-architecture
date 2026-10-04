@@ -95,6 +95,116 @@ fn a_member_linking_outside_the_boundary_reads_the_same_whatever_it_reaches() {
 }
 
 #[cfg(unix)]
+fn across_what_is_outside<T>(outside: &Path, observe: impl Fn() -> T) -> [T; 4] {
+    let while_absent = observe();
+    fs::create_dir(outside).unwrap();
+    let while_a_directory = observe();
+    fs::remove_dir(outside).unwrap();
+    fs::write(outside, "outside\n").unwrap();
+    let while_a_file = observe();
+    fs::remove_file(outside).unwrap();
+    std::os::unix::fs::symlink("removed", outside).unwrap();
+    let while_a_broken_link = observe();
+    [
+        while_absent,
+        while_a_directory,
+        while_a_file,
+        while_a_broken_link,
+    ]
+}
+
+#[cfg(unix)]
+#[test]
+fn a_member_linked_out_of_the_boundary_and_back_in_is_outside_whatever_it_steps_through() {
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path().join("repo");
+    let root = write(dir.path(), "repo/AGENTS.md", "[probe](probe.md)\n");
+    write(dir.path(), "repo/safe.md", "safe\n");
+    std::os::unix::fs::symlink("../probed-dir/../repo/safe.md", repo.join("probe.md")).unwrap();
+
+    let observed = across_what_is_outside(&dir.path().join("probed-dir"), || {
+        let closure = resolve_closure_within(&root, &repo).unwrap();
+        (
+            member_names(&root, &repo),
+            closure.outside_boundary,
+            closure.unread,
+        )
+    });
+
+    for seen in observed {
+        assert_eq!(
+            seen,
+            (
+                vec!["AGENTS.md".to_string()],
+                vec![repo.join("probe.md")],
+                Vec::new()
+            )
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_that_steps_back_within_the_boundary_to_a_missing_file_is_a_broken_symlink() {
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path().join("repo");
+    let root = write(dir.path(), "repo/AGENTS.md", "[probe](probe.md)\n");
+    fs::create_dir(repo.join("docs")).unwrap();
+    std::os::unix::fs::symlink("docs/../missing.md", repo.join("probe.md")).unwrap();
+
+    let closure = resolve_closure_within(&root, &repo).unwrap();
+
+    assert!(
+        closure.outside_boundary.is_empty(),
+        "{:?}",
+        closure.outside_boundary
+    );
+    assert_eq!(
+        closure.unread,
+        [unread(repo.join("probe.md"), UnreadReason::BrokenSymlink)]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_that_steps_back_through_a_file_does_not_resolve() {
+    let dir = TempDir::new().unwrap();
+    let root = write(dir.path(), "AGENTS.md", "[probe](probe.md)\n");
+    write(dir.path(), "safe.md", "safe\n");
+    std::os::unix::fs::symlink("AGENTS.md/../safe.md", dir.path().join("probe.md")).unwrap();
+
+    let closure = resolve_closure_within(&root, dir.path()).unwrap();
+
+    assert_eq!(closure.files.len(), 1);
+    assert_eq!(
+        closure.unread,
+        [unread(
+            dir.path().join("probe.md"),
+            UnreadReason::BrokenSymlink
+        )]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_contained_root_linked_out_of_the_boundary_is_refused_whatever_it_reaches() {
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path().join("repo");
+    fs::create_dir(&repo).unwrap();
+    std::os::unix::fs::symlink("../probed.md", repo.join("AGENTS.md")).unwrap();
+
+    let observed = across_what_is_outside(&dir.path().join("probed.md"), || {
+        resolve_contained_closure(&repo.join("AGENTS.md"), &repo)
+            .unwrap_err()
+            .to_string()
+    });
+
+    for seen in observed {
+        assert!(seen.contains("resolves outside"), "{seen}");
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn a_file_reached_through_directory_aliases_is_a_member_once() {
     let dir = TempDir::new().unwrap();

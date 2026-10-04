@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::boundary::{open_following_links, Boundary};
+use crate::boundary::{open_following_links, Boundary, Reached};
 use crate::error::BudgetError;
 use crate::normalize_path;
 use crate::reference::extract_references;
@@ -27,6 +27,7 @@ pub struct Closure {
     pub files: Vec<ContextFile>,
     pub outside_boundary: Vec<PathBuf>,
     pub unread: Vec<UnreadLink>,
+    pub absent: BTreeSet<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,27 +76,25 @@ pub fn resolve_closure(root: &Path) -> Result<Closure, BudgetError> {
 pub fn resolve_contained_closure(root: &Path, boundary: &Path) -> Result<Closure, BudgetError> {
     let opened = open_boundary(boundary)?;
     let normalized = normalize_path(root);
-    let resolved = normalized
-        .canonicalize()
-        .map_err(|source| BudgetError::Io {
-            path: normalized.clone(),
-            source,
-        })?;
-    if !opened.contains(&resolved) {
-        return Err(BudgetError::OutsideBoundary {
+    match opened.reach(&normalized) {
+        Reached::Member { resolved, .. } => {
+            resolve(normalized, &opened, RootRead::Beneath(resolved))
+        }
+        Reached::Outside => Err(BudgetError::OutsideBoundary {
             path: root.to_path_buf(),
             boundary: boundary.to_path_buf(),
-        });
+        }),
+        Reached::Absent { .. } => Err(BudgetError::Io {
+            path: normalized,
+            source: std::io::ErrorKind::NotFound.into(),
+        }),
     }
-    resolve(normalized, &opened, RootRead::Beneath(resolved))
 }
 
 pub fn resolve_closure_within(root: &Path, boundary: &Path) -> Result<Closure, BudgetError> {
-    resolve(
-        normalize_path(root),
-        &open_boundary(boundary)?,
-        RootRead::FollowingLinks,
-    )
+    let root = normalize_path(root);
+    let boundary = open_boundary(boundary)?.naming_the_directory_of(&root);
+    resolve(root, &boundary, RootRead::FollowingLinks)
 }
 
 fn open_boundary(boundary: &Path) -> Result<Boundary, BudgetError> {
@@ -120,6 +119,7 @@ fn resolve(
     let mut files: Vec<ContextFile> = Vec::new();
     let mut outside_boundary: Vec<PathBuf> = Vec::new();
     let mut unread: Vec<UnreadLink> = Vec::new();
+    let mut absent: BTreeSet<PathBuf> = BTreeSet::new();
     let mut stack: Vec<PathBuf> = vec![root.clone()];
 
     while let Some(path) = stack.pop() {
@@ -132,31 +132,30 @@ fn resolve(
                 RootRead::Beneath(resolved) => boundary.open_member(resolved),
             };
             let text = read_regular_file(opened).map_err(|failure| failure.into_error(&path))?;
-            resolved_members.extend(resolved_to_deepest_directory(&path));
+            if let Reached::Member { entry, .. } = boundary.reach(&path) {
+                resolved_members.insert(entry);
+            }
             text
         } else {
-            let resolved = match path.canonicalize() {
-                Ok(resolved) if boundary.contains(&resolved) => resolved,
-                Err(_) if !boundary.leaves(&path) => {
-                    let first_inside_boundary =
-                        resolved_to_deepest_directory(&path).is_some_and(|member| {
-                            boundary.contains(&member) && resolved_members.insert(member)
-                        });
-                    if first_inside_boundary {
-                        unread.extend(unresolved_link(&path));
-                    }
-                    continue;
-                }
-                _ => {
+            let resolved = match boundary.reach(&path) {
+                Reached::Outside => {
                     outside_boundary.push(path);
                     continue;
                 }
+                Reached::Absent { entry } => {
+                    if resolved_members.insert(entry) {
+                        unread.extend(unresolved_link(&path));
+                    }
+                    absent.insert(path);
+                    continue;
+                }
+                Reached::Member { entry, resolved } => {
+                    if !resolved_members.insert(entry) {
+                        continue;
+                    }
+                    resolved
+                }
             };
-            if !resolved_to_deepest_directory(&path)
-                .is_some_and(|member| resolved_members.insert(member))
-            {
-                continue;
-            }
             match read_regular_file(boundary.open_member(&resolved)) {
                 Ok(text) => text,
                 Err(ReadFailure::Oversized) => return Err(ReadFailure::Oversized.into_error(&path)),
@@ -185,6 +184,7 @@ fn resolve(
         files,
         outside_boundary,
         unread,
+        absent,
     })
 }
 
@@ -205,17 +205,6 @@ fn unresolved_link(path: &Path) -> Option<UnreadLink> {
     Some(UnreadLink {
         path: path.to_path_buf(),
         reason,
-    })
-}
-
-fn resolved_to_deepest_directory(path: &Path) -> Option<PathBuf> {
-    path.ancestors().skip(1).find_map(|ancestor| {
-        let directory = match ancestor.as_os_str().is_empty() {
-            true => Path::new("."),
-            false => ancestor,
-        };
-        let unresolved = path.strip_prefix(ancestor).ok()?;
-        Some(directory.canonicalize().ok()?.join(unresolved))
     })
 }
 

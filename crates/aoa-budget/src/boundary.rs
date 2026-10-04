@@ -1,34 +1,147 @@
+use std::ffi::OsString;
 use std::fs::File;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
-use crate::escape::leaves_boundary;
+use crate::normalize_path;
+
+const MAX_LINKS_FOLLOWED: usize = 4096;
 
 pub(crate) struct Boundary {
     path: PathBuf,
+    names: Vec<(PathBuf, PathBuf)>,
     #[cfg(unix)]
     directory: std::os::fd::OwnedFd,
 }
 
+pub(crate) enum Reached {
+    Outside,
+    Absent { entry: PathBuf },
+    Member { entry: PathBuf, resolved: PathBuf },
+}
+
+enum Lost {
+    Outside,
+    Absent,
+}
+
 impl Boundary {
     pub(crate) fn open(path: &Path) -> io::Result<Self> {
-        Self::at(path.canonicalize()?)
+        let opened = Self::at(path.canonicalize()?)?;
+        let directory = opened.path.clone();
+        Ok(opened.named(&std::path::absolute(path)?, directory))
     }
 
     fn at(path: PathBuf) -> io::Result<Self> {
         Ok(Self {
             #[cfg(unix)]
             directory: open_directory(&path)?,
+            names: vec![(path.clone(), path.clone())],
             path,
         })
     }
 
-    pub(crate) fn contains(&self, resolved: &Path) -> bool {
-        resolved.starts_with(&self.path)
+    fn named(mut self, name: &Path, directory: PathBuf) -> Self {
+        self.names.push((normalize_path(name), directory));
+        self
     }
 
-    pub(crate) fn leaves(&self, target: &Path) -> bool {
-        leaves_boundary(target, &self.path)
+    pub(crate) fn naming_the_directory_of(self, file: &Path) -> Self {
+        let directory = match file.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent,
+            _ => Path::new("."),
+        };
+        let Ok(name) = std::path::absolute(directory) else {
+            return self;
+        };
+        if self.locate(&normalize_path(&name)).is_some() {
+            return self;
+        }
+        match directory.canonicalize() {
+            Ok(resolved) if resolved.starts_with(&self.path) => self.named(&name, resolved),
+            _ => self,
+        }
+    }
+
+    fn locate<'a>(&'a self, absolute: &'a Path) -> Option<(&'a Path, &'a Path)> {
+        self.names.iter().find_map(|(name, directory)| {
+            Some((directory.as_path(), absolute.strip_prefix(name).ok()?))
+        })
+    }
+
+    pub(crate) fn reach(&self, target: &Path) -> Reached {
+        let Ok(absolute) = std::path::absolute(target) else {
+            return Reached::Outside;
+        };
+        let absolute = normalize_path(&absolute);
+        let Some((directory, beneath)) = self.locate(&absolute) else {
+            return Reached::Outside;
+        };
+        let mut links_left = MAX_LINKS_FOLLOWED;
+        let mut resolved = directory.to_path_buf();
+        let mut entry = resolved.clone();
+        let mut names = beneath.components();
+        while let Some(name) = names.next() {
+            entry = resolved.join(name);
+            match self.step(resolved, name, &mut links_left) {
+                Ok(next) => resolved = next,
+                Err(Lost::Outside) => return Reached::Outside,
+                Err(Lost::Absent) => {
+                    return Reached::Absent {
+                        entry: entry.join(names.as_path()),
+                    }
+                }
+            }
+        }
+        Reached::Member { entry, resolved }
+    }
+
+    fn step(
+        &self,
+        mut at: PathBuf,
+        name: Component<'_>,
+        links_left: &mut usize,
+    ) -> Result<PathBuf, Lost> {
+        let mut at_a_directory = true;
+        let mut pending: Vec<OsString> = vec![name.as_os_str().to_os_string()];
+        while let Some(name) = pending.pop() {
+            if !at_a_directory {
+                return Err(Lost::Absent);
+            }
+            if name == ".." {
+                if at == self.path {
+                    return Err(Lost::Outside);
+                }
+                at.pop();
+                continue;
+            }
+            let next = at.join(&name);
+            let kind = std::fs::symlink_metadata(&next)
+                .map_err(|_| Lost::Absent)?
+                .file_type();
+            if !kind.is_symlink() {
+                at_a_directory = kind.is_dir();
+                at = next;
+                continue;
+            }
+            *links_left = links_left.checked_sub(1).ok_or(Lost::Absent)?;
+            let target = std::fs::read_link(&next).map_err(|_| Lost::Absent)?;
+            let target = match target.has_root() {
+                false => target.as_path(),
+                true => {
+                    let (directory, beneath) = self.locate(&target).ok_or(Lost::Outside)?;
+                    at = directory.to_path_buf();
+                    beneath
+                }
+            };
+            pending.extend(target.components().rev().filter_map(|part| match part {
+                Component::Normal(_) | Component::ParentDir => {
+                    Some(part.as_os_str().to_os_string())
+                }
+                Component::CurDir | Component::RootDir | Component::Prefix(_) => None,
+            }));
+        }
+        Ok(at)
     }
 
     fn beneath<'a>(&self, resolved: &'a Path) -> io::Result<&'a Path> {

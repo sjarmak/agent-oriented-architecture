@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use aoa_budget::{
-    count_budget, normalize_path, resolve_closure_within, BudgetError, BudgetReport, Closure,
-    Config, FileBudget, UnreadLink,
+    count_budget, normalize_path, resolve_closure_within, BudgetReport, Closure, Config,
+    FileBudget, UnreadLink,
 };
 
 use crate::detectors::{self, LintedFile};
@@ -35,10 +35,6 @@ pub fn lint_context_roots(
     target_tokenizer: &str,
 ) -> Result<LintReport, LintError> {
     let (merged, members) = resolve_members(roots, boundary)?;
-    let canonical_boundary = boundary.canonicalize().map_err(|source| BudgetError::Io {
-        path: boundary.to_path_buf(),
-        source,
-    })?;
     let budget = count_budget(
         &merged,
         target_tokenizer,
@@ -54,7 +50,7 @@ pub fn lint_context_roots(
                     path: file.path.clone(),
                     text: file.text.clone(),
                 },
-                &canonical_boundary,
+                &merged.absent,
             )
         })
         .collect();
@@ -85,6 +81,7 @@ fn resolve_members(
     let first = roots.first().ok_or(LintError::NoRoots)?;
     let mut seen = BTreeSet::new();
     let mut files = Vec::new();
+    let mut absent = BTreeSet::new();
     let mut members = Vec::with_capacity(roots.len());
     for root in roots {
         let closure = resolve_closure_within(root, boundary)?;
@@ -94,6 +91,7 @@ fn resolve_members(
             outside_boundary: closure.outside_boundary,
             unread: closure.unread,
         });
+        absent.extend(closure.absent);
         for file in closure.files {
             if seen.insert(file.path.clone()) {
                 files.push(file);
@@ -105,6 +103,7 @@ fn resolve_members(
         files,
         outside_boundary: Vec::new(),
         unread: Vec::new(),
+        absent,
     };
     Ok((merged, members))
 }

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::boundary::Boundary;
+use crate::boundary::{Boundary, Reached};
 use crate::budget::{count_budget, Config, Verdict};
 use crate::closure::{resolve_closure_within, resolve_contained_closure};
 use crate::error::BudgetError;
@@ -89,27 +89,12 @@ fn contained_archive(path: &Path, boundary: &Path) -> Result<(String, PathBuf), 
         path: boundary.to_path_buf(),
         source,
     })?;
-    let outside = [dir, archive_path.as_path()]
-        .into_iter()
-        .find(|written| lands_outside(written, &opened))
-        .map(Path::to_path_buf);
-    match outside {
-        Some(path) => Err(BudgetError::OutsideBoundary {
-            path,
+    match opened.reach(&archive_path) {
+        Reached::Outside => Err(BudgetError::OutsideBoundary {
+            path: archive_path,
             boundary: boundary.to_path_buf(),
         }),
-        None => Ok((archive_name, archive_path)),
-    }
-}
-
-fn lands_outside(written: &Path, boundary: &Boundary) -> bool {
-    let named = match written.as_os_str().is_empty() {
-        true => Path::new("."),
-        false => written,
-    };
-    match named.canonicalize() {
-        Ok(resolved) => !boundary.contains(&resolved),
-        Err(_) => named.is_symlink(),
+        Reached::Absent { .. } | Reached::Member { .. } => Ok((archive_name, archive_path)),
     }
 }
 

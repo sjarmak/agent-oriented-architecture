@@ -362,6 +362,35 @@ fn fix_refuses_an_archive_linked_outside_the_boundary_and_writes_nothing() {
 
 #[cfg(unix)]
 #[test]
+fn fix_refuses_an_archive_linked_out_of_the_boundary_and_back_in_whatever_it_steps_through() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = oversized_body();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let root = repo.join("big.md");
+    std::fs::write(&root, &body).unwrap();
+    std::fs::write(repo.join("kept.md"), "kept\n").unwrap();
+    std::os::unix::fs::symlink("../probed-dir/../repo/kept.md", repo.join("big.archive.md"))
+        .unwrap();
+    let refused = || {
+        let err = fix_oversized(&root, &repo, 200, "gpt-4o").unwrap_err();
+        matches!(err, BudgetError::OutsideBoundary { .. })
+    };
+
+    let while_absent = refused();
+    std::fs::create_dir(dir.path().join("probed-dir")).unwrap();
+    let while_a_directory = refused();
+
+    assert!(while_absent && while_a_directory);
+    assert_eq!(std::fs::read_to_string(&root).unwrap(), body);
+    assert_eq!(
+        std::fs::read_to_string(repo.join("kept.md")).unwrap(),
+        "kept\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn fix_refuses_a_root_reached_through_a_link_from_outside_the_boundary() {
     let dir = tempfile::tempdir().unwrap();
     let body = oversized_body();

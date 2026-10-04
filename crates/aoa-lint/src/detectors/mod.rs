@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::finding::Finding;
@@ -14,13 +15,13 @@ pub struct LintedFile {
     pub text: String,
 }
 
-pub fn run_all(file: &LintedFile, canonical_boundary: &Path) -> Vec<Finding> {
+pub fn run_all(file: &LintedFile, absent: &BTreeSet<PathBuf>) -> Vec<Finding> {
     if !is_markdown(file) {
         return Vec::new();
     }
     let mut findings = duplication::detect(file);
     findings.extend(verbosity::detect(file));
-    findings.extend(stale_reference::detect(file, canonical_boundary));
+    findings.extend(stale_reference::detect(file, absent));
     findings.extend(overbroad_glob::detect(file));
     findings.extend(contradiction::detect(file));
     findings

@@ -31,6 +31,79 @@ fn a_context_root_that_resolves_outside_the_repository_fails_the_audit_unmeasure
     );
 }
 
+fn across_what_is_outside<T>(outside: &std::path::Path, observe: impl Fn() -> T) -> [T; 4] {
+    let while_absent = observe();
+    std::fs::create_dir(outside).unwrap();
+    let while_a_directory = observe();
+    std::fs::remove_dir(outside).unwrap();
+    std::fs::write(outside, "outside\n").unwrap();
+    let while_a_file = observe();
+    std::fs::remove_file(outside).unwrap();
+    std::os::unix::fs::symlink("removed", outside).unwrap();
+    let while_a_broken_link = observe();
+    [
+        while_absent,
+        while_a_directory,
+        while_a_file,
+        while_a_broken_link,
+    ]
+}
+
+#[test]
+fn a_context_root_linked_out_of_the_repository_fails_the_audit_whatever_it_reaches() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    std::os::unix::fs::symlink("../probed.md", repo.join("AGENTS.md")).unwrap();
+
+    let observed = across_what_is_outside(&dir.path().join("probed.md"), || {
+        audit(&repo, &AuditConfig::default()).map(|report| report.items.len())
+    });
+
+    for seen in observed {
+        assert!(
+            matches!(
+                seen,
+                Err(AuditError::Budget(BudgetError::OutsideBoundary { .. }))
+            ),
+            "{seen:?}"
+        );
+    }
+}
+
+#[test]
+fn a_context_root_that_is_missing_or_dangles_inside_the_repository_is_not_measured() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+
+    let while_missing = audit(&repo, &AuditConfig::default()).unwrap();
+    std::os::unix::fs::symlink("removed.md", repo.join("AGENTS.md")).unwrap();
+    let while_dangling = audit(&repo, &AuditConfig::default()).unwrap();
+
+    for report in [while_missing, while_dangling] {
+        assert!(report.context_outside_boundary.is_empty());
+        assert!(report.context_unread.is_empty());
+    }
+}
+
+#[test]
+fn a_member_linked_out_of_the_repository_and_back_in_is_outside_whatever_it_steps_through() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = repo_linking(dir.path(), "[probe](probe.md)\n");
+    std::fs::write(repo.join("safe.md"), "safe\n").unwrap();
+    std::os::unix::fs::symlink("../probed-dir/../repo/safe.md", repo.join("probe.md")).unwrap();
+
+    let observed = across_what_is_outside(&dir.path().join("probed-dir"), || {
+        let report = audit(&repo, &AuditConfig::default()).unwrap();
+        (report.context_outside_boundary, report.context_unread)
+    });
+
+    for seen in observed {
+        assert_eq!(seen, (vec![repo.join("probe.md")], Vec::new()));
+    }
+}
+
 fn repo_linking(dir: &std::path::Path, root_text: &str) -> PathBuf {
     let repo = dir.join("repo");
     std::fs::create_dir(&repo).unwrap();

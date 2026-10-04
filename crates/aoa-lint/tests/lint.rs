@@ -443,6 +443,59 @@ fn a_dangling_link_that_only_climbs_before_naming_a_path_inside_is_still_a_stale
 
 #[cfg(unix)]
 #[test]
+fn a_dangling_link_that_steps_back_within_the_linted_directory_is_a_stale_reference() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(repo.join("docs")).unwrap();
+    symlink("docs/../missing.md", repo.join("probe.md")).unwrap();
+
+    let stale = stale_references(&repo, "[probe](probe.md)\n");
+
+    assert_eq!(
+        stale,
+        ["stale reference: linked file 'probe.md' does not exist"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_stale_reference_is_found_when_the_root_is_named_through_a_link_to_its_directory() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir(dir.path().join("real")).unwrap();
+    symlink("real", dir.path().join("alias")).unwrap();
+    std::fs::write(
+        dir.path().join("real/AGENTS.md"),
+        "[gone](gone.md) [kept](kept.md)\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("real/kept.md"), "kept\n").unwrap();
+
+    let report = aoa_lint::lint_context_roots(
+        &[dir.path().join("alias/AGENTS.md")],
+        &dir.path().join("real"),
+        "o200k_base",
+    )
+    .unwrap();
+
+    let stale: Vec<&str> = report
+        .findings
+        .iter()
+        .filter(|finding| finding.category == SmellCategory::StaleReference)
+        .map(|finding| finding.message.as_str())
+        .collect();
+    assert_eq!(
+        stale,
+        ["stale reference: linked file 'gone.md' does not exist"]
+    );
+    assert_eq!(report.closures[0].files.len(), 2);
+}
+
+#[cfg(unix)]
+#[test]
 fn a_dangling_or_looping_link_that_stays_inside_is_still_a_stale_reference() {
     use std::os::unix::fs::symlink;
 

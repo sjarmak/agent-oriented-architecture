@@ -523,6 +523,39 @@ fn lint_context_output_does_not_depend_on_what_a_link_leaving_the_directory_reac
     assert_eq!(closure["unread"], serde_json::json!([]));
 }
 
+#[cfg(unix)]
+#[test]
+fn lint_context_output_does_not_depend_on_what_a_link_steps_through_outside_the_directory() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo = dir.path().join("repo");
+    std::fs::create_dir(&repo).expect("create repo");
+    std::fs::write(repo.join("AGENTS.md"), "[member](probe.md)\n").expect("write root");
+    std::fs::write(repo.join("safe.md"), "safe\n").expect("write the file linked back to");
+    std::os::unix::fs::symlink("../probed-dir/../repo/safe.md", repo.join("probe.md"))
+        .expect("link the member");
+    let probed = dir.path().join("probed-dir");
+
+    let while_absent = lint_outputs(&repo);
+    std::fs::create_dir(&probed).expect("create outside directory");
+    let while_a_directory = lint_outputs(&repo);
+    std::fs::remove_dir(&probed).expect("remove outside directory");
+    std::fs::write(&probed, "outside\n").expect("write outside file");
+    let while_a_file = lint_outputs(&repo);
+    std::fs::remove_file(&probed).expect("remove outside file");
+    std::os::unix::fs::symlink("removed", &probed).expect("plant a broken link outside");
+    let while_a_broken_link = lint_outputs(&repo);
+
+    assert_eq!(while_absent, while_a_directory);
+    assert_eq!(while_absent, while_a_file);
+    assert_eq!(while_absent, while_a_broken_link);
+    let json: Value = serde_json::from_slice(&while_absent[0].stdout).expect("valid json");
+    let closure = &json["budget"]["closures"][0];
+    assert_eq!(closure_files(closure), ["AGENTS.md"]);
+    assert_eq!(json_strings(&closure["outside_boundary"]), ["probe.md"]);
+    assert_eq!(closure["unread"], serde_json::json!([]));
+    assert_eq!(json["findings"], serde_json::json!([]));
+}
+
 #[test]
 fn lint_context_human_reports_how_many_roots_were_linted() {
     let dir = TempDir::new().expect("tempdir");

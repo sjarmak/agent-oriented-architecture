@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use aoa_budget::{
-    count_budget, resolve_contained_closure, Config, UnreadLink, DEFAULT_CONTEXT_CEILING,
+    count_budget, resolve_contained_closure, BudgetError, Config, UnreadLink,
+    DEFAULT_CONTEXT_CEILING,
 };
 use aoa_construct::BehavioralSignal;
 use aoa_metrics::{
@@ -296,12 +297,12 @@ fn context_closure_probe(
     let Some(root_rel) = &cfg.context_root else {
         return Ok(ContextClosureProbe::default());
     };
-    let root = repo.join(root_rel);
-    if !root.exists() {
-        return Ok(ContextClosureProbe::default());
-    }
-
-    let closure = resolve_contained_closure(&root, repo)?;
+    let closure = match resolve_contained_closure(&repo.join(root_rel), repo) {
+        Err(BudgetError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ContextClosureProbe::default());
+        }
+        resolved => resolved?,
+    };
     let report = count_budget(&closure, &cfg.target, &Config::warn_first(cfg.ceiling))?;
     let overflow = report.gating_target_tokens.saturating_sub(cfg.ceiling);
     Ok(ContextClosureProbe {
