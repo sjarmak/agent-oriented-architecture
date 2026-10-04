@@ -62,12 +62,22 @@ fn installed_pre_commit_hook(repo: &Path) -> bool {
     let Ok(hook) = location.hook.canonicalize() else {
         return false;
     };
-    let contained = hook.starts_with(&repo)
-        || (!git_dir.is_symlink()
-            && location.common_dir.canonicalize().is_ok_and(|common_dir| {
-                hook.starts_with(&common_dir)
-                    && names_worktree(&location.git_dir, &common_dir, &repo)
-            }));
+    let own_git_directory = std::fs::symlink_metadata(&git_dir).is_ok_and(|marker| marker.is_dir());
+    let common_dir = location.common_dir.canonicalize().ok();
+    let serves_checkout = || {
+        common_dir
+            .as_ref()
+            .is_some_and(|common_dir| names_worktree(&location.git_dir, common_dir, &repo))
+    };
+    let contained = if hook.starts_with(&repo) {
+        own_git_directory || serves_checkout()
+    } else {
+        !git_dir.is_symlink()
+            && common_dir
+                .as_ref()
+                .is_some_and(|common_dir| hook.starts_with(common_dir))
+            && serves_checkout()
+    };
     contained && std::fs::metadata(&hook).is_ok_and(|meta| meta.is_file() && is_executable(&meta))
 }
 

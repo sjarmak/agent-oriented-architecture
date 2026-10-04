@@ -1339,6 +1339,63 @@ fn a_git_file_pointing_at_another_repository_does_not_borrow_its_hook() {
     assert!(pre_commit_plane_missing(repo.path()));
 }
 
+fn repo_with_nested_checkout_hook() -> (TempDir, std::path::PathBuf) {
+    let repo = fixture_repo();
+    let nested = repo.path().join("vendor/nested");
+    std::fs::create_dir_all(&nested).expect("create the nested checkout");
+    git(&nested, &["init", "--quiet", "--template="]);
+    write_hook(&nested.join(".git/hooks/pre-commit"));
+    (repo, nested)
+}
+
+#[test]
+fn a_git_file_pointing_at_a_checkout_nested_in_the_repository_does_not_borrow_its_hook() {
+    let (repo, nested) = repo_with_nested_checkout_hook();
+    std::fs::write(repo.path().join(".git"), "gitdir: vendor/nested/.git\n")
+        .expect("plant .git file");
+    assert!(pre_commit_plane_missing(repo.path()));
+
+    git(
+        &nested,
+        &[
+            "config",
+            "core.worktree",
+            nested.to_str().expect("utf-8 path"),
+        ],
+    );
+    assert!(pre_commit_plane_missing(repo.path()));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_git_marker_linked_to_a_checkout_nested_in_the_repository_does_not_borrow_its_hook() {
+    let (repo, nested) = repo_with_nested_checkout_hook();
+    std::os::unix::fs::symlink(nested.join(".git"), repo.path().join(".git"))
+        .expect("link the marker");
+
+    assert!(pre_commit_plane_missing(repo.path()));
+}
+
+#[test]
+fn a_separate_git_dir_inside_the_checkout_lends_its_hook() {
+    let repo = fixture_repo();
+    let git_dir = repo.path().join("storage");
+    git(
+        repo.path(),
+        &[
+            "init",
+            "--quiet",
+            "--template=",
+            "--separate-git-dir",
+            git_dir.to_str().expect("utf-8 path"),
+        ],
+    );
+    assert!(pre_commit_plane_missing(repo.path()));
+
+    write_hook(&git_dir.join("hooks/pre-commit"));
+    assert!(!pre_commit_plane_missing(repo.path()));
+}
+
 fn separate_git_dir_repo(git_dir: &Path) -> TempDir {
     let repo = fixture_repo();
     git(
