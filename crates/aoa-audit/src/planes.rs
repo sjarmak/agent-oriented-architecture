@@ -1,6 +1,7 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use aoa_corpus::PRECOMMIT_HOOK_MARKERS;
@@ -198,29 +199,32 @@ fn answer_within_deadline(
     let Some(mut pipe) = child.stdout.take() else {
         return Ok(None);
     };
-    let reader = std::thread::spawn(move || {
+    let (read, stdout_read) = mpsc::channel();
+    std::thread::spawn(move || {
         let mut stdout = Vec::new();
-        pipe.read_to_end(&mut stdout).map(|_| stdout)
+        let _ = read.send(pipe.read_to_end(&mut stdout).map(|_| stdout));
     });
     let started = Instant::now();
+    let unresponsive = || AuditError::GitUnresponsive {
+        repo: repo.to_path_buf(),
+        seconds: GIT_DEADLINE.as_secs(),
+    };
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                return Ok(reader
-                    .join()
-                    .ok()
-                    .and_then(Result::ok)
-                    .map(|stdout| GitAnswer { status, stdout }));
+                let remaining = GIT_DEADLINE.saturating_sub(started.elapsed());
+                return match stdout_read.recv_timeout(remaining) {
+                    Ok(stdout) => Ok(stdout.ok().map(|stdout| GitAnswer { status, stdout })),
+                    Err(RecvTimeoutError::Timeout) => Err(unresponsive()),
+                    Err(RecvTimeoutError::Disconnected) => Ok(None),
+                };
             }
             Ok(None) if started.elapsed() < GIT_DEADLINE => std::thread::sleep(GIT_POLL_INTERVAL),
             waited => {
                 let _ = child.kill();
                 let _ = child.wait();
                 return match waited {
-                    Ok(_) => Err(AuditError::GitUnresponsive {
-                        repo: repo.to_path_buf(),
-                        seconds: GIT_DEADLINE.as_secs(),
-                    }),
+                    Ok(_) => Err(unresponsive()),
                     Err(_) => Ok(None),
                 };
             }

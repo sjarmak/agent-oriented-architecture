@@ -54,6 +54,61 @@ fn audit_json_is_parseable() {
     assert!(parsed["items"].is_array());
 }
 
+#[cfg(unix)]
+fn git_on_path() -> PathBuf {
+    std::env::split_paths(&std::env::var_os("PATH").expect("PATH is set"))
+        .map(|directory| directory.join("git"))
+        .find(|candidate| candidate.is_file())
+        .expect("git is on PATH")
+}
+
+#[cfg(unix)]
+fn path_led_by_a_git_whose_descendant_holds_stdout(stand_in_dir: &Path, seconds: u64) -> String {
+    use std::os::unix::fs::PermissionsExt;
+
+    let stand_in = stand_in_dir.join("git");
+    std::fs::write(
+        &stand_in,
+        format!(
+            "#!/bin/sh\ncase \" $* \" in *\" --git-path \"*) sleep {seconds} & ;; esac\nexec '{}' \"$@\"\n",
+            git_on_path().display()
+        ),
+    )
+    .expect("write the git stand-in");
+    std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o755))
+        .expect("make the stand-in executable");
+    let inherited = std::env::var("PATH").expect("PATH is utf-8");
+    format!("{}:{inherited}", stand_in_dir.display())
+}
+
+#[cfg(unix)]
+#[test]
+fn audit_fails_within_the_git_deadline_when_a_git_descendant_holds_stdout_open() {
+    const DESCENDANT_HOLDS_STDOUT_SECONDS: u64 = 25;
+    const LONGEST_ACCEPTED_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+    let repo = TempDir::new().expect("tempdir");
+    init_git_repo(repo.path());
+    let stand_in_dir = TempDir::new().expect("stand-in dir");
+    let path = path_led_by_a_git_whose_descendant_holds_stdout(
+        stand_in_dir.path(),
+        DESCENDANT_HOLDS_STDOUT_SECONDS,
+    );
+
+    let started = std::time::Instant::now();
+    let output = aoa()
+        .args(["audit", "--repo"])
+        .arg(repo.path())
+        .env("PATH", path)
+        .output()
+        .expect("run");
+    let waited = started.elapsed();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "audit succeeded: {stderr}");
+    assert!(stderr.contains("git did not answer within 10s"), "{stderr}");
+    assert!(waited < LONGEST_ACCEPTED_WAIT, "audit took {waited:?}");
+}
+
 // aoa-d6t.31 review follow-up: a repo whose workspace manifest is malformed
 // must still get its full punch-list — the CLI degrades to repo-wide findings
 // with the discovery failure surfaced, never an abort with no report.
