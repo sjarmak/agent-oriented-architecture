@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use aoa_budget::{
-    count_budget, normalize_path, resolve_closure_within, BudgetReport, Closure, Config,
-    FileBudget, UnreadLink,
+    count_budget, normalize_path, resolve_closure_within, BudgetError, BudgetReport, Closure,
+    Config, FileBudget, UnreadLink,
 };
 
 use crate::detectors::{self, LintedFile};
@@ -35,6 +35,10 @@ pub fn lint_context_roots(
     target_tokenizer: &str,
 ) -> Result<LintReport, LintError> {
     let (merged, members) = resolve_members(roots, boundary)?;
+    let canonical_boundary = boundary.canonicalize().map_err(|source| BudgetError::Io {
+        path: boundary.to_path_buf(),
+        source,
+    })?;
     let budget = count_budget(
         &merged,
         target_tokenizer,
@@ -50,7 +54,7 @@ pub fn lint_context_roots(
                     path: file.path.clone(),
                     text: file.text.clone(),
                 },
-                boundary,
+                &canonical_boundary,
             )
         })
         .collect();

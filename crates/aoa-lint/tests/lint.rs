@@ -335,6 +335,64 @@ fn a_missing_link_that_leaves_the_linted_directory_is_not_probed() {
     );
 }
 
+#[cfg(unix)]
+fn stale_references(repo: &std::path::Path, body: &str) -> Vec<String> {
+    let root = repo.join("AGENTS.md");
+    std::fs::write(&root, body).unwrap();
+    aoa_lint::lint_context_roots(&[root], repo, "o200k_base")
+        .unwrap()
+        .findings
+        .into_iter()
+        .filter(|finding| finding.category == SmellCategory::StaleReference)
+        .map(|finding| finding.message)
+        .collect()
+}
+
+#[cfg(unix)]
+#[test]
+fn a_dangling_link_that_names_a_path_outside_reads_the_same_whether_or_not_it_exists() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    symlink("../probed.md", repo.join("direct.md")).unwrap();
+    symlink("hop.md", repo.join("chained.md")).unwrap();
+    symlink("../probed.md", repo.join("hop.md")).unwrap();
+    symlink("../probed-dir", repo.join("through")).unwrap();
+    let body = "[direct](direct.md) [chained](chained.md) [through](through/member.md)\n";
+
+    let while_absent = stale_references(&repo, body);
+    std::fs::write(dir.path().join("probed.md"), "outside\n").unwrap();
+    std::fs::create_dir(dir.path().join("probed-dir")).unwrap();
+    let while_present = stale_references(&repo, body);
+
+    assert_eq!(while_absent, Vec::<String>::new());
+    assert_eq!(while_present, Vec::<String>::new());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_dangling_or_looping_link_that_stays_inside_is_still_a_stale_reference() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    symlink("removed.md", repo.join("gone.md")).unwrap();
+    symlink("loop.md", repo.join("loop.md")).unwrap();
+
+    let stale = stale_references(&repo, "[gone](gone.md) [loop](loop.md)\n");
+
+    assert_eq!(
+        stale,
+        [
+            "stale reference: linked file 'gone.md' does not exist",
+            "stale reference: linked file 'loop.md' does not exist",
+        ]
+    );
+}
+
 #[test]
 fn a_linked_build_file_is_counted_but_not_linted_as_prose() {
     let dir = tempfile::TempDir::new().unwrap();
