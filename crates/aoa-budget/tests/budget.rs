@@ -403,6 +403,26 @@ fn fix_rewrites_the_file_it_read_when_the_root_steps_back_out_of_a_linked_direct
     assert!(!repo.join("a/x.archive.md").exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn fix_leaves_a_file_outside_untouched_when_the_root_steps_back_onto_a_link_to_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = oversized_body();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(repo.join("real/sub")).unwrap();
+    std::fs::write(repo.join("doc.md"), &body).unwrap();
+    let planted = dir.path().join("planted.md");
+    std::fs::write(&planted, "planted\n").unwrap();
+    std::os::unix::fs::symlink(repo.join("real/sub"), repo.join("docs")).unwrap();
+    std::os::unix::fs::symlink(&planted, repo.join("real/doc.md")).unwrap();
+
+    let fixed = fix_oversized(&repo.join("docs/../doc.md"), &repo, 200, "gpt-4o").unwrap();
+
+    assert_eq!(fixed.root, repo.join("doc.md"));
+    assert_eq!(std::fs::read_to_string(&planted).unwrap(), "planted\n");
+    assert!(!repo.join("real/doc.archive.md").exists());
+}
+
 #[test]
 fn fix_recheck_counts_what_the_root_links_in_a_sibling_directory() {
     let dir = scratch("fix-sibling");
