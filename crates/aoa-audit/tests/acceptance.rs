@@ -1311,6 +1311,69 @@ fn a_back_pointer_that_is_a_fifo_is_refused_without_hanging() {
     assert!(pre_commit_plane_missing(&linked));
 }
 
+#[cfg(unix)]
+#[test]
+fn a_git_config_that_is_a_fifo_fails_the_audit_instead_of_hanging() {
+    let repo = git_fixture_repo();
+    write_hook(&repo.path().join(".git/hooks/pre-commit"));
+    let config = repo.path().join(".git/config");
+    std::fs::remove_file(&config).expect("remove the config");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&config)
+        .status()
+        .expect("mkfifo is available");
+    assert!(made.success(), "mkfifo failed");
+
+    let refused = audit(repo.path(), &audit_config()).expect_err("git never answers");
+
+    assert!(
+        matches!(refused, aoa_audit::AuditError::GitUnresponsive { .. }),
+        "{refused}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_worktree_whose_admin_directory_was_relocated_through_a_link_inherits_the_hook() {
+    let (main, _linked_parent, linked) = linked_worktree_with_main_hook();
+    let registered = main.path().join(".git/worktrees/linked");
+    let relocated_parent = tempfile::tempdir().expect("relocation parent");
+    let relocated = relocated_parent.path().join("linked-admin");
+    std::fs::rename(&registered, &relocated).expect("relocate the admin directory");
+    std::os::unix::fs::symlink(&relocated, &registered).expect("link the registration");
+    let common_dir = main.path().join(".git").canonicalize().expect("common dir");
+    std::fs::write(
+        relocated.join("commondir"),
+        format!("{}\n", common_dir.display()),
+    )
+    .expect("name the common dir absolutely");
+
+    assert!(!pre_commit_plane_missing(&linked));
+}
+
+#[cfg(unix)]
+#[test]
+fn an_admin_directory_the_common_dir_does_not_register_does_not_borrow_its_hook() {
+    let (main, _linked_parent, linked) = linked_worktree_with_main_hook();
+    let registered = main.path().join(".git/worktrees/linked");
+    let relocated_parent = tempfile::tempdir().expect("relocation parent");
+    let relocated = relocated_parent.path().join("linked-admin");
+    std::fs::rename(&registered, &relocated).expect("relocate the admin directory");
+    let common_dir = main.path().join(".git").canonicalize().expect("common dir");
+    std::fs::write(
+        relocated.join("commondir"),
+        format!("{}\n", common_dir.display()),
+    )
+    .expect("name the common dir absolutely");
+    std::fs::write(
+        linked.join(".git"),
+        format!("gitdir: {}\n", relocated.display()),
+    )
+    .expect("point the marker at the unregistered directory");
+
+    assert!(pre_commit_plane_missing(&linked));
+}
+
 #[test]
 fn an_oversized_back_pointer_is_refused() {
     let (main, _linked_parent, linked) = linked_worktree_with_main_hook();

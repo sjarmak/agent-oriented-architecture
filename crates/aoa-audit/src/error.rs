@@ -63,4 +63,10 @@ pub enum AuditError {
     /// than under-counting the repo's held-out signal.
     #[error(transparent)]
     Corpus(#[from] aoa_observe_shim::ObserveShimError),
+
+    #[error(
+        "git did not answer within {seconds}s while reading the repository at {repo}; \
+         refusing to report its pre-commit plane"
+    )]
+    GitUnresponsive { repo: PathBuf, seconds: u64 },
 }

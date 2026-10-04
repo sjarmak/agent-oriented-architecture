@@ -1,10 +1,13 @@
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant};
 
 use aoa_corpus::PRECOMMIT_HOOK_MARKERS;
 use aoa_trace::{linked_worktree_points_back, RepositoryRootError};
 use serde_json::Value;
 
+use crate::error::AuditError;
 use crate::hook_set::{read_settings, AOA_SETTINGS_KEY, ENFORCE_HOOK_SET, ENFORCE_WRAPPER_REL};
 use crate::tier::EnforcementPlane;
 
@@ -32,74 +35,92 @@ const NULL_DEVICE: &str = "NUL";
 
 const DEFAULT_PRE_COMMIT_HOOK: &str = "hooks/pre-commit";
 
-fn present(repo: &Path, plane: EnforcementPlane) -> bool {
-    match plane {
+const GIT_DEADLINE: Duration = Duration::from_secs(10);
+const GIT_POLL_INTERVAL: Duration = Duration::from_millis(5);
+
+fn present(repo: &Path, plane: EnforcementPlane) -> Result<bool, AuditError> {
+    Ok(match plane {
         EnforcementPlane::RuntimeHook => runtime_hooks(repo) == RuntimeHooks::Installed,
         EnforcementPlane::PreCommit => {
-            any_exists(repo, PRECOMMIT_HOOK_MARKERS) || installed_pre_commit_hook(repo)
+            any_exists(repo, PRECOMMIT_HOOK_MARKERS) || installed_pre_commit_hook(repo)?
         }
         EnforcementPlane::Ci => any_exists(repo, CI_MARKERS),
-    }
+    })
 }
 
 fn any_exists(repo: &Path, markers: &[&str]) -> bool {
     markers.iter().any(|rel| repo.join(rel).exists())
 }
 
-fn installed_pre_commit_hook(repo: &Path) -> bool {
+fn installed_pre_commit_hook(repo: &Path) -> Result<bool, AuditError> {
     let Ok(repo) = repo.canonicalize() else {
-        return false;
+        return Ok(false);
     };
     let git_dir = repo.join(".git");
     if !git_dir.exists() {
-        return false;
+        return Ok(false);
     }
-    let Some(location) = git_hook_location(&repo) else {
-        return false;
+    let Some(location) = git_hook_location(&repo)? else {
+        return Ok(false);
     };
     let Ok(hook) = location.hook.canonicalize() else {
-        return false;
+        return Ok(false);
     };
     let own_git_directory = std::fs::symlink_metadata(&git_dir).is_ok_and(|marker| marker.is_dir());
     let common_dir = location.common_dir.canonicalize().ok();
-    let serves_checkout = || {
-        common_dir
-            .as_ref()
-            .is_some_and(|common_dir| names_worktree(&location.git_dir, common_dir, &repo))
+    let serves_checkout = || match &common_dir {
+        Some(common_dir) => names_worktree(&location.git_dir, common_dir, &repo),
+        None => Ok(false),
     };
     let contained = if hook.starts_with(&repo) {
-        own_git_directory || serves_checkout()
+        own_git_directory || serves_checkout()?
     } else {
         !git_dir.is_symlink()
             && common_dir
                 .as_ref()
                 .is_some_and(|common_dir| hook.starts_with(common_dir))
-            && serves_checkout()
+            && serves_checkout()?
     };
-    contained && std::fs::metadata(&hook).is_ok_and(|meta| meta.is_file() && is_executable(&meta))
+    Ok(contained
+        && std::fs::metadata(&hook).is_ok_and(|meta| meta.is_file() && is_executable(&meta)))
 }
 
-fn names_worktree(git_dir: &Path, common_dir: &Path, repo: &Path) -> bool {
+fn names_worktree(git_dir: &Path, common_dir: &Path, repo: &Path) -> Result<bool, AuditError> {
     let Ok(resolved) = git_dir.canonicalize() else {
-        return false;
+        return Ok(false);
     };
     if resolved != common_dir {
-        return resolved.parent() == Some(&common_dir.join("worktrees"))
-            && linked_worktree_points_back(repo, git_dir).is_ok_and(|points_back| points_back);
+        return Ok(registers_worktree(common_dir, &resolved)
+            && linked_worktree_points_back(repo, git_dir).is_ok_and(|points_back| points_back));
     }
     match linked_worktree_points_back(repo, git_dir) {
-        Ok(points_back) => points_back,
+        Ok(points_back) => Ok(points_back),
         Err(RepositoryRootError::Backlink { source, .. })
             if source.kind() == std::io::ErrorKind::NotFound =>
         {
-            match config_value(repo, git_dir, &["--get", "core.worktree"]) {
-                ConfigValue::Set(worktree) => same_directory(&git_dir.join(worktree), repo),
-                ConfigValue::Unset => names_no_worktree(git_dir, repo),
-                ConfigValue::Unreadable => false,
-            }
+            Ok(
+                match config_value(repo, git_dir, &["--get", "core.worktree"])? {
+                    ConfigValue::Set(worktree) => same_directory(&git_dir.join(worktree), repo),
+                    ConfigValue::Unset => names_no_worktree(git_dir, repo)?,
+                    ConfigValue::Unreadable => false,
+                },
+            )
         }
-        Err(_) => false,
+        Err(_) => Ok(false),
     }
+}
+
+fn registers_worktree(common_dir: &Path, git_dir: &Path) -> bool {
+    let worktrees = common_dir.join("worktrees");
+    git_dir.parent() == Some(&worktrees)
+        || std::fs::read_dir(&worktrees).is_ok_and(|entries| {
+            entries.flatten().any(|entry| {
+                entry
+                    .path()
+                    .canonicalize()
+                    .is_ok_and(|registered| registered == git_dir)
+            })
+        })
 }
 
 fn same_directory(named: &Path, expected: &Path) -> bool {
@@ -110,17 +131,20 @@ fn same_directory(named: &Path, expected: &Path) -> bool {
     })
 }
 
-fn names_no_worktree(git_dir: &Path, repo: &Path) -> bool {
+fn names_no_worktree(git_dir: &Path, repo: &Path) -> Result<bool, AuditError> {
     let inside_another_checkout = git_dir.canonicalize().map_or(true, |git_dir| {
         git_dir.file_name().is_some_and(|name| name == ".git")
     });
-    !inside_another_checkout
-        && git_dir.join("config").is_file()
-        && match config_value(repo, git_dir, &["--type=bool", "--get", "core.bare"]) {
+    if inside_another_checkout || !git_dir.join("config").is_file() {
+        return Ok(false);
+    }
+    Ok(
+        match config_value(repo, git_dir, &["--type=bool", "--get", "core.bare"])? {
             ConfigValue::Set(bare) => bare != "true",
             ConfigValue::Unset => true,
             ConfigValue::Unreadable => false,
-        }
+        },
+    )
 }
 
 enum ConfigValue {
@@ -131,22 +155,76 @@ enum ConfigValue {
 
 const GIT_CONFIG_KEY_UNSET: i32 = 1;
 
-fn config_value(repo: &Path, git_dir: &Path, query: &[&str]) -> ConfigValue {
-    let Ok(output) = git(repo)
-        .arg("--git-dir")
-        .arg(git_dir)
-        .arg("config")
-        .args(query)
-        .output()
+fn config_value(repo: &Path, git_dir: &Path, query: &[&str]) -> Result<ConfigValue, AuditError> {
+    let Some(answer) = answer_within_deadline(
+        git(repo)
+            .arg("--git-dir")
+            .arg(git_dir)
+            .arg("config")
+            .args(query),
+        repo,
+    )?
     else {
-        return ConfigValue::Unreadable;
+        return Ok(ConfigValue::Unreadable);
     };
-    match (output.status.code(), std::str::from_utf8(&output.stdout)) {
-        (Some(0), Ok(value)) => {
-            ConfigValue::Set(value.strip_suffix('\n').unwrap_or(value).to_string())
+    Ok(
+        match (answer.status.code(), std::str::from_utf8(&answer.stdout)) {
+            (Some(0), Ok(value)) => {
+                ConfigValue::Set(value.strip_suffix('\n').unwrap_or(value).to_string())
+            }
+            (Some(GIT_CONFIG_KEY_UNSET), _) => ConfigValue::Unset,
+            _ => ConfigValue::Unreadable,
+        },
+    )
+}
+
+struct GitAnswer {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+}
+
+fn answer_within_deadline(
+    command: &mut Command,
+    repo: &Path,
+) -> Result<Option<GitAnswer>, AuditError> {
+    let Ok(mut child) = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return Ok(None);
+    };
+    let Some(mut pipe) = child.stdout.take() else {
+        return Ok(None);
+    };
+    let reader = std::thread::spawn(move || {
+        let mut stdout = Vec::new();
+        pipe.read_to_end(&mut stdout).map(|_| stdout)
+    });
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return Ok(reader
+                    .join()
+                    .ok()
+                    .and_then(Result::ok)
+                    .map(|stdout| GitAnswer { status, stdout }));
+            }
+            Ok(None) if started.elapsed() < GIT_DEADLINE => std::thread::sleep(GIT_POLL_INTERVAL),
+            waited => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return match waited {
+                    Ok(_) => Err(AuditError::GitUnresponsive {
+                        repo: repo.to_path_buf(),
+                        seconds: GIT_DEADLINE.as_secs(),
+                    }),
+                    Err(_) => Ok(None),
+                };
+            }
         }
-        (Some(GIT_CONFIG_KEY_UNSET), _) => ConfigValue::Unset,
-        _ => ConfigValue::Unreadable,
     }
 }
 
@@ -172,22 +250,26 @@ struct HookLocation {
     git_dir: PathBuf,
 }
 
-fn git_hook_location(repo: &Path) -> Option<HookLocation> {
-    let output = git(repo)
-        .args([
+fn git_hook_location(repo: &Path) -> Result<Option<HookLocation>, AuditError> {
+    let answer = answer_within_deadline(
+        git(repo).args([
             "rev-parse",
             "--is-inside-work-tree",
             "--git-common-dir",
             "--git-dir",
             "--git-path",
             DEFAULT_PRE_COMMIT_HOOK,
-        ])
-        .output()
-        .ok()?;
-    if !output.status.success() {
+        ]),
+        repo,
+    )?;
+    Ok(answer.and_then(|answer| reported_hook_location(repo, &answer)))
+}
+
+fn reported_hook_location(repo: &Path, answer: &GitAnswer) -> Option<HookLocation> {
+    if !answer.status.success() {
         return None;
     }
-    let reported = std::str::from_utf8(&output.stdout).ok()?;
+    let reported = std::str::from_utf8(&answer.stdout).ok()?;
     let mut lines = reported.lines();
     let (inside_work_tree, common_dir, git_dir, hook) =
         (lines.next()?, lines.next()?, lines.next()?, lines.next()?);
@@ -322,14 +404,18 @@ fn is_enforce_command(command: &str, verb: &str) -> bool {
 
 /// Return the enforcement planes that are structurally absent from `repo`, in
 /// declaration order. Each absent plane becomes a punch-list item.
-pub fn missing_planes(repo: &Path) -> Vec<EnforcementPlane> {
+pub fn missing_planes(repo: &Path) -> Result<Vec<EnforcementPlane>, AuditError> {
     [
         EnforcementPlane::RuntimeHook,
         EnforcementPlane::PreCommit,
         EnforcementPlane::Ci,
     ]
     .into_iter()
-    .filter(|plane| !present(repo, *plane))
+    .filter_map(|plane| match present(repo, plane) {
+        Ok(true) => None,
+        Ok(false) => Some(Ok(plane)),
+        Err(unanswered) => Some(Err(unanswered)),
+    })
     .collect()
 }
 
@@ -483,7 +569,7 @@ mod tests {
             .status()
             .unwrap();
         assert!(initialized.success(), "git init failed");
-        assert!(names_worktree(&git_dir, &git_dir, repo.path()));
+        assert!(names_worktree(&git_dir, &git_dir, repo.path()).unwrap());
         (git_dirs, repo, git_dir)
     }
 
@@ -493,11 +579,11 @@ mod tests {
         std::fs::write(git_dir.join("config"), "[core\n").unwrap();
 
         assert!(matches!(
-            config_value(repo.path(), &git_dir, &["--get", "core.worktree"]),
+            config_value(repo.path(), &git_dir, &["--get", "core.worktree"]).unwrap(),
             ConfigValue::Unreadable
         ));
-        assert!(!names_worktree(&git_dir, &git_dir, repo.path()));
-        assert!(!names_no_worktree(&git_dir, repo.path()));
+        assert!(!names_worktree(&git_dir, &git_dir, repo.path()).unwrap());
+        assert!(!names_no_worktree(&git_dir, repo.path()).unwrap());
     }
 
     #[test]
@@ -510,10 +596,11 @@ mod tests {
                 repo.path(),
                 &git_dir,
                 &["--type=bool", "--get", "core.bare"]
-            ),
+            )
+            .unwrap(),
             ConfigValue::Unreadable
         ));
-        assert!(!names_no_worktree(&git_dir, repo.path()));
+        assert!(!names_no_worktree(&git_dir, repo.path()).unwrap());
     }
 
     const FOREIGN_SETTINGS: &str = r#"{"hooks":{
@@ -529,7 +616,9 @@ mod tests {
         settings(repo.path(), FOREIGN_SETTINGS);
 
         assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::ForeignOnly);
-        assert!(missing_planes(repo.path()).contains(&EnforcementPlane::RuntimeHook));
+        assert!(missing_planes(repo.path())
+            .unwrap()
+            .contains(&EnforcementPlane::RuntimeHook));
 
         settings(
             repo.path(),
@@ -565,7 +654,9 @@ mod tests {
             settings(repo.path(), body);
             assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::Missing, "{body}");
         }
-        assert!(missing_planes(repo.path()).contains(&EnforcementPlane::RuntimeHook));
+        assert!(missing_planes(repo.path())
+            .unwrap()
+            .contains(&EnforcementPlane::RuntimeHook));
     }
 
     #[test]

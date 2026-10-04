@@ -175,7 +175,7 @@ pub fn audit(repo: &Path, cfg: &AuditConfig) -> Result<AuditReport, AuditError> 
         items.extend(mutation_surface_item(&measured));
     }
     let liveness = enforcement_liveness(repo, cfg.enforcement_since);
-    items.extend(plane_items(repo, &liveness));
+    items.extend(plane_items(repo, &liveness)?);
     items.extend(structure_items(
         repo,
         cfg.size_outlier_k,
@@ -362,8 +362,8 @@ fn mutation_surface_item(metrics: &[&MetricRecord]) -> Option<PunchItem> {
 /// Its tier comes from the liveness state rather than from the plane — see
 /// [`EnforcementLiveness::finding`] for why — which makes this the one punch
 /// item whose tier `EnforcementPlane::tier` does not decide.
-fn plane_items(repo: &Path, liveness: &EnforcementLiveness) -> Vec<PunchItem> {
-    let mut items: Vec<PunchItem> = missing_planes(repo)
+fn plane_items(repo: &Path, liveness: &EnforcementLiveness) -> Result<Vec<PunchItem>, AuditError> {
+    let mut items: Vec<PunchItem> = missing_planes(repo)?
         .into_iter()
         .map(|plane| PunchItem {
             title: match liveness.missing_plane_note() {
@@ -398,7 +398,7 @@ fn plane_items(repo: &Path, liveness: &EnforcementLiveness) -> Vec<PunchItem> {
             size_outliers: None,
         });
     }
-    items
+    Ok(items)
 }
 
 #[cfg(test)]
