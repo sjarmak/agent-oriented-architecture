@@ -88,6 +88,26 @@ fn a_context_root_that_is_missing_or_dangles_inside_the_repository_is_not_measur
 }
 
 #[test]
+fn a_context_root_that_links_to_itself_fails_the_audit() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    std::os::unix::fs::symlink("AGENTS.md", repo.join("AGENTS.md")).unwrap();
+    let opened = std::fs::File::open(repo.join("AGENTS.md")).unwrap_err();
+
+    let audited = audit(&repo, &AuditConfig::default()).map(|report| report.items.len());
+
+    assert!(
+        matches!(
+            &audited,
+            Err(AuditError::Budget(BudgetError::Io { source, .. }))
+                if source.raw_os_error() == opened.raw_os_error()
+        ),
+        "{audited:?}"
+    );
+}
+
+#[test]
 fn a_member_linked_out_of_the_repository_and_back_in_is_outside_whatever_it_steps_through() {
     let dir = tempfile::tempdir().unwrap();
     let repo = repo_linking(dir.path(), "[probe](probe.md)\n");

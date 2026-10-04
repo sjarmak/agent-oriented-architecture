@@ -546,6 +546,28 @@ fn a_contained_root_linked_back_out_of_a_directory_the_process_may_not_search_is
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_contained_root_that_links_to_itself_is_a_link_loop_not_a_missing_file() {
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path().join("repo");
+    fs::create_dir(&repo).unwrap();
+    let root = repo.join("AGENTS.md");
+    std::os::unix::fs::symlink("AGENTS.md", &root).unwrap();
+    let opened = fs::File::open(&root).unwrap_err();
+
+    let closure = resolve_contained_closure(&root, &repo).map(|closure| closure.files.len());
+
+    assert!(
+        matches!(
+            &closure,
+            Err(BudgetError::Io { path, source })
+                if *path == root && source.raw_os_error() == opened.raw_os_error()
+        ),
+        "{closure:?}"
+    );
+}
+
 #[test]
 fn a_member_of_exactly_the_size_limit_is_counted() {
     let dir = TempDir::new().unwrap();

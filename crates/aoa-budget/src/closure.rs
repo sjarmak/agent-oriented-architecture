@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::boundary::{open_following_links, Boundary, Reached};
+use crate::boundary::{open_following_links, too_many_links, Boundary, Reached};
 use crate::error::BudgetError;
 use crate::normalize_path;
 use crate::reference::extract_references;
@@ -94,6 +94,10 @@ pub fn resolve_contained_closure(root: &Path, boundary: &Path) -> Result<Closure
             path: normalized,
             source: std::io::ErrorKind::NotFound.into(),
         }),
+        Reached::Looping { .. } => Err(BudgetError::Io {
+            path: normalized,
+            source: too_many_links(),
+        }),
     }
 }
 
@@ -159,7 +163,7 @@ fn resolve(
                     outside_boundary.push(path);
                     continue;
                 }
-                Ok(Reached::Absent { entry }) => {
+                Ok(Reached::Absent { entry } | Reached::Looping { entry }) => {
                     if resolved_members.insert(entry) {
                         unread.extend(unresolved_link(&path));
                     }

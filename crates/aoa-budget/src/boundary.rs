@@ -17,12 +17,14 @@ pub(crate) struct Boundary {
 pub(crate) enum Reached {
     Outside,
     Absent { entry: PathBuf },
+    Looping { entry: PathBuf },
     Member { entry: PathBuf, resolved: PathBuf },
 }
 
 enum Lost {
     Outside,
     Absent,
+    Looping,
     Failed(io::Error),
 }
 
@@ -101,6 +103,11 @@ impl Boundary {
                         entry: entry.join(names.as_path()),
                     })
                 }
+                Err(Lost::Looping) => {
+                    return Ok(Reached::Looping {
+                        entry: entry.join(names.as_path()),
+                    })
+                }
                 Err(Lost::Failed(error)) => return Err(error),
             }
         }
@@ -137,7 +144,7 @@ impl Boundary {
                 at = next;
                 continue;
             }
-            *links_left = links_left.checked_sub(1).ok_or(Lost::Absent)?;
+            *links_left = links_left.checked_sub(1).ok_or(Lost::Looping)?;
             let target = std::fs::read_link(&next)?;
             pending.extend(names_a_directory(&target).then(|| OsString::from(".")));
             let target = match target.has_root() {
@@ -193,6 +200,16 @@ impl Boundary {
         self.beneath(resolved)?;
         File::open(resolved)
     }
+}
+
+#[cfg(unix)]
+pub(crate) fn too_many_links() -> io::Error {
+    rustix::io::Errno::LOOP.into()
+}
+
+#[cfg(not(unix))]
+pub(crate) fn too_many_links() -> io::Error {
+    io::Error::other("too many levels of symbolic links")
 }
 
 fn names_a_directory(target: &Path) -> bool {

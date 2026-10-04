@@ -111,7 +111,9 @@ fn contained_archive(path: &Path, boundary: &Path) -> Result<(String, PathBuf), 
             path: archive_path,
             boundary: boundary.to_path_buf(),
         }),
-        Reached::Absent { .. } | Reached::Member { .. } => Ok((archive_name, archive_path)),
+        Reached::Absent { .. } | Reached::Looping { .. } | Reached::Member { .. } => {
+            Ok((archive_name, archive_path))
+        }
     }
 }
 
