@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use aoa_budget::{leaves_boundary, normalize_path};
 use ignore::{DirEntry, WalkBuilder};
@@ -11,33 +12,38 @@ const CONTEXT_ROOT_NAMES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
 const IGNORE_FILE_NAMES: [&str; 2] = [".gitignore", ".ignore"];
 
 pub fn discover_context_roots(dir: &Path) -> Result<Vec<PathBuf>, LintError> {
-    let walker = WalkBuilder::new(dir)
+    refuse_ignore_file_links_leaving(dir, dir)?;
+    let refused = Arc::new(Mutex::new(None));
+    let mut walker = WalkBuilder::new(dir)
         .hidden(false)
         .require_git(false)
         .parents(false)
         .git_global(false)
         .git_exclude(false)
-        .filter_entry(|entry| entry.file_name() != ".git")
+        .filter_entry(entered(dir, &refused))
         .sort_by_file_path(Path::cmp)
         .build();
 
     let mut roots = Vec::new();
-    for entry in walker {
+    loop {
+        let entry = walker.next();
+        if let Some(refused) = held(&refused).take() {
+            return Err(refused);
+        }
+        let Some(entry) = entry else {
+            return Ok(roots);
+        };
         let entry = entry.map_err(|source| LintError::Walk {
             dir: dir.to_path_buf(),
             source,
         })?;
-        let walked_dir = is_walked_dir(&entry);
-        if walked_dir {
-            refuse_ignore_file_links_leaving(dir, entry.path())?;
-        }
         if let Some(unapplied) = entry.error() {
             return Err(LintError::Walk {
                 dir: entry.path().to_path_buf(),
                 source: std::io::Error::other(unapplied.to_string()).into(),
             });
         }
-        if walked_dir {
+        if is_walked_dir(&entry) {
             require_readable_ignore_files(entry.path())?;
         }
         let is_file = entry.file_type().is_some_and(|kind| kind.is_file());
@@ -45,7 +51,32 @@ pub fn discover_context_roots(dir: &Path) -> Result<Vec<PathBuf>, LintError> {
             roots.push(normalize_path(entry.path()));
         }
     }
-    Ok(roots)
+}
+
+type Refused = Arc<Mutex<Option<LintError>>>;
+
+fn held(refused: &Refused) -> MutexGuard<'_, Option<LintError>> {
+    refused.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn entered(linted: &Path, refused: &Refused) -> impl Fn(&DirEntry) -> bool + Send + Sync + 'static {
+    let linted = linted.to_path_buf();
+    let refused = Arc::clone(refused);
+    move |entry| {
+        if entry.file_name() == ".git" {
+            return false;
+        }
+        if !entry.file_type().is_some_and(|kind| kind.is_dir()) {
+            return true;
+        }
+        match refuse_ignore_file_links_leaving(&linted, entry.path()) {
+            Ok(()) => true,
+            Err(error) => {
+                held(&refused).get_or_insert(error);
+                false
+            }
+        }
+    }
 }
 
 fn is_walked_dir(entry: &DirEntry) -> bool {

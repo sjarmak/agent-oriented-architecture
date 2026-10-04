@@ -359,3 +359,42 @@ fn ignore_file_link_that_stays_inside_the_linted_directory_still_applies() {
         ]
     );
 }
+
+#[cfg(unix)]
+fn leaving_link_error_within_five_seconds(base: &Path, ignore_file: &'static str) -> String {
+    let (finished, outcome) = std::sync::mpsc::channel();
+    let base = base.to_path_buf();
+    std::thread::spawn(move || finished.send(leaving_link_error(&base, ignore_file)));
+    outcome
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("discovery refuses the link without reading through it")
+}
+
+#[cfg(unix)]
+#[test]
+fn ignore_file_link_leaving_the_linted_directory_is_refused_without_being_read_through() {
+    use std::os::unix::fs::symlink;
+
+    let dir = TempDir::new().expect("tempdir");
+    let base = dir.path().canonicalize().expect("canonical");
+    let made = std::process::Command::new("mkfifo")
+        .arg(base.join("probed"))
+        .status()
+        .expect("run mkfifo");
+    assert!(made.success());
+
+    write(&base, "direct/repo/AGENTS.md", "# Root\n");
+    symlink("../../probed", base.join("direct/repo/.gitignore")).expect("direct link");
+    assert_eq!(
+        leaving_link_error_within_five_seconds(&base.join("direct"), ".gitignore"),
+        "repo/.gitignore"
+    );
+
+    write(&base, "nested/repo/services/AGENTS.md", "# Services\n");
+    symlink("../../../probed", base.join("nested/repo/services/.ignore"))
+        .expect("link from a subdirectory");
+    assert_eq!(
+        leaving_link_error_within_five_seconds(&base.join("nested"), ".ignore"),
+        "repo/services/.ignore"
+    );
+}
