@@ -13,7 +13,7 @@ impl Boundary {
         let path = path.canonicalize()?;
         Ok(Self {
             #[cfg(unix)]
-            directory: rustix::fs::open(&path, descend::DIRECTORY, rustix::fs::Mode::empty())?,
+            directory: open_directory(&path)?,
             path,
         })
     }
@@ -60,6 +60,35 @@ impl Boundary {
 }
 
 #[cfg(unix)]
+fn open_directory(canonical: &Path) -> io::Result<std::os::fd::OwnedFd> {
+    use std::path::Component;
+
+    let not_canonical = || {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "boundary path is not canonical",
+        )
+    };
+    let mut components = canonical.components();
+    let Some(Component::RootDir) = components.next() else {
+        return Err(not_canonical());
+    };
+    let mut current = rustix::fs::open("/", descend::DIRECTORY, rustix::fs::Mode::empty())?;
+    for component in components {
+        let Component::Normal(name) = component else {
+            return Err(not_canonical());
+        };
+        current = rustix::fs::openat(
+            &current,
+            name,
+            descend::DIRECTORY | rustix::fs::OFlags::NOFOLLOW,
+            rustix::fs::Mode::empty(),
+        )?;
+    }
+    Ok(current)
+}
+
+#[cfg(unix)]
 pub(crate) fn open_following_links(path: &Path) -> io::Result<File> {
     use rustix::fs::OFlags;
 
@@ -91,4 +120,36 @@ mod descend {
         .union(OFlags::NOCTTY)
         .union(OFlags::NOFOLLOW)
         .union(OFlags::CLOEXEC);
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::open_directory;
+
+    #[test]
+    fn a_directory_reached_without_links_opens() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let docs = dir.path().canonicalize().expect("canonical").join("docs");
+        std::fs::create_dir(&docs).expect("create docs");
+
+        assert!(open_directory(&docs).is_ok());
+    }
+
+    #[test]
+    fn a_directory_swapped_for_a_link_after_it_was_resolved_does_not_open() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path().canonicalize().expect("canonical");
+        std::fs::create_dir(base.join("outside")).expect("create outside");
+        std::fs::create_dir(base.join("repo")).expect("create repo");
+        std::os::unix::fs::symlink(base.join("outside"), base.join("repo/docs"))
+            .expect("swap docs for a link");
+
+        assert!(open_directory(&base.join("repo/docs")).is_err());
+        assert!(open_directory(&base.join("repo/docs/nested")).is_err());
+    }
+
+    #[test]
+    fn a_relative_directory_does_not_open() {
+        assert!(open_directory(std::path::Path::new("docs")).is_err());
+    }
 }

@@ -1545,6 +1545,17 @@ fn a_worktree_named_with_a_trailing_space_is_not_the_checkout() {
     assert!(missing);
 }
 
+#[cfg(unix)]
+#[test]
+fn a_git_marker_linked_to_another_checkout_does_not_borrow_its_hook() {
+    let (_main, _linked_parent, linked) = linked_worktree_with_main_hook();
+    let repo = fixture_repo();
+    std::os::unix::fs::symlink(linked.join(".git"), repo.path().join(".git"))
+        .expect("link the marker");
+
+    assert!(pre_commit_plane_missing(repo.path()));
+}
+
 #[test]
 fn a_hook_under_core_hooks_path_satisfies_the_pre_commit_plane() {
     let repo = git_fixture_repo();
