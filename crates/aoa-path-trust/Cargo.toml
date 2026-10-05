@@ -1,0 +1,16 @@
+[package]
+name = "aoa-path-trust"
+description = "Filesystem and git trust primitives (path-trust boundary, repository-root resolution, git subprocess environment) for the AOA Toolkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["fs"] }
+
+[dev-dependencies]
+tempfile = "3.10.1"

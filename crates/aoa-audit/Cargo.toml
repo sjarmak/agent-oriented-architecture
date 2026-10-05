@@ -7,6 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+aoa-path-trust = { path = "../aoa-path-trust" }
 aoa-trace = { path = "../aoa-trace" }
 aoa-budget = { path = "../aoa-budget" }
 aoa-construct = { path = "../aoa-construct" }

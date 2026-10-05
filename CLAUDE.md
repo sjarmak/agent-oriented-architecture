@@ -72,7 +72,7 @@ separate `codeprobe` project. The `aoa` crate is the CLI composition root; the
 remaining crates are narrow libraries:
 
 - Domain kernel: `aoa-domain`.
-- Capture and inputs: `aoa-trace`, `aoa-codeprobe-shim`,
+- Capture and inputs: `aoa-path-trust`, `aoa-trace`, `aoa-codeprobe-shim`,
   `aoa-observe-shim`, `aoa-bench`.
 - Measurement: `aoa-metrics`, `aoa-scip-graph`, `aoa-budget`, `aoa-lint`,
   `aoa-gap`, `aoa-construct`, `aoa-corpus`.
@@ -93,6 +93,19 @@ it is why the crate depends on `aoa-construct` rather than the reverse.
 `aoa-falsify-build` is the assembly crate that joins mined inputs and
 measurements into the evidence `aoa-falsify` scores; it sits with decisions
 because it depends on `aoa-falsify` for the shape it produces.
+
+`aoa-path-trust` is a separate crate, not a module of `aoa-trace`, because the
+two change for different reasons. It owns the filesystem and git trust
+primitives: the component validator, the symlink-refusing join, descriptor-based
+directory acquisition, the repository-root resolver and the environment a git
+subprocess may inherit. `aoa-trace` owns the trace wire format. While the
+primitives lived in `aoa-trace`, every hardening of the trust boundary was a
+change to the trace crate, and a `rustix` type in their public surface tied the
+trace crate's API to that dependency's major version (aoa-9pylp). It has no
+internal dependency and takes no trace or measurement type, and it is not
+`aoa-domain`, which holds vocabulary only.
+[docs/adr/0008-path-trust-crate.md](docs/adr/0008-path-trust-crate.md) records
+the split and what the crate may acquire.
 
 `aoa-domain` is the bottom of the stack and holds only the vocabulary every
 other layer needs to name a held-out subject: `SubjectKey`, `ExposureStatus`,

@@ -130,6 +130,7 @@ The workspace is split so each crate owns one responsibility.
 | Crate | Responsibility |
 |-------|----------------|
 | `aoa` | The CLI: wires each subcommand to its library crate, with human and JSON output. |
+| `aoa-path-trust` | The filesystem and git trust boundary: safe path joins, repository-root resolution, and the environment a git subprocess may inherit. |
 | `aoa-trace` | The span-based trace format and its schema. |
 | `aoa-codeprobe-shim` | Parses a codeprobe transcript into a trace, preserving tool-call order and targets. |
 | `aoa-bench` | The codeprobe boundary: mined task/run contracts, held-out provenance, and canonical content-addressed measurement observations. |

@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use aoa_trace::{resolve_repository_root, RepositoryRootError};
+use aoa_path_trust::{resolve_repository_root, RepositoryRootError};
 
 fn init_git_repo(path: &Path) {
     let initialized = Command::new("git")

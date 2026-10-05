@@ -5,12 +5,6 @@
 //! `openat(O_NOFOLLOW | O_DIRECTORY)` and let the caller mutate relative to the
 //! returned descriptor, so a path substituted after the check cannot redirect
 //! the write.
-//!
-//! [`map_nofollow_error`] takes a `rustix::io::Errno`, so this module's surface
-//! is coupled to the `rustix` major version a consumer resolves: a caller that
-//! opens its own file relative to a descriptor acquired here must match on the
-//! same `Errno` type. Consumers therefore track this crate's `rustix`
-//! requirement rather than picking one independently.
 
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::Path;
@@ -37,12 +31,12 @@ pub fn map_nofollow_error(
     parent: impl AsFd,
     name: &str,
     path: &Path,
-    source: Errno,
+    source: std::io::Error,
 ) -> PathTrustError {
-    if source == Errno::LOOP || is_symlink_at(parent, name) {
+    if source.raw_os_error() == Some(Errno::LOOP.raw_os_error()) || is_symlink_at(parent, name) {
         PathTrustError::unsafe_path(path)
     } else {
-        PathTrustError::io(path, source.into())
+        PathTrustError::io(path, source)
     }
 }
 
@@ -64,7 +58,7 @@ pub fn open_dir_at(parent: impl AsFd, name: &str, path: &Path) -> Result<OwnedFd
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW,
         Mode::empty(),
     )
-    .map_err(|source| map_nofollow_error(parent, name, path, source))
+    .map_err(|source| map_nofollow_error(parent, name, path, source.into()))
 }
 
 /// Acquire subdirectory `name` of `parent`, creating it when absent. A racing
@@ -88,7 +82,7 @@ pub fn open_or_create_dir_at(
             }
             open_dir_at(parent, name, path)
         }
-        Err(source) => Err(map_nofollow_error(parent, name, path, source)),
+        Err(source) => Err(map_nofollow_error(parent, name, path, source.into())),
     }
 }
 

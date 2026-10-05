@@ -26,7 +26,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 use std::sync::OnceLock;
 
-use aoa_trace::git_free_of_inherited_state;
+use aoa_path_trust::git_free_of_inherited_state;
 use tempfile::NamedTempFile;
 
 const MACHINE_CONFIG_SCOPES: [&[u8]; 2] = [b"system", b"global"];

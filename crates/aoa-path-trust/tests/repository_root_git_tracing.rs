@@ -4,7 +4,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use aoa_trace::resolve_repository_root;
+use aoa_path_trust::resolve_repository_root;
 
 const RESOLVING_CHILD_REPOSITORY: &str = "AOA_TEST_RESOLVES_THE_ROOT_OF";
 

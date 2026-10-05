@@ -27,7 +27,7 @@ use aoa_audit::{structure_measurements, AuditConfig, AuditError, FindingKind, St
 use aoa_bench::{is_task_dir, load_task};
 use aoa_construct::{GatingThresholds, MetricName};
 use aoa_corpus::{build_report_from_corpus, mine_reverts, Corpus, GitRunner, MinedCommit, Repo};
-use aoa_trace::validate_single_component;
+use aoa_path_trust::validate_single_component;
 
 use crate::cli::MineCorpusArgs;
 use crate::commands::fsutil::MAX_TASK_DIRS;

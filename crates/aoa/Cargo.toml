@@ -11,6 +11,7 @@ name = "aoa"
 path = "src/main.rs"
 
 [dependencies]
+aoa-path-trust = { path = "../aoa-path-trust" }
 aoa-trace = { path = "../aoa-trace" }
 aoa-budget = { path = "../aoa-budget" }
 aoa-lint = { path = "../aoa-lint" }

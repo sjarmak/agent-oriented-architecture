@@ -1,7 +1,7 @@
 use std::ffi::OsStr;
 use std::process::Command;
 
-use aoa_trace::git_free_of_inherited_state;
+use aoa_path_trust::git_free_of_inherited_state;
 
 const INSPECTING_CHILD: &str = "AOA_TEST_INSPECTS_INHERITED_GIT_ENVIRONMENT";
 

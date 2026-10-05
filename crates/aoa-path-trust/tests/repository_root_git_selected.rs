@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use aoa_trace::{resolve_repository_root, RepositoryRootError};
+use aoa_path_trust::{resolve_repository_root, RepositoryRootError};
 
 fn git(directory: &Path, args: &[&str]) {
     std::fs::create_dir_all(directory).unwrap();

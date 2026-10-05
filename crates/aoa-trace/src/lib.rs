@@ -9,7 +9,6 @@ mod envelope;
 mod error;
 mod metric_input;
 mod model;
-mod path_trust;
 mod report;
 mod span_type;
 mod validate;
@@ -20,14 +19,6 @@ pub use metric_input::{
     Confidence, IndexQuality, MetricInput, MetricInputRef, SymbolGraph, TransformMap,
 };
 pub use model::{Span, Trace};
-#[cfg(unix)]
-pub use path_trust::dirfd;
-pub use path_trust::{
-    git_free_of_inherited_state, is_symlink_nofollow, linked_worktree_points_back,
-    normalize_lexically, reject_symlink, resolve_canonicalizing, resolve_repository_root,
-    safe_join_nofollow, validate_single_component, PathTrustError, RepositoryRootError,
-    UnsafePathComponent,
-};
 pub use report::TraceReport;
 pub use span_type::{SpanSource, SpanType};
 pub use validate::{validate_trace, validate_trace_value};

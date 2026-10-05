@@ -117,6 +117,16 @@ model {
       }
     }
 
+    trust = container 'Filesystem + git trust boundary' {
+      description 'Decides which path a write may reach and which repository a command is run against, once, for every crate that touches the repository under test'
+
+      pathTrust = component 'aoa-path-trust' {
+        #built
+        description 'Single-component name validation, a symlink-refusing join, openat(O_NOFOLLOW | O_DIRECTORY) directory acquisition, the repository-root resolver, and the environment a git subprocess may inherit. No internal dependencies, and no trace or measurement types'
+        link ../crates/aoa-path-trust 'crates/aoa-path-trust/'
+      }
+    }
+
     // ── Trace + symbol-graph substrate ──────────────────────────────────────
     substrate = container 'Trace + symbol-graph substrate' {
       description 'Normalizes every run, live or recorded, into one 8-span trace schema, and indexes the repository into a confidence-tiered symbol graph'
@@ -252,11 +262,14 @@ model {
   // know each other — these hand-offs are the ones that would otherwise be
   // mistaken for dependencies between the libraries themselves. The CLI depends
   // on every library; only the joins are drawn.
+  aoa.cli -> aoa.trust.pathTrust 'resolves the repository root every subcommand is anchored to'
   aoa.cli -> aoa.substrate.scipGraph 'indexes the repository under test'
   aoa.cli -> aoa.substrate.metrics 'hands over the trace and the resulting symbol graph to be scored'
   aoa.cli -> aoa.measure.gap 'hands over scored run outcomes to the reward-hacking check'
   aoa.cli -> aoa.measure.recommend 'projects the migration registry into the owned rows recommend joins against'
   aoa.cli -> aoa.migrate.migrator 'reads the fix registry to build that projection'
+
+  aoa.trust.pathTrust -> repoUnderTest 'asks git for the top level and git directory, and refuses a path that leaves them'
 
   // Substrate — normalize whatever produced the run, index the repo.
   aoa.substrate.observeShim -> repoUnderTest 'reads live .aoa/traces session logs'
@@ -272,7 +285,8 @@ model {
   aoa.measure.bench -> codeprobe 'loads mined task directories'
   aoa.measure.bench -> aoa.domain.kernel 'names mined subjects and their held-out provenance'
   aoa.measure.audit -> repoUnderTest 'installs zero-write telemetry (observe)'
-  aoa.measure.audit -> aoa.substrate.trace 'reads traces through the path-trust boundary the trace crate owns'
+  aoa.measure.audit -> aoa.substrate.trace 'validates the traces observe installs and reports their span counts'
+  aoa.measure.audit -> aoa.trust.pathTrust 'installs telemetry and resolves the hook path through the trust boundary'
   aoa.measure.audit -> aoa.substrate.observeShim 'loads the observed-session corpus that observe wrote'
   aoa.measure.audit -> aoa.substrate.metrics 'ranks a tiered punch-list from scored metrics'
   aoa.measure.audit -> aoa.measure.budget 'counts the context budget over the resolved closure'
@@ -303,6 +317,7 @@ model {
   aoa.gates.policy -> forge 'compiles aoa-policy.yaml into CI / hook / lint enforcement planes'
   aoa.gates.enforce -> repoUnderTest 'blocks a mutation that has not first reproduced the failure it claims to fix'
   aoa.gates.enforce -> aoa.substrate.trace 'reads the reproduction run as trace spans'
+  aoa.gates.enforce -> aoa.trust.pathTrust 'validates the session name the live log file is named after'
 
   // Migration — the only half that writes to the repository under test.
   aoa.migrate.migrator -> aoa.measure.audit 'reads the findings audit raised, and fixes at those sites'

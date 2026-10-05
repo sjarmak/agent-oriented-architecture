@@ -9,7 +9,7 @@ aoa-8rzo8, which found operator git configuration changing a measured answer.
 
 AOA shells out to git in three places, and each one parses what git prints:
 
-- the repository-root resolver in `aoa-trace` (`git rev-parse` for the top
+- the repository-root resolver in `aoa-path-trust` (`git rev-parse` for the top
   level and the git directory),
 - the audit's pre-commit plane in `aoa-audit` (`git rev-parse` for the hook
   path),
@@ -51,7 +51,7 @@ sees git's refusal verbatim and nothing wrong is reported as a result.
 The rule is applied in four places.
 
 **1. The shared strip, for every git subprocess.**
-`aoa_trace::git_free_of_inherited_state` is the only constructor for a git
+`aoa_path_trust::git_free_of_inherited_state` is the only constructor for a git
 `Command` in production code. It removes the 17 repository-local variables
 (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_OBJECT_DIRECTORY`, `GIT_CONFIG_PARAMETERS`,
 `GIT_CONFIG_COUNT` and the rest of the list in that file), removes every
@@ -212,7 +212,7 @@ operator who measures that checkout.
 - **`GIT_REDIRECT_*` is proven on the built `Command` only.** The variables
   redirect git's standard streams on Windows and are ignored elsewhere. CI
   never runs Windows, so
-  `crates/aoa-trace/tests/git_environment_inherited_redirects.rs` asserts that
+  `crates/aoa-path-trust/tests/git_environment_inherited_redirects.rs` asserts that
   the constructed command removes them and no test observes a Windows git
   being unaffected (aoa-b3oj3 item 2).
 - **The trust file is rewritten for every git call.** `infer-owners` blames
@@ -265,9 +265,9 @@ operator who measures that checkout.
 
 ## Where this lives
 
-- `crates/aoa-trace/src/path_trust/git_environment.rs`,
+- `crates/aoa-path-trust/src/git_environment.rs`,
   `fn git_free_of_inherited_state`: the shared strip.
-- `crates/aoa-trace/src/path_trust/root.rs`, `fn git_resolved_path`: the
+- `crates/aoa-path-trust/src/root.rs`, `fn git_resolved_path`: the
   resolver, which inherits machine config and the ownership variable.
 - `crates/aoa-audit/src/planes.rs`, `fn git`: the audit's builder.
 - `crates/aoa/src/commands/git.rs`, `fn reading_repository_data`: the data
@@ -275,7 +275,7 @@ operator who measures that checkout.
   `safe.directory`, outside any repository; `fn trust_config`: the file's
   contents; `fn refuse_relative_config_locations` and
   `fn refuse_replaceable_directory`: the two refusals.
-- `crates/aoa-trace/tests/git_environment_repository_variables.rs` and
+- `crates/aoa-path-trust/tests/git_environment_repository_variables.rs` and
   `git_environment_inherited_redirects.rs`: every stripped name pinned on the
   built command.
 - `crates/aoa/tests/cli_sections/audit_git_environment.rs` and

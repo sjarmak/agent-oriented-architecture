@@ -86,6 +86,7 @@ dependencies = [
  "aoa-lint",
  "aoa-metrics",
  "aoa-migrate",
+ "aoa-path-trust",
  "aoa-policy",
  "aoa-recommend",
  "aoa-scip-graph",
@@ -110,6 +111,7 @@ dependencies = [
  "aoa-corpus",
  "aoa-metrics",
  "aoa-observe-shim",
+ "aoa-path-trust",
  "aoa-trace",
  "globset",
  "rustix",
@@ -187,6 +189,7 @@ dependencies = [
 name = "aoa-enforce"
 version = "0.1.0"
 dependencies = [
+ "aoa-path-trust",
  "aoa-trace",
  "globset",
  "libc",
@@ -282,6 +285,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aoa-path-trust"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "aoa-policy"
 version = "0.1.0"
 dependencies = [
@@ -319,10 +331,8 @@ dependencies = [
 name = "aoa-trace"
 version = "0.1.0"
 dependencies = [
- "rustix",
  "serde",
  "serde_json",
- "tempfile",
  "thiserror",
 ]
 

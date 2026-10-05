@@ -1,11 +1,10 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+use aoa_path_trust::{safe_join_nofollow, validate_single_component, PathTrustError};
 #[cfg(not(unix))]
 use aoa_trace::validate_trace;
-use aoa_trace::{
-    safe_join_nofollow, validate_single_component, PathTrustError, Trace, TraceReport,
-};
+use aoa_trace::{Trace, TraceReport};
 
 use crate::error::AuditError;
 
@@ -78,7 +77,7 @@ fn validate_trace_name(name: &str) -> Result<(), AuditError> {
 }
 
 /// Map a path-trust refusal onto this crate's error surface. The trust
-/// boundary itself lives in `aoa_trace::path_trust`; this crate only decides
+/// boundary itself lives in `aoa_path_trust`; this crate only decides
 /// how a refusal reads to an audit caller.
 fn install_path_error(source: PathTrustError) -> AuditError {
     match source {
@@ -93,7 +92,7 @@ fn install_path_error(source: PathTrustError) -> AuditError {
 /// non-Unix lane still needs it: on Unix every mutation is descriptor-relative.
 #[cfg(not(unix))]
 fn reject_symlink(node: &Path) -> Result<(), AuditError> {
-    aoa_trace::reject_symlink(node).map_err(install_path_error)
+    aoa_path_trust::reject_symlink(node).map_err(install_path_error)
 }
 
 /// Refuse when any node of the installed `.aoa/traces` path already exists as a
@@ -130,7 +129,7 @@ pub fn reject_symlinked_trace_dir(traces_dir: &Path) -> Result<(), AuditError> {
 /// Join a relative path beneath `root`, rejecting illegal components and every
 /// existing symlink encountered from the root downward.
 ///
-/// The audit-facing spelling of [`aoa_trace::safe_join_nofollow`], which owns
+/// The audit-facing spelling of [`aoa_path_trust::safe_join_nofollow`], which owns
 /// the rule; this only translates a refusal into [`AuditError`].
 pub fn reject_symlinked_path(root: &Path, relative: &Path) -> Result<PathBuf, AuditError> {
     safe_join_nofollow(root, relative).map_err(install_path_error)
@@ -139,7 +138,7 @@ pub fn reject_symlinked_path(root: &Path, relative: &Path) -> Result<PathBuf, Au
 #[cfg(unix)]
 mod unix {
     use super::*;
-    use aoa_trace::dirfd::{
+    use aoa_path_trust::dirfd::{
         is_symlink_at, map_nofollow_error, open_dir_at, open_or_create_dir_at, open_trust_root,
     };
     use aoa_trace::{validate_trace_value, TraceError};
@@ -228,7 +227,7 @@ mod unix {
                     &aoa_fd,
                     ".gitignore",
                     &gitignore,
-                    source,
+                    source.into(),
                 )))
             }
         };
@@ -255,7 +254,7 @@ mod unix {
                     &aoa_fd,
                     ".gitignore",
                     &gitignore,
-                    source,
+                    source.into(),
                 ))
             })?;
             let stat = fs::fstat(&fd).map_err(|source| io(&gitignore, source))?;
@@ -431,7 +430,7 @@ pub fn write_trace(
     // follows symlinks, so writing through one would clobber whatever it targets.
     // Reported as an unsafe NAME, not an unsafe install path: the offending node
     // is the caller's `name`, and callers already handle that variant.
-    if aoa_trace::is_symlink_nofollow(&path).map_err(install_path_error)? {
+    if aoa_path_trust::is_symlink_nofollow(&path).map_err(install_path_error)? {
         return Err(AuditError::UnsafeTraceName {
             name: name.to_string(),
         });

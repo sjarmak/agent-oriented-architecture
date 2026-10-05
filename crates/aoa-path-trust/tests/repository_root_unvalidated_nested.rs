@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use aoa_trace::{resolve_repository_root, RepositoryRootError};
+use aoa_path_trust::{resolve_repository_root, RepositoryRootError};
 
 fn git(repo: &Path, args: &[&str]) {
     let ran = Command::new("git")

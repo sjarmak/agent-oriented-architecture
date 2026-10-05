@@ -75,10 +75,11 @@ use aoa_enforce::{
     blocked_span, generated_artifact_gate, reproduction_gate, BlockReason, Decision, LiveLog,
     TornTailRepair,
 };
-use aoa_policy::Policy;
-use aoa_trace::{
-    normalize_lexically, resolve_canonicalizing, resolve_repository_root, PathTrustError, SpanType,
+use aoa_path_trust::{
+    normalize_lexically, resolve_canonicalizing, resolve_repository_root, PathTrustError,
 };
+use aoa_policy::Policy;
+use aoa_trace::SpanType;
 
 use crate::cli::{EnforceArgs, EnforceCommand};
 use crate::commands::generated::generated_rules;
@@ -739,7 +740,7 @@ fn add_hook(
 
 #[cfg(test)]
 mod tests {
-    use aoa_trace::git_free_of_inherited_state;
+    use aoa_path_trust::git_free_of_inherited_state;
 
     use super::*;
 

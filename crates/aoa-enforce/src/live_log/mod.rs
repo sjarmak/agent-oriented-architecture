@@ -51,7 +51,8 @@ use std::time::Duration;
 
 use serde_json::{Map, Value};
 
-use aoa_trace::{validate_single_component, Span, SpanSource, SpanType};
+use aoa_path_trust::validate_single_component;
+use aoa_trace::{Span, SpanSource, SpanType};
 
 pub use error::{IoAction, LiveLogError, LogPathComponent, Result};
 

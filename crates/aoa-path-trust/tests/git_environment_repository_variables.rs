@@ -1,6 +1,6 @@
 use std::ffi::OsStr;
 
-use aoa_trace::git_free_of_inherited_state;
+use aoa_path_trust::git_free_of_inherited_state;
 
 const REPOSITORY_VARIABLES_GIT_MUST_NOT_INHERIT: [&str; 17] = [
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",

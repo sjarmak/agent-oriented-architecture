@@ -5,7 +5,9 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use aoa_corpus::PRECOMMIT_HOOK_MARKERS;
-use aoa_trace::{git_free_of_inherited_state, linked_worktree_points_back, RepositoryRootError};
+use aoa_path_trust::{
+    git_free_of_inherited_state, linked_worktree_points_back, RepositoryRootError,
+};
 use serde_json::Value;
 
 use crate::error::AuditError;

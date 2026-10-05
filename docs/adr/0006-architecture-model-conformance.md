@@ -45,7 +45,7 @@ workflow would ever have said any of this.
 - **Completeness, between library crates.** Every production dependency between
   two library crates is drawn. Without this half, the cheap way to satisfy the
   soundness check is to delete the arrow rather than fix what it describes.
-- **The CLI is the one asymmetry.** `aoa` depends on all eighteen libraries, so
+- **The CLI is the one asymmetry.** `aoa` depends on all twenty libraries, so
   drawing every one of its edges would say nothing. Its arrows are drawn where
   they carry meaning — where the composition root is what joins two crates that
   do not know each other — and are checked for truth, never exhaustiveness.
