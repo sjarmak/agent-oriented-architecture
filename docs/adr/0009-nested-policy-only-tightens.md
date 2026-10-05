@@ -62,11 +62,14 @@ them refuses.
   exists but cannot be read as a policy refuses the write, at every root in the
   walk including the innermost: a symlink (whether or not its target exists),
   an entry that is not a regular file, a file the process may not read, a
-  malformed file. The file is opened relative to the root's descriptor without
-  following links (`read_regular_file_nofollow` in `aoa-path-trust`), so a
-  policy is never read through a link. Before this, a dangling link read as
-  "no policy" and a live one let the governed party point the enclosing root at
-  a file of its choosing.
+  malformed file. On Unix the file is opened relative to the root's descriptor
+  without following links (`read_regular_file_nofollow` in `aoa-path-trust`),
+  so there a policy is never read through a link. The reader takes one path
+  component and refuses any other name, because `O_NOFOLLOW` guards only the
+  last component of what it is given. Off Unix the same entries are refused,
+  but by a check made before the open; see What this leaves open. Before this,
+  a dangling link read as "no policy" and a live one let the governed party
+  point the enclosing root at a file of its choosing.
 - An enclosing policy's `reproduction_required` holds even when the nested
   policy switches it off. The evidence is still read from the session's own
   live log.
@@ -88,17 +91,15 @@ them refuses.
 from the target with its symlinks resolved, so a write through a linked
 directory is checked where it arrives. With `/P/nested` a link to `/P/real`, a
 write to `nested/src/lib.rs` is checked against `/P`'s policy as
-`real/src/lib.rs`, and a policy protecting `real/src/**` refuses it. A link to
-a repository outside `/P` is governed by that repository: the write is held to
-that repository's policy and to those of the repositories enclosing it, not to
-the ones enclosing `/P`. So a link created inside `/P` to somewhere outside it
-moves the writes made through it out from under `/P`'s patterns for the
-destination. That is not an escape of this rule, because nothing inside `/P`
-is written, but it is a consequence a policy author has to know. What `/P`
-keeps is the spelling: the path as written still lies in `/P`, so `/P`'s
-patterns are matched against the alias (`linked/src/lib.rs`) and its
-reproduction requirement still applies. That is the existing protected-alias
-rule in `write_scope`, unchanged here.
+`real/src/lib.rs`, and a policy protecting `real/src/**` refuses it. When
+`/P/linked` points at a repository outside `/P`, the destination repository
+and the repositories enclosing it govern the location a write through the link
+lands in, and `/P` additionally matches its own patterns against the spelling
+(`linked/src/lib.rs`) and keeps its reproduction requirement. `/P` has no
+pattern for the destination's own paths, because nothing inside `/P` is
+written; a policy author who wants writes through such a link refused has to
+protect the alias. Matching the spelling is the existing protected-alias rule
+in `write_scope`, unchanged here, and it can only add a refusal.
 
 **The walk stops where the resolver stops.** The resolver strips
 `GIT_CEILING_DIRECTORIES` (record 0007) and walks `.git` entries to the
@@ -115,7 +116,16 @@ the resolver to find, so it neither governs the write nor refuses it.
 starts from the target, a target whose nearest existing directory is inside a
 repository's `.git` directory, or inside a nested repository git will not
 validate, is denied even when the session's own repository is sound. Before
-this record such a write was evaluated against the session's policy alone.
+this record such a write was evaluated against the session's policy alone. A
+write into `.git/hooks` is the plain case: it is denied with the resolver's
+error, whatever the policy says.
+
+**A governed root the process cannot list refuses every write beneath it.**
+Reading a root's policy opens the root directory for reading. A root the
+process may search but not list (mode 0111) fails that open, so every guarded
+write beneath it is refused, although such a root holds a policy file the
+process could have opened by name. This fails closed and a root like that is
+rare, so it is left as it is.
 
 **Checkouts nested for convenience are governed twice.** A linked worktree or
 clone kept under another governed checkout now also answers to that checkout's
@@ -136,6 +146,12 @@ nested below the session's adds one resolution per nested level.
   working in an unrelated repository that writes into a governed one by
   absolute path is out of scope, as it was before (aoa-7g14y.1 chose that scope
   so the gate does not cover the whole machine).
+- **A policy swapped for a link off Unix.** The non-Unix reader checks the
+  entry with `symlink_metadata` and then opens it by path. A regular file
+  replaced by a link between those two steps is followed, so "never read
+  through a link" holds on Unix only. CI compiles no non-Unix target, and a
+  reader CI never builds would be unverified code on a trust boundary;
+  aoa-ea601 holds this with the other Windows residuals.
 - **A swap between the check and the write.** The policy file is opened without
   following links, but the check runs before the tool does. A directory
   replaced by a link after the check and before the write is not seen.
@@ -151,5 +167,8 @@ refuses denies the write; a session in the parent is held to a refusal the
 nested repository adds; a repository the session is not inside stays out of
 scope; a write through a linked directory is refused at the location it lands
 in, and one through a link to another repository by that repository's policy;
-a symlinked, dangling or malformed policy refuses, including the session's own.
+a symlinked, dangling or malformed policy refuses, including the session's own;
+a write into the session's own `.git/hooks` is denied.
 Each refusal test proves the planted target was not modified.
+`crates/aoa-path-trust/src/nofollow.rs` and `dirfd.rs` hold the reader's own
+refusals as unit tests, including a name of more than one component.

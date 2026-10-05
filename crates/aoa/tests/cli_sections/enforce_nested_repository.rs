@@ -790,3 +790,39 @@ fn enforce_check_refuses_a_cwd_inside_the_git_directory_of_the_root_itself() {
         &parent.join(".git/objects"),
     );
 }
+
+#[test]
+fn enforce_check_refuses_a_write_into_the_hooks_of_the_sessions_own_git_directory() {
+    let fixture = TempDir::new().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    let parent = root.join("parent");
+    init_git_repo(&parent);
+    std::fs::write(parent.join("aoa-policy.yaml"), PERMISSIVE_POLICY).unwrap();
+    let hooks = parent.join(".git/hooks");
+    let hook = hooks.join("pre-commit");
+    plant(&hook);
+
+    for target in [".git/hooks/pre-commit", ".git/hooks/post-checkout"] {
+        aoa_stdin()
+            .args(["enforce", "check"])
+            .write_stdin(write_to(target, &parent))
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("--show-toplevel"))
+            .stderr(predicate::str::contains(format!(
+                "validation failed for {}:",
+                hooks.display()
+            )));
+    }
+    assert_planted_target_is_untouched(&hook);
+    assert!(
+        !hooks.join("post-checkout").exists(),
+        "a refused write must not create the hook it was refused"
+    );
+
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(write_to("docs/notes.md", &parent))
+        .assert()
+        .success();
+}
