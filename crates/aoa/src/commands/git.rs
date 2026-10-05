@@ -22,6 +22,74 @@
 //! verbatim; the `anyhow` callers map it at their boundary.
 
 use std::process::{Command, Output};
+use std::sync::OnceLock;
+
+use aoa_trace::git_free_of_inherited_state;
+
+#[cfg(not(windows))]
+const NULL_DEVICE: &str = "/dev/null";
+#[cfg(windows)]
+const NULL_DEVICE: &str = "NUL";
+
+const MACHINE_CONFIG_SCOPES: [&str; 2] = ["system", "global"];
+
+const KEY_NOT_SET_EXIT: i32 = 1;
+
+static OPERATOR_SAFE_DIRECTORIES: OnceLock<Result<Vec<String>, String>> = OnceLock::new();
+
+pub(crate) fn reading_repository_data() -> Result<Command, String> {
+    let safe_directories = OPERATOR_SAFE_DIRECTORIES
+        .get_or_init(operator_safe_directories)
+        .as_ref()
+        .map_err(Clone::clone)?;
+    let mut command = git_free_of_inherited_state();
+    command
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", NULL_DEVICE);
+    for directory in safe_directories {
+        command.arg("-c").arg(format!("safe.directory={directory}"));
+    }
+    Ok(command)
+}
+
+fn operator_safe_directories() -> Result<Vec<String>, String> {
+    let label = "git config --get-all safe.directory";
+    let mut command = git_free_of_inherited_state();
+    command.args([
+        "config",
+        "--includes",
+        "--null",
+        "--show-scope",
+        "--get-all",
+        "safe.directory",
+    ]);
+    let output = spawn(command, label)?;
+    if output.status.code() == Some(KEY_NOT_SET_EXIT) {
+        return Ok(Vec::new());
+    }
+    if !output.status.success() {
+        return Err(format!(
+            "`{label}` failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let listing = String::from_utf8(output.stdout)
+        .map_err(|e| format!("`{label}` output was not UTF-8: {e}"))?;
+    machine_scoped_values(&listing)
+        .ok_or_else(|| format!("`{label}` printed a scope with no value: {listing:?}"))
+}
+
+fn machine_scoped_values(listing: &str) -> Option<Vec<String>> {
+    let mut fields = listing.split_terminator('\0');
+    let mut values = Vec::new();
+    while let Some(scope) = fields.next() {
+        let value = fields.next()?;
+        if MACHINE_CONFIG_SCOPES.contains(&scope) {
+            values.push(value.to_string());
+        }
+    }
+    Some(values)
+}
 
 /// Run a prepared git `command`, mapping only a spawn failure. The exit status
 /// is left for the caller to inspect. `label` names the invocation for the
@@ -49,8 +117,6 @@ pub(crate) fn checked(command: Command, label: &str) -> Result<Vec<u8>, String> 
 
 #[cfg(test)]
 mod tests {
-    use aoa_trace::git_free_of_inherited_state;
-
     use super::*;
 
     #[test]
@@ -79,6 +145,21 @@ mod tests {
             err.starts_with("`git rev-parse probe` failed:"),
             "error carries the label: {err}"
         );
+    }
+
+    #[test]
+    fn machine_scoped_values_keep_system_and_global_in_the_order_git_read_them() {
+        let listing = "system\0/srv/a\0global\0\0local\0/srv/b\0global\0*\0";
+        assert_eq!(
+            machine_scoped_values(listing),
+            Some(vec!["/srv/a".to_string(), String::new(), "*".to_string()])
+        );
+    }
+
+    #[test]
+    fn machine_scoped_values_refuse_a_scope_with_no_value() {
+        assert_eq!(machine_scoped_values("system\0/srv/a\0global\0"), None);
+        assert_eq!(machine_scoped_values(""), Some(Vec::new()));
     }
 
     #[test]

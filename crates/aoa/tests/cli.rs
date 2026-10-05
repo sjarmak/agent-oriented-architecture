@@ -32,6 +32,9 @@ mod checkbox_baseline;
 #[cfg(unix)]
 #[path = "cli_sections/cli_git_environment.rs"]
 mod cli_git_environment;
+#[cfg(unix)]
+#[path = "cli_sections/cli_operator_git_config.rs"]
+mod cli_operator_git_config;
 #[path = "cli_sections/core.rs"]
 mod core;
 #[path = "cli_sections/enforce.rs"]

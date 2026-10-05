@@ -27,7 +27,7 @@ use aoa_audit::{structure_measurements, AuditConfig, AuditError, FindingKind, St
 use aoa_bench::{is_task_dir, load_task};
 use aoa_construct::{GatingThresholds, MetricName};
 use aoa_corpus::{build_report_from_corpus, mine_reverts, Corpus, GitRunner, MinedCommit, Repo};
-use aoa_trace::{git_free_of_inherited_state, validate_single_component};
+use aoa_trace::validate_single_component;
 
 use crate::cli::MineCorpusArgs;
 use crate::commands::fsutil::MAX_TASK_DIRS;
@@ -124,7 +124,7 @@ fn run_git(cmd: &[String]) -> std::result::Result<String, String> {
         Some((program, args)) if program == "git" => args,
         _ => return Err(format!("not a git command: {}", cmd.join(" "))),
     };
-    let mut command = git_free_of_inherited_state();
+    let mut command = git::reading_repository_data()?;
     command.args(args);
     // Strict decode: git output here (revert logs, OIDs) must be valid UTF-8;
     // garbage is a real error, not something to paper over lossily.
@@ -144,7 +144,7 @@ fn run_git(cmd: &[String]) -> std::result::Result<String, String> {
 /// form. `--verify … ^{commit}` also fails loud on a shallow/stale clone that
 /// lacks the commit, so the operator re-clones with full history.
 fn resolve_commit(clone: &Path, sha: &str) -> Result<String> {
-    let mut command = git_free_of_inherited_state();
+    let mut command = git::reading_repository_data().map_err(|e| anyhow!(e))?;
     command.arg("-C").arg(clone).args([
         "rev-parse",
         "--verify",

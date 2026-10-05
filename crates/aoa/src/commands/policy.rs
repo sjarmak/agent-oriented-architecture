@@ -6,7 +6,6 @@ use aoa_policy::{
     ci_workflow, codeowners, infer_owners, precommit_config, proposed_codeowners,
     render_proposal_diff, BlameCount, OwnedPattern, Policy,
 };
-use aoa_trace::git_free_of_inherited_state;
 use serde::Serialize;
 
 use crate::cli::{PolicyArgs, PolicyCommand};
@@ -232,7 +231,7 @@ fn render_infer_owners_human(view: &InferOwnersView) -> String {
 /// would list a merge-conflicted path once per unmerged stage (tripling its
 /// counts) and would include staged-but-uncommitted files HEAD cannot blame.
 fn head_blob_paths(repo: &Path) -> Result<Vec<String>> {
-    let mut command = git_free_of_inherited_state();
+    let mut command = git::reading_repository_data().map_err(|e| anyhow!(e))?;
     command
         .arg("-C")
         .arg(repo)
@@ -261,7 +260,7 @@ fn head_blob_paths(repo: &Path) -> Result<Vec<String>> {
 /// Count blamed lines per author for one committed file. Uses
 /// `--line-porcelain` so every line carries its `author-mail` attribution.
 fn blame_counts(repo: &Path, path: &str) -> Result<Vec<BlameCount>> {
-    let mut command = git_free_of_inherited_state();
+    let mut command = git::reading_repository_data().map_err(|e| anyhow!(e))?;
     command
         .arg("-C")
         .arg(repo)

@@ -6,7 +6,7 @@ use super::audit_git_environment::{
 use super::falsify_policy::{init_git_repo, run_git};
 use super::*;
 
-const ALICE: [&str; 4] = [
+pub(super) const ALICE: [&str; 4] = [
     "-c",
     "user.name=Alice",
     "-c",
@@ -20,9 +20,9 @@ const CAROL: [&str; 4] = [
     "user.email=carol@example.com",
 ];
 
-type Inherited<'a> = Option<(&'a str, &'a OsStr)>;
+pub(super) type Inherited<'a> = Option<(&'a str, &'a OsStr)>;
 
-fn json_answer(mut command: Command, inherited: Inherited<'_>) -> Option<Value> {
+pub(super) fn json_answer(mut command: Command, inherited: Inherited<'_>) -> Option<Value> {
     if let Some((variable, value)) = inherited {
         command.env(variable, value);
     }
@@ -57,7 +57,7 @@ fn commit_all(repo: &Path, author: [&str; 4], message: &str) {
     run_git(repo, &args);
 }
 
-fn repository_owned_by(author: [&str; 4], root: &Path) {
+pub(super) fn repository_owned_by(author: [&str; 4], root: &Path) {
     std::fs::create_dir_all(root.join("a")).unwrap();
     init_git_repo(root);
     std::fs::write(root.join("a/one.txt"), "line\nline\nline\n").unwrap();
@@ -65,7 +65,7 @@ fn repository_owned_by(author: [&str; 4], root: &Path) {
     commit_all(root, author, "add a/ and root");
 }
 
-fn inferred_owners(repo: &Path, inherited: Inherited<'_>) -> Option<Value> {
+pub(super) fn inferred_owners(repo: &Path, inherited: Inherited<'_>) -> Option<Value> {
     let mut infer = aoa();
     infer
         .args(["policy", "infer-owners", "--json", "--repo"])
