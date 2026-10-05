@@ -471,3 +471,68 @@ fn ignore_files_inside_the_linted_directory_apply_with_dot_ignore_overriding_git
         ]
     );
 }
+
+#[cfg(unix)]
+fn special_file_error_within_five_seconds(base: &Path, ignore_file: &'static str) -> String {
+    let (finished, outcome) = std::sync::mpsc::channel();
+    let base = base.to_path_buf();
+    std::thread::spawn(move || {
+        let refused = match discover_context_roots(&base.join("repo")) {
+            Err(LintError::IgnoreFileNotRegular { path }) if path.ends_with(ignore_file) => path
+                .strip_prefix(&base)
+                .expect("under base")
+                .display()
+                .to_string(),
+            other => format!("expected a refused ignore file, got {other:?}"),
+        };
+        finished.send(refused)
+    });
+    outcome
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("discovery refuses the ignore file without opening it")
+}
+
+#[cfg(unix)]
+fn make_fifo(path: &Path) {
+    let made = std::process::Command::new("mkfifo")
+        .arg(path)
+        .status()
+        .expect("run mkfifo");
+    assert!(made.success());
+}
+
+#[cfg(unix)]
+#[test]
+fn ignore_file_that_is_a_fifo_inside_the_linted_directory_is_refused_without_being_opened() {
+    use std::os::unix::fs::symlink;
+
+    let dir = TempDir::new().expect("tempdir");
+    let base = dir.path().canonicalize().expect("canonical");
+
+    for name in [".gitignore", ".ignore"] {
+        let case = base.join(format!("root{name}"));
+        write(&case, "repo/AGENTS.md", "# Root\n");
+        make_fifo(&case.join("repo").join(name));
+        assert_eq!(
+            special_file_error_within_five_seconds(&case, name),
+            format!("repo/{name}")
+        );
+    }
+
+    let nested = base.join("nested");
+    write(&nested, "repo/services/AGENTS.md", "# Services\n");
+    make_fifo(&nested.join("repo/services/.gitignore"));
+    assert_eq!(
+        special_file_error_within_five_seconds(&nested, ".gitignore"),
+        "repo/services/.gitignore"
+    );
+
+    let linked = base.join("linked");
+    write(&linked, "repo/AGENTS.md", "# Root\n");
+    make_fifo(&linked.join("repo/pipe"));
+    symlink("pipe", linked.join("repo/.ignore")).expect("link to a fifo inside");
+    assert_eq!(
+        special_file_error_within_five_seconds(&linked, ".ignore"),
+        "repo/.ignore"
+    );
+}

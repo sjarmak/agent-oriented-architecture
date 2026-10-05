@@ -91,3 +91,28 @@ fn lint_context_output_does_not_depend_on_an_ignore_file_above_the_linted_direct
         assert_eq!(while_absent, while_unreadable, "{name}");
     }
 }
+
+#[test]
+fn lint_context_refuses_an_ignore_file_that_is_a_fifo_instead_of_waiting_on_it() {
+    for name in [".gitignore", ".ignore"] {
+        let dir = TempDir::new().expect("tempdir");
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).expect("create repo");
+        std::fs::write(repo.join("AGENTS.md"), "# Root\n").expect("write root");
+        let made = Command::new("mkfifo")
+            .arg(repo.join(name))
+            .status()
+            .expect("run mkfifo");
+        assert!(made.success());
+
+        for output in lint_outputs_within_five_seconds(&repo) {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "{name}: {stderr}");
+            assert!(output.stdout.is_empty(), "{name}");
+            assert!(
+                stderr.contains(&format!("{name} is not a regular file")),
+                "{name}: {stderr}"
+            );
+        }
+    }
+}

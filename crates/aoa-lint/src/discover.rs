@@ -12,7 +12,7 @@ const CONTEXT_ROOT_NAMES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
 const IGNORE_FILE_NAMES: [&str; 2] = [".gitignore", ".ignore"];
 
 pub fn discover_context_roots(dir: &Path) -> Result<Vec<PathBuf>, LintError> {
-    refuse_ignore_file_links_leaving(dir, dir)?;
+    refuse_unsafe_ignore_files(dir, dir)?;
     let refused = Arc::new(Mutex::new(None));
     let mut builder = WalkBuilder::new(dir);
     builder
@@ -75,7 +75,7 @@ fn entered(linted: &Path, refused: &Refused) -> impl Fn(&DirEntry) -> bool + Sen
         if !entry.file_type().is_some_and(|kind| kind.is_dir()) {
             return true;
         }
-        match refuse_ignore_file_links_leaving(&linted, entry.path()) {
+        match refuse_unsafe_ignore_files(&linted, entry.path()) {
             Ok(()) => true,
             Err(error) => {
                 held(&refused).get_or_insert(error);
@@ -90,7 +90,7 @@ fn is_walked_dir(entry: &DirEntry) -> bool {
         || (entry.depth() == 0 && entry.path().is_dir())
 }
 
-fn refuse_ignore_file_links_leaving(linted: &Path, dir: &Path) -> Result<(), LintError> {
+fn refuse_unsafe_ignore_files(linted: &Path, dir: &Path) -> Result<(), LintError> {
     for name in IGNORE_FILE_NAMES {
         let path = dir.join(name);
         let is_link = path
@@ -101,6 +101,12 @@ fn refuse_ignore_file_links_leaving(linted: &Path, dir: &Path) -> Result<(), Lin
                 path,
                 dir: linted.to_path_buf(),
             });
+        }
+        let blocks_on_open = path
+            .metadata()
+            .is_ok_and(|reached| !reached.is_file() && !reached.is_dir());
+        if blocks_on_open {
+            return Err(LintError::IgnoreFileNotRegular { path });
         }
     }
     Ok(())

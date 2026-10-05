@@ -19,6 +19,9 @@ pub enum LintError {
     #[error("ignore file {path} is a link that leaves {dir}")]
     IgnoreFileOutside { path: PathBuf, dir: PathBuf },
 
+    #[error("ignore file {path} is not a regular file")]
+    IgnoreFileNotRegular { path: PathBuf },
+
     #[error("no context files to lint")]
     NoRoots,
 }
