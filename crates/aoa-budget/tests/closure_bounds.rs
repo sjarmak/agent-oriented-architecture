@@ -145,6 +145,46 @@ fn a_member_linked_out_of_the_boundary_and_back_in_is_outside_whatever_it_steps_
 
 #[cfg(unix)]
 #[test]
+fn absolute_link_text_with_a_step_back_is_placed_by_where_its_steps_lead() {
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path().join("repo");
+    let root = write(
+        dir.path(),
+        "repo/AGENTS.md",
+        "[stays](stays.md)\n[leaves](leaves.md)\n",
+    );
+    write(dir.path(), "repo/docs/guide.md", "guide\n");
+    write(dir.path(), "repo/safe.md", "safe\n");
+    std::os::unix::fs::symlink(repo.join("docs/../safe.md"), repo.join("stays.md")).unwrap();
+    std::os::unix::fs::symlink(
+        repo.join("docs/../../probed-dir/../repo/safe.md"),
+        repo.join("leaves.md"),
+    )
+    .unwrap();
+
+    let observed = across_what_is_outside(&dir.path().join("probed-dir"), || {
+        let closure = resolve_closure_within(&root, &repo).unwrap();
+        (
+            member_names(&root, &repo),
+            closure.outside_boundary,
+            closure.unread,
+        )
+    });
+
+    for seen in observed {
+        assert_eq!(
+            seen,
+            (
+                vec!["AGENTS.md".to_string(), "stays.md".to_string()],
+                vec![repo.join("leaves.md")],
+                Vec::new()
+            )
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn a_link_that_steps_back_within_the_boundary_to_a_missing_file_is_a_broken_symlink() {
     let dir = TempDir::new().unwrap();
     let repo = dir.path().join("repo");
