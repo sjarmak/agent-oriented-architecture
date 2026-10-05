@@ -10,8 +10,8 @@ use serde_json::Value;
 
 use crate::error::AuditError;
 use crate::hook_set::{
-    hook_command, read_settings, superseded_hook_commands, AOA_SETTINGS_KEY, ENFORCE_HOOK_SET,
-    ENFORCE_WRAPPER_REL,
+    hook_command, read_settings, superseded_hook_commands, HookScope, AOA_SETTINGS_KEY,
+    ENFORCE_HOOK_SET, ENFORCE_WRAPPER_REL,
 };
 use crate::tier::EnforcementPlane;
 
@@ -327,7 +327,7 @@ pub(crate) fn runtime_hooks(repo: &Path) -> RuntimeHooks {
 fn hook_set_installed(settings: &Value) -> bool {
     ENFORCE_HOOK_SET
         .into_iter()
-        .all(|(event, verb)| has_enforce_hook(settings, event, verb))
+        .all(|(event, verb, scope)| has_enforce_hook(settings, event, verb, scope))
 }
 
 pub(crate) fn names_enforcement_without_installing_it(settings: &Value) -> bool {
@@ -336,7 +336,7 @@ pub(crate) fn names_enforcement_without_installing_it(settings: &Value) -> bool 
             names_enforcement(command)
                 && !ENFORCE_HOOK_SET
                     .iter()
-                    .any(|(_, verb)| is_enforce_command(command, verb))
+                    .any(|(_, verb, _)| is_enforce_command(command, verb))
         })
 }
 
@@ -356,7 +356,7 @@ pub(crate) fn carries_aoa_install(settings: &Value) -> bool {
         || hook_entries(settings).filter_map(command).any(|command| {
             ENFORCE_HOOK_SET
                 .iter()
-                .any(|(_, verb)| is_enforce_command(command, verb))
+                .any(|(_, verb, _)| is_enforce_command(command, verb))
         })
 }
 
@@ -374,7 +374,14 @@ fn event_entries(groups: &Value) -> impl Iterator<Item = &Value> {
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|group| group.get("hooks").and_then(Value::as_array))
+        .flat_map(group_hooks)
+}
+
+fn group_hooks(group: &Value) -> impl Iterator<Item = &Value> {
+    group
+        .get("hooks")
+        .and_then(Value::as_array)
+        .into_iter()
         .flatten()
 }
 
@@ -382,12 +389,29 @@ fn command(hook: &Value) -> Option<&str> {
     hook.get("command").and_then(Value::as_str)
 }
 
-fn has_enforce_hook(settings: &Value, event: &str, verb: &str) -> bool {
+fn has_enforce_hook(settings: &Value, event: &str, verb: &str, scope: HookScope) -> bool {
+    let required = scope.matcher();
+    enforce_hook_matchers(settings, event, verb).contains(&Some(required.as_str()))
+}
+
+pub(crate) fn enforce_hook_matchers<'a>(
+    settings: &'a Value,
+    event: &str,
+    verb: &str,
+) -> Vec<Option<&'a str>> {
     settings
         .get("hooks")
         .and_then(|hooks| hooks.get(event))
+        .and_then(Value::as_array)
         .into_iter()
-        .flat_map(event_entries)
+        .flatten()
+        .filter(|group| group_runs_verb(group, verb))
+        .map(|group| group.get("matcher").and_then(Value::as_str))
+        .collect()
+}
+
+fn group_runs_verb(group: &Value, verb: &str) -> bool {
+    group_hooks(group)
         .filter_map(command)
         .any(|command| is_enforce_command(command, verb))
 }
@@ -419,6 +443,7 @@ pub fn missing_planes(repo: &Path) -> Result<Vec<EnforcementPlane>, AuditError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hook_set::fixtures::{contract_matcher, hook_groups};
     use crate::hook_set::{MAX_SETTINGS_BYTES, SETTINGS_REL};
 
     fn settings(repo: &Path, body: &str) {
@@ -427,29 +452,28 @@ mod tests {
         std::fs::write(path, body).unwrap();
     }
 
+    fn hook_set_settings(
+        command: impl Fn(&str) -> String,
+        matcher: impl Fn(&str, HookScope) -> Value,
+    ) -> String {
+        serde_json::json!({ "hooks": hook_groups(command, matcher) }).to_string()
+    }
+
     #[test]
     fn runtime_plane_requires_the_current_hook_set_under_its_events() {
         let repo = tempfile::tempdir().unwrap();
         settings(
             repo.path(),
-            r#"{"hooks":{
-                "PostToolUse":[{"hooks":[
-                    {"command":"aoa enforce record"},
-                    {"command":"aoa enforce commit"}
-                ]}],
-                "PreToolUse":[{"hooks":[{"command":"aoa enforce check"}]}],
-                "PostToolUseFailure":[{"hooks":[{"command":"aoa enforce fail"}]}],
-                "PermissionDenied":[{"hooks":[{"command":"aoa enforce deny"}]}]
-            }}"#,
+            &hook_set_settings(|verb| format!("aoa enforce {verb}"), contract_matcher),
         );
         assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::Installed);
 
         settings(
             repo.path(),
-            r#"{"hooks":{"PostToolUse":[{"hooks":[
-                {"command":"aoa enforce record"},
-                {"command":"aoa enforce check"}
-            ]}]}}"#,
+            r#"{"hooks":{"PostToolUse":[
+                {"matcher":"Bash","hooks":[{"command":"aoa enforce record"}]},
+                {"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"command":"aoa enforce check"}]}
+            ]}}"#,
         );
         assert_eq!(
             runtime_hooks(repo.path()),
@@ -467,15 +491,10 @@ mod tests {
         let repo = tempfile::tempdir().unwrap();
         settings(
             repo.path(),
-            r#"{"hooks":{
-                "PostToolUse":[{"hooks":[
-                    {"command":"\"${CLAUDE_PROJECT_DIR:-.}\"/.claude/hooks/aoa-enforce record"},
-                    {"command":"\"${CLAUDE_PROJECT_DIR:-.}\"/.claude/hooks/aoa-enforce commit"}
-                ]}],
-                "PreToolUse":[{"hooks":[{"command":"\"${CLAUDE_PROJECT_DIR:-.}\"/.claude/hooks/aoa-enforce check"}]}],
-                "PostToolUseFailure":[{"hooks":[{"command":"\"${CLAUDE_PROJECT_DIR:-.}\"/.claude/hooks/aoa-enforce fail"}]}],
-                "PermissionDenied":[{"hooks":[{"command":"\"${CLAUDE_PROJECT_DIR:-.}\"/.claude/hooks/aoa-enforce deny"}]}]
-            }}"#,
+            &hook_set_settings(
+                |verb| format!("\"${{CLAUDE_PROJECT_DIR:-.}}\"/{ENFORCE_WRAPPER_REL} {verb}"),
+                contract_matcher,
+            ),
         );
         assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::Installed);
     }
@@ -489,30 +508,89 @@ mod tests {
     #[test]
     fn the_plane_check_accepts_the_command_the_installer_composes() {
         let repo = tempfile::tempdir().unwrap();
-        let mut hooks: serde_json::Map<String, Value> = serde_json::Map::new();
-        for (event, verb) in ENFORCE_HOOK_SET {
-            hooks
-                .entry(event)
-                .or_insert_with(|| serde_json::json!([]))
-                .as_array_mut()
-                .unwrap()
-                .push(serde_json::json!({"hooks":[{"command": hook_command(verb)}]}));
-        }
         settings(
             repo.path(),
-            &serde_json::json!({ "hooks": hooks }).to_string(),
+            &hook_set_settings(hook_command, contract_matcher),
         );
         assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::Installed);
 
         // One verb's command must not satisfy another's, or a settings file
         // holding five copies of the same hook would read as the full set.
         assert!(!has_enforce_hook(
-            &serde_json::json!({"hooks":{"PreToolUse":[{"hooks":[
-                {"command": hook_command("record")}
-            ]}]}}),
+            &serde_json::json!({"hooks":{"PreToolUse":[{
+                "matcher": HookScope::Mutation.matcher(),
+                "hooks":[{"command": hook_command("record")}]
+            }]}}),
             "PreToolUse",
-            "check"
+            "check",
+            HookScope::Mutation
         ));
+    }
+
+    #[test]
+    fn every_hook_the_installer_writes_satisfies_the_plane_under_its_own_scope() {
+        let spellings: [fn(&str) -> String; 3] = [
+            hook_command,
+            |verb| superseded_hook_commands(verb)[0].clone(),
+            |verb| superseded_hook_commands(verb)[1].clone(),
+        ];
+        for written in spellings {
+            let installed: Value =
+                serde_json::from_str(&hook_set_settings(written, contract_matcher)).unwrap();
+            for (event, verb, scope) in ENFORCE_HOOK_SET {
+                assert!(
+                    has_enforce_hook(&installed, event, verb, scope),
+                    "{verb} on {event} under {:?}",
+                    scope.matcher()
+                );
+            }
+            assert!(hook_set_installed(&installed));
+        }
+    }
+
+    #[test]
+    fn an_installer_command_under_a_matcher_that_is_not_its_scope_does_not_satisfy_the_plane() {
+        let other_scope = |scope| match scope {
+            HookScope::Bash => HookScope::Mutation,
+            HookScope::Mutation => HookScope::Bash,
+        };
+        let wrong_matchers: [fn(HookScope) -> Value; 7] = [
+            |_| "Read".into(),
+            |_| Value::Null,
+            |_| "".into(),
+            |_| "*".into(),
+            |scope| format!("{}|Read", scope.matcher()).into(),
+            |scope| format!(" {}", scope.matcher()).into(),
+            |scope| scope.matcher().to_lowercase().into(),
+        ];
+        for (_, misplaced, declared) in ENFORCE_HOOK_SET {
+            let swapped: Value = other_scope(declared).matcher().into();
+            let wrong = wrong_matchers
+                .iter()
+                .map(|wrong| wrong(declared))
+                .chain([swapped]);
+            for wrong in wrong {
+                let repo = tempfile::tempdir().unwrap();
+                settings(
+                    repo.path(),
+                    &hook_set_settings(hook_command, |verb, scope| {
+                        if verb == misplaced {
+                            wrong.clone()
+                        } else {
+                            scope.matcher().into()
+                        }
+                    }),
+                );
+                assert_eq!(
+                    runtime_hooks(repo.path()),
+                    RuntimeHooks::Missing,
+                    "{misplaced} under matcher {wrong} cannot forge the plane"
+                );
+                assert!(missing_planes(repo.path())
+                    .unwrap()
+                    .contains(&EnforcementPlane::RuntimeHook));
+            }
+        }
     }
 
     #[test]
@@ -559,11 +637,11 @@ mod tests {
 
     #[test]
     fn every_command_the_installer_has_written_satisfies_the_plane_for_its_own_verb_only() {
-        for (_, verb) in ENFORCE_HOOK_SET {
+        for (_, verb, _) in ENFORCE_HOOK_SET {
             let written = std::iter::once(hook_command(verb)).chain(superseded_hook_commands(verb));
             for command in written {
                 assert!(is_enforce_command(&command, verb), "{command}");
-                for (_, other) in ENFORCE_HOOK_SET {
+                for (_, other, _) in ENFORCE_HOOK_SET {
                     assert_eq!(
                         is_enforce_command(&command, other),
                         other == verb,
@@ -609,7 +687,7 @@ mod tests {
             &wrapper_lookalike,
         ];
         let joiners = [" ", "  ", "\t"];
-        let verbs = ENFORCE_HOOK_SET.map(|(_, verb)| verb);
+        let verbs = ENFORCE_HOOK_SET.map(|(_, verb, _)| verb);
         let suffixes = ["", ";", "\"", "'", " || true"];
         let combinations = [
             prefixes.len(),
@@ -654,20 +732,12 @@ mod tests {
     #[test]
     fn a_decoy_hook_set_under_the_right_events_is_not_an_installed_plane() {
         let repo = tempfile::tempdir().unwrap();
-        let mut hooks: serde_json::Map<String, Value> = serde_json::Map::new();
-        for (event, verb) in ENFORCE_HOOK_SET {
-            hooks
-                .entry(event)
-                .or_insert_with(|| serde_json::json!([]))
-                .as_array_mut()
-                .unwrap()
-                .push(serde_json::json!({"hooks":[{
-                    "command": format!("true # decoy {ENFORCE_WRAPPER_REL} {verb}")
-                }]}));
-        }
         settings(
             repo.path(),
-            &serde_json::json!({ "hooks": hooks }).to_string(),
+            &hook_set_settings(
+                |verb| format!("true # decoy {ENFORCE_WRAPPER_REL} {verb}"),
+                contract_matcher,
+            ),
         );
 
         assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::ForeignOnly);
@@ -798,7 +868,7 @@ mod tests {
         settings(
             repo.path(),
             r#"{"hooks":{
-                "PreToolUse":[{"hooks":[
+                "PreToolUse":[{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[
                     {"command":"aoa enforce check"},
                     {"command":"./tools/guard.sh"}
                 ]}]

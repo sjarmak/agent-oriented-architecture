@@ -397,7 +397,7 @@ fn a_decoy_command_naming_the_wrapper_reports_the_runtime_plane_absent() {
             for hook in group["hooks"].as_array_mut().unwrap() {
                 let verb = aoa_audit::ENFORCE_HOOK_SET
                     .iter()
-                    .map(|(_, verb)| *verb)
+                    .map(|(_, verb, _)| *verb)
                     .find(|verb| hook["command"] == aoa_audit::hook_command(verb));
                 if let Some(verb) = verb {
                     hook["command"] =
@@ -431,6 +431,55 @@ fn a_decoy_command_naming_the_wrapper_reports_the_runtime_plane_absent() {
         .stdout(predicate::str::contains(
             "missing enforcement plane: runtime hook",
         ));
+}
+
+#[test]
+fn an_installer_command_under_the_wrong_matcher_is_absent_and_named_in_both_registers() {
+    let repo = TempDir::new().unwrap();
+    observe_enforce(repo.path());
+    present_ci_plane(repo.path());
+    let settings_path = repo.path().join(".claude/settings.json");
+    let mut settings: Value =
+        serde_json::from_slice(&std::fs::read(&settings_path).unwrap()).unwrap();
+    let check = aoa_audit::hook_command("check");
+    let required = settings["hooks"]["PreToolUse"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|group| group["hooks"][0]["command"] == check.as_str())
+        .map(|group| std::mem::replace(&mut group["matcher"], "Read".into()))
+        .expect("the installer registers check on PreToolUse");
+    let required = required.as_str().unwrap();
+    std::fs::write(&settings_path, settings.to_string()).unwrap();
+
+    let report = audit_json(repo.path());
+    assert_eq!(liveness_state(&report), "not-installed");
+    let items = runtime_plane_items(&report);
+    assert_eq!(items.len(), 1, "{report}");
+    assert_eq!(items[0]["kind"], "missing_plane");
+    let warning = report["enforce_hook_warning"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{report}"));
+    let named = [
+        "PreToolUse".to_string(),
+        "\"check\"".to_string(),
+        "matcher \"Read\"".to_string(),
+        format!("matcher \"{required}\""),
+    ];
+    for expected in &named {
+        assert!(warning.contains(expected), "{expected} missing: {warning}");
+    }
+
+    let human = aoa_stdin()
+        .args(["audit", "--repo"])
+        .arg(repo.path())
+        .output()
+        .expect("audit runs");
+    let human = String::from_utf8(human.stdout).unwrap();
+    assert!(human.contains("missing enforcement plane: runtime hook"));
+    for expected in &named {
+        assert!(human.contains(expected), "{expected} missing: {human}");
+    }
 }
 
 #[test]

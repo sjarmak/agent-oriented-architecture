@@ -52,18 +52,45 @@ pub const HOOK_VERSION_KEY: &str = "enforce_hook_set_version";
 /// to be readable from the side that generates that string.
 pub const BLOCK_EXIT_CODE: i32 = 2;
 
+const MUTATION_TOOLS: [&str; 4] = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookScope {
+    Bash,
+    Mutation,
+}
+
+impl HookScope {
+    fn tools(self) -> &'static [&'static str] {
+        match self {
+            HookScope::Bash => &["Bash"],
+            HookScope::Mutation => &MUTATION_TOOLS,
+        }
+    }
+
+    #[must_use]
+    pub fn selects(self, tool: &str) -> bool {
+        self.tools().contains(&tool)
+    }
+
+    #[must_use]
+    pub fn matcher(self) -> String {
+        self.tools().join("|")
+    }
+}
+
 /// Every host event the enforcement plane occupies, paired with the verb it runs
 /// there.
 ///
 /// The installer registers exactly this set and the plane check requires exactly
 /// this set. A verb wired under the wrong event is not the plane, and neither is
 /// a set missing one of them.
-pub const ENFORCE_HOOK_SET: [(&str, &str); 5] = [
-    ("PostToolUse", "record"),
-    ("PreToolUse", "check"),
-    ("PostToolUse", "commit"),
-    ("PostToolUseFailure", "fail"),
-    ("PermissionDenied", "deny"),
+pub const ENFORCE_HOOK_SET: [(&str, &str, HookScope); 5] = [
+    ("PostToolUse", "record", HookScope::Bash),
+    ("PreToolUse", "check", HookScope::Mutation),
+    ("PostToolUse", "commit", HookScope::Mutation),
+    ("PostToolUseFailure", "fail", HookScope::Mutation),
+    ("PermissionDenied", "deny", HookScope::Mutation),
 ];
 
 /// The command Claude Code runs for one enforce `verb`.
@@ -202,6 +229,12 @@ pub enum HookSetDefect {
     /// The wrapper exists and no execute bit is set, so every hook fails.
     WrapperNotExecutable,
     CommandNotInstallerWritten,
+    HookScopeMismatch {
+        event: &'static str,
+        verb: &'static str,
+        found: Option<String>,
+        required: String,
+    },
 }
 
 impl HookSetDefect {
@@ -244,6 +277,20 @@ impl HookSetDefect {
             HookSetDefect::CommandNotInstallerWritten => format!(
                 "{settings} names an enforce hook command the installer did not write, which does not count as the runtime plane; rerun `aoa observe --enforce`"
             ),
+            HookSetDefect::HookScopeMismatch {
+                event,
+                verb,
+                found,
+                required,
+            } => format!(
+                "{settings} runs the enforce \"{verb}\" hook on {event} under {}, so the host \
+                 never fires it; it must run under matcher \"{required}\". Correct that entry \
+                 and rerun `aoa observe --enforce`",
+                found.as_ref().map_or_else(
+                    || "a group with no matcher".to_string(),
+                    |found| format!("matcher \"{found}\"")
+                )
+            ),
         }
     }
 }
@@ -266,10 +313,31 @@ pub fn hook_set_defect(repo: &Path) -> Option<HookSetDefect> {
         }
         Err(SettingsFault::Malformed) => return Some(HookSetDefect::SettingsMalformed),
     };
-    stamp_defect(repo, &settings).or_else(|| {
-        crate::planes::names_enforcement_without_installing_it(&settings)
-            .then_some(HookSetDefect::CommandNotInstallerWritten)
-    })
+    stamp_defect(repo, &settings)
+        .or_else(|| scope_defect(&settings))
+        .or_else(|| {
+            crate::planes::names_enforcement_without_installing_it(&settings)
+                .then_some(HookSetDefect::CommandNotInstallerWritten)
+        })
+}
+
+fn scope_defect(settings: &Value) -> Option<HookSetDefect> {
+    ENFORCE_HOOK_SET
+        .into_iter()
+        .find_map(|(event, verb, scope)| {
+            let found = crate::planes::enforce_hook_matchers(settings, event, verb);
+            let first = found.first().copied()?;
+            let required = scope.matcher();
+            if found.contains(&Some(required.as_str())) {
+                return None;
+            }
+            Some(HookSetDefect::HookScopeMismatch {
+                event,
+                verb,
+                found: first.map(str::to_owned),
+                required,
+            })
+        })
 }
 
 fn stamp_defect(repo: &Path, settings: &Value) -> Option<HookSetDefect> {
@@ -315,7 +383,40 @@ fn wrapper_defect(repo: &Path) -> Option<HookSetDefect> {
 }
 
 #[cfg(test)]
+pub(crate) mod fixtures {
+    use serde_json::Value;
+
+    use super::{HookScope, ENFORCE_HOOK_SET};
+
+    pub(crate) fn hook_groups(
+        command: impl Fn(&str) -> String,
+        matcher: impl Fn(&str, HookScope) -> Value,
+    ) -> Value {
+        let mut hooks = serde_json::Map::new();
+        for (event, verb, scope) in ENFORCE_HOOK_SET {
+            let mut group = serde_json::json!({"hooks": [{"command": command(verb)}]});
+            let matcher = matcher(verb, scope);
+            if !matcher.is_null() {
+                group["matcher"] = matcher;
+            }
+            hooks
+                .entry(event)
+                .or_insert_with(|| serde_json::json!([]))
+                .as_array_mut()
+                .unwrap()
+                .push(group);
+        }
+        Value::Object(hooks)
+    }
+
+    pub(crate) fn contract_matcher(_verb: &str, scope: HookScope) -> Value {
+        scope.matcher().into()
+    }
+}
+
+#[cfg(test)]
 mod tests {
+    use super::fixtures::{contract_matcher, hook_groups};
     use super::*;
 
     /// A repository stamped for `version`, with a runnable wrapper. The stamp
@@ -421,7 +522,7 @@ mod tests {
         let repo = tempfile::tempdir().unwrap();
         write_settings(
             repo.path(),
-            r#"{"hooks":{"PreToolUse":[{"hooks":[{"command":"aoa enforce check"}]}]}}"#,
+            r#"{"hooks":{"PreToolUse":[{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"command":"aoa enforce check"}]}]}}"#,
         );
         assert_eq!(
             hook_set_defect(repo.path()),
@@ -453,7 +554,10 @@ mod tests {
             format!("true # decoy {ENFORCE_WRAPPER_REL} check"),
             format!("{} || true", hook_command("check")),
         ] {
-            let hooks = serde_json::json!({"PreToolUse": [{"hooks": [{"command": command}]}]});
+            let hooks = serde_json::json!({"PreToolUse": [{
+                "matcher": HookScope::Mutation.matcher(),
+                "hooks": [{"command": command}],
+            }]});
             for settings in [
                 serde_json::json!({"hooks": hooks}),
                 serde_json::json!({
@@ -488,16 +592,7 @@ mod tests {
             |verb: &str| format!("true&&{ENFORCE_WRAPPER_REL} {verb}"),
             |verb: &str| format!("/opt/x{ENFORCE_WRAPPER_REL} {verb}"),
         ] {
-            let mut hooks = serde_json::Map::new();
-            for (event, verb) in crate::hook_set::ENFORCE_HOOK_SET {
-                hooks
-                    .entry(event)
-                    .or_insert_with(|| serde_json::json!([]))
-                    .as_array_mut()
-                    .unwrap()
-                    .push(serde_json::json!({"hooks": [{"command": spell(verb)}]}));
-            }
-            let settings = serde_json::json!({"hooks": hooks});
+            let settings = serde_json::json!({"hooks": hook_groups(spell, contract_matcher)});
             write_settings(repo.path(), &settings.to_string());
             if hook_set_defect(repo.path()) != Some(HookSetDefect::CommandNotInstallerWritten) {
                 unwarned.push(spell("check"));
@@ -515,7 +610,10 @@ mod tests {
             format!("./{ENFORCE_WRAPPER_REL}ment check"),
         ] {
             let settings = serde_json::json!({
-                "hooks": {"PreToolUse": [{"hooks": [{"command": command}]}]}
+                "hooks": {"PreToolUse": [{
+                    "matcher": HookScope::Mutation.matcher(),
+                    "hooks": [{"command": command}],
+                }]}
             });
             write_settings(repo.path(), &settings.to_string());
             if let Some(defect) = hook_set_defect(repo.path()) {
@@ -529,19 +627,14 @@ mod tests {
     fn a_complete_install_is_not_faulted_for_an_extra_hand_spelled_command() {
         let repo = tempfile::tempdir().unwrap();
         write_wrapper(repo.path(), 0o755);
-        let mut hooks = serde_json::Map::new();
-        for (event, verb) in crate::hook_set::ENFORCE_HOOK_SET {
-            hooks
-                .entry(event)
-                .or_insert_with(|| serde_json::json!([]))
-                .as_array_mut()
-                .unwrap()
-                .push(serde_json::json!({"hooks": [{"command": hook_command(verb)}]}));
-        }
+        let mut hooks = hook_groups(hook_command, contract_matcher);
         hooks["PreToolUse"]
             .as_array_mut()
             .unwrap()
-            .push(serde_json::json!({"hooks": [{"command": "/usr/local/bin/aoa enforce check"}]}));
+            .push(serde_json::json!({
+                "matcher": HookScope::Mutation.matcher(),
+                "hooks": [{"command": "/usr/local/bin/aoa enforce check"}],
+            }));
         write_settings(
             repo.path(),
             &serde_json::json!({
@@ -550,6 +643,110 @@ mod tests {
             })
             .to_string(),
         );
+        assert_eq!(hook_set_defect(repo.path()), None);
+    }
+
+    fn stamped_hook_set(matcher_of: impl Fn(&str, HookScope) -> Value) -> Value {
+        serde_json::json!({
+            AOA_SETTINGS_KEY: {HOOK_VERSION_KEY: ENFORCE_HOOK_SET_VERSION},
+            "hooks": hook_groups(hook_command, matcher_of),
+        })
+    }
+
+    #[test]
+    fn a_hook_set_whose_only_fault_is_a_wrong_matcher_is_a_scope_mismatch() {
+        let repo = stamped_repo(ENFORCE_HOOK_SET_VERSION);
+        let rewired = stamped_hook_set(|verb, scope| {
+            if verb == "check" {
+                "Read".into()
+            } else {
+                scope.matcher().into()
+            }
+        });
+        write_settings(repo.path(), &rewired.to_string());
+
+        let defect = hook_set_defect(repo.path()).expect("a misplaced verb is a defect");
+        assert_ne!(defect, HookSetDefect::CommandNotInstallerWritten);
+        assert_eq!(
+            defect,
+            HookSetDefect::HookScopeMismatch {
+                event: "PreToolUse",
+                verb: "check",
+                found: Some("Read".to_string()),
+                required: HookScope::Mutation.matcher(),
+            }
+        );
+
+        let line = defect.render_line(repo.path());
+        for expected in [
+            "PreToolUse",
+            "\"check\"",
+            "matcher \"Read\"",
+            &format!("matcher \"{}\"", HookScope::Mutation.matcher()),
+            "aoa observe --enforce",
+        ] {
+            assert!(line.contains(expected), "{expected:?} missing from: {line}");
+        }
+    }
+
+    #[test]
+    fn a_verb_in_a_group_with_no_matcher_is_a_scope_mismatch_that_says_so() {
+        let repo = stamped_repo(ENFORCE_HOOK_SET_VERSION);
+        let unscoped = stamped_hook_set(|verb, scope| {
+            if verb == "record" {
+                Value::Null
+            } else {
+                scope.matcher().into()
+            }
+        });
+        write_settings(repo.path(), &unscoped.to_string());
+
+        let defect = hook_set_defect(repo.path()).expect("an unscoped verb is a defect");
+        assert_eq!(
+            defect,
+            HookSetDefect::HookScopeMismatch {
+                event: "PostToolUse",
+                verb: "record",
+                found: None,
+                required: HookScope::Bash.matcher(),
+            }
+        );
+        assert!(defect
+            .render_line(repo.path())
+            .contains("a group with no matcher"));
+    }
+
+    #[test]
+    fn the_stamp_and_the_wrapper_are_reported_ahead_of_a_wrong_matcher() {
+        let rewired = |version: u64| {
+            let mut settings = stamped_hook_set(|_, _| "Read".into());
+            settings[AOA_SETTINGS_KEY][HOOK_VERSION_KEY] = version.into();
+            settings.to_string()
+        };
+
+        let behind = stamped_repo(ENFORCE_HOOK_SET_VERSION);
+        write_settings(behind.path(), &rewired(ENFORCE_HOOK_SET_VERSION - 1));
+        assert_eq!(
+            hook_set_defect(behind.path()),
+            Some(HookSetDefect::Behind {
+                installed: ENFORCE_HOOK_SET_VERSION - 1
+            })
+        );
+
+        let unwrapped = stamped_repo(ENFORCE_HOOK_SET_VERSION);
+        write_settings(unwrapped.path(), &rewired(ENFORCE_HOOK_SET_VERSION));
+        std::fs::remove_file(unwrapped.path().join(ENFORCE_WRAPPER_REL)).unwrap();
+        assert_eq!(
+            hook_set_defect(unwrapped.path()),
+            Some(HookSetDefect::WrapperMissing)
+        );
+    }
+
+    #[test]
+    fn a_hook_set_under_the_contract_matchers_has_no_scope_defect() {
+        let repo = stamped_repo(ENFORCE_HOOK_SET_VERSION);
+        let installed = stamped_hook_set(contract_matcher);
+        write_settings(repo.path(), &installed.to_string());
         assert_eq!(hook_set_defect(repo.path()), None);
     }
 
@@ -595,6 +792,15 @@ mod tests {
             (HookSetDefect::Behind { installed: 1 }, SETTINGS_REL),
             (HookSetDefect::WrapperMissing, ENFORCE_WRAPPER_REL),
             (HookSetDefect::WrapperNotExecutable, ENFORCE_WRAPPER_REL),
+            (
+                HookSetDefect::HookScopeMismatch {
+                    event: "PreToolUse",
+                    verb: "check",
+                    found: None,
+                    required: HookScope::Mutation.matcher(),
+                },
+                SETTINGS_REL,
+            ),
         ] {
             let line = defect.render_line(repo);
             assert!(

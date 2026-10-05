@@ -239,7 +239,10 @@ fn observe_reports_missing_and_stale_enforce_hook_stamps() {
     for (settings, expected) in [
         (
             serde_json::json!({
-                "hooks": {"PreToolUse": [{"hooks": [{"command": "aoa enforce check"}]}]}
+                "hooks": {"PreToolUse": [{
+                    "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+                    "hooks": [{"command": "aoa enforce check"}]
+                }]}
             }),
             "missing",
         ),

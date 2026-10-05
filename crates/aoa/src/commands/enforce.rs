@@ -66,9 +66,9 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use aoa_audit::{
-    hook_command, hook_set_defect, superseded_hook_commands, AOA_SETTINGS_KEY, BLOCK_EXIT_CODE,
-    ENFORCE_HOOK_SET, ENFORCE_HOOK_SET_VERSION, ENFORCE_WRAPPER_REL, HOOK_VERSION_KEY,
-    SETTINGS_REL,
+    hook_command, hook_set_defect, superseded_hook_commands, HookScope, AOA_SETTINGS_KEY,
+    BLOCK_EXIT_CODE, ENFORCE_HOOK_SET, ENFORCE_HOOK_SET_VERSION, ENFORCE_WRAPPER_REL,
+    HOOK_VERSION_KEY, SETTINGS_REL,
 };
 use aoa_codeprobe_shim::bash_runs_tests;
 use aoa_enforce::{
@@ -84,21 +84,9 @@ use crate::cli::{EnforceArgs, EnforceCommand};
 use crate::commands::generated::generated_rules;
 use crate::output::eprint_human;
 
-/// The tools whose writes the gate guards. A pending call to any of these is a
-/// mutation and must be preceded by a reproduction (`test.run`) span.
-const MUTATION_TOOLS: [&str; 4] = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
-
 /// The wrapper's contents, held here so the installer and the drift test read
 /// one source rather than two copies that can disagree.
 const ENFORCE_WRAPPER_SCRIPT: &str = include_str!("enforce_hook.sh");
-
-/// The Claude Code matcher selecting exactly [`MUTATION_TOOLS`]. Derived from
-/// that list rather than spelled out again, so adding a guarded tool cannot
-/// leave the hooks matching the old set. Every mutation hook AOA installs
-/// shares it.
-fn mutation_tool_matcher() -> String {
-    MUTATION_TOOLS.join("|")
-}
 
 /// The subset of a Claude Code hook payload this gate needs. Unknown fields are
 /// ignored by serde, so the host may add more without breaking the parse.
@@ -212,7 +200,7 @@ fn read_event() -> Result<HookEvent> {
 /// but a matcher is host configuration and a stale or hand-edited
 /// `settings.json` can route anything here.
 fn run_outcome(event: &HookEvent, span_type: SpanType) -> Result<i32> {
-    if !MUTATION_TOOLS.contains(&event.tool_name.as_str()) {
+    if !HookScope::Mutation.selects(&event.tool_name) {
         return Ok(0);
     }
     if let Some(raw) = write_target(event) {
@@ -287,7 +275,7 @@ fn run_record(event: &HookEvent) -> Result<i32> {
 /// natural workaround is to route the write through Bash, which defeats the
 /// gate for in-repo paths too.
 fn run_check(event: &HookEvent) -> Result<i32> {
-    if !MUTATION_TOOLS.contains(&event.tool_name.as_str()) {
+    if !HookScope::Mutation.selects(&event.tool_name) {
         // Not a guarded mutation; nothing to gate.
         return Ok(0);
     }
@@ -474,7 +462,7 @@ fn load_policy(base: &Path) -> Result<Option<Policy>> {
 /// reproduction signal matters, classified by the same detector the offline
 /// shim uses so the two paths never diverge.
 fn recorded_span_type(event: &HookEvent) -> Option<SpanType> {
-    if event.tool_name != "Bash" {
+    if !HookScope::Bash.selects(&event.tool_name) {
         return None;
     }
     let command = event.tool_input.get("command").and_then(Value::as_str)?;
@@ -535,7 +523,6 @@ pub(crate) fn merge_enforce_hooks(mut settings: Value) -> Result<Value> {
         ));
     };
 
-    let matcher = mutation_tool_matcher();
     retire_legacy_hooks(hooks);
     // The event/verb set and the command spelling both come from `aoa-audit`,
     // which is also what reads them back: a hook this installer writes cannot be
@@ -546,9 +533,8 @@ pub(crate) fn merge_enforce_hooks(mut settings: Value) -> Result<Value> {
     // required even though `add_hook` keys on matcher as well: the host runs
     // every group whose matcher fits, so two entries sharing a command would run
     // it twice per tool call and double every span it emits.
-    for (event, verb) in ENFORCE_HOOK_SET {
-        let scope = if verb == "record" { "Bash" } else { &matcher };
-        add_hook(hooks, event, scope, &hook_command(verb))?;
+    for (event, verb, scope) in ENFORCE_HOOK_SET {
+        add_hook(hooks, event, &scope.matcher(), &hook_command(verb))?;
     }
     let aoa = object.entry(AOA_SETTINGS_KEY).or_insert_with(|| json!({}));
     let Some(aoa) = aoa.as_object_mut() else {
@@ -577,7 +563,7 @@ pub(crate) fn merge_enforce_hooks(mut settings: Value) -> Result<Value> {
 fn retire_legacy_hooks(hooks: &mut Map<String, Value>) {
     let legacy: Vec<String> = ENFORCE_HOOK_SET
         .iter()
-        .flat_map(|(_, verb)| superseded_hook_commands(verb))
+        .flat_map(|(_, verb, _)| superseded_hook_commands(verb))
         .collect();
     for groups in hooks.values_mut() {
         let Some(groups) = groups.as_array_mut() else {
@@ -915,7 +901,7 @@ mod tests {
 
         // Pinned as a wire contract: this is the alternation syntax Claude Code
         // matchers use, and it is derived rather than written out.
-        let matcher = mutation_tool_matcher();
+        let matcher = HookScope::Mutation.matcher();
         assert_eq!(matcher, "Write|Edit|MultiEdit|NotebookEdit");
 
         // PostToolUse carries two entries under different matchers: the Bash
@@ -978,7 +964,7 @@ mod tests {
     #[test]
     fn every_write_outcome_has_a_registered_hook() {
         let merged = merge_enforce_hooks(json!({})).expect("fresh settings merge");
-        let matcher = mutation_tool_matcher();
+        let matcher = HookScope::Mutation.matcher();
         let commands: Vec<String> = ["PostToolUse", "PostToolUseFailure", "PermissionDenied"]
             .iter()
             .filter_map(|event| merged["hooks"][event].as_array())
@@ -1014,10 +1000,10 @@ mod tests {
                 "hooks": {
                     "PostToolUse": [
                         { "matcher": "Bash", "hooks": [{ "type": "command", "command": command("record") }] },
-                        { "matcher": mutation_tool_matcher(), "hooks": [{ "type": "command", "command": command("commit") }] },
+                        { "matcher": HookScope::Mutation.matcher(), "hooks": [{ "type": "command", "command": command("commit") }] },
                     ],
                     "PreToolUse": [
-                        { "matcher": mutation_tool_matcher(), "hooks": [{ "type": "command", "command": command("check") }] },
+                        { "matcher": HookScope::Mutation.matcher(), "hooks": [{ "type": "command", "command": command("check") }] },
                     ],
                 }
             });
@@ -1025,7 +1011,7 @@ mod tests {
                 merge_enforce_hooks(installed).expect("upgrade from an earlier hook set");
 
             let rendered = serde_json::to_string(&upgraded).unwrap();
-            for (_, verb) in ENFORCE_HOOK_SET {
+            for (_, verb, _) in ENFORCE_HOOK_SET {
                 assert!(
                     !rendered.contains(&serde_json::to_string(&command(verb)).unwrap()),
                     "no hook-set-{version} command may survive the upgrade: {rendered}"
@@ -1149,7 +1135,7 @@ mod tests {
         for expected in [
             hook_command("commit"),
             "Bash".to_string(),
-            mutation_tool_matcher(),
+            HookScope::Mutation.matcher(),
         ] {
             assert!(
                 message.contains(&expected),

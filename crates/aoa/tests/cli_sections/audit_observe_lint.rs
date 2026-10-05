@@ -185,13 +185,13 @@ fn audit_fail_on_tier1_exits_zero_without_tier1_gap() {
     std::fs::write(
         repo.path().join(".claude/settings.json"),
         r#"{"hooks":{
-            "PostToolUse":[{"hooks":[
-                {"command":"aoa enforce record"},
-                {"command":"aoa enforce commit"}
-            ]}],
-            "PreToolUse":[{"hooks":[{"command":"aoa enforce check"}]}],
-            "PostToolUseFailure":[{"hooks":[{"command":"aoa enforce fail"}]}],
-            "PermissionDenied":[{"hooks":[{"command":"aoa enforce deny"}]}]
+            "PostToolUse":[
+                {"matcher":"Bash","hooks":[{"command":"aoa enforce record"}]},
+                {"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"command":"aoa enforce commit"}]}
+            ],
+            "PreToolUse":[{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"command":"aoa enforce check"}]}],
+            "PostToolUseFailure":[{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"command":"aoa enforce fail"}]}],
+            "PermissionDenied":[{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"command":"aoa enforce deny"}]}]
         }}"#,
     )
     .unwrap();
