@@ -90,15 +90,15 @@ than an accident:
 - `crates/aoa-budget/tests/fix_replace.rs` holds two notices. The first is the
   same root-user case as the group above: the tests that expect a mode-444 file
   or a mode-555 directory to refuse a rewrite probe whether this process can
-  write past that mode, and share one notice through a helper. The second belongs to the test that an
-  archive keeps its extended attributes, which needs a temporary directory on a
-  filesystem that stores `user.*` attributes; the test prints the notice when
-  setting one answers "not supported". CI is expected to satisfy both without
-  an install step, the first because the suite runs unprivileged and the second
-  because the hosted runner's temporary directory is on its ext4 root disk. The
-  second expectation is not checked by anything in the workspace: a runner
-  whose temporary directory moved to a filesystem without user attributes
-  would report `ok` for that one test.
+  write past that mode, and share one notice through a helper. The second
+  belongs to the test that an archive keeps its extended attributes, which
+  needs a temporary directory on a filesystem that stores `user.*` attributes;
+  the test prints the notice when setting one answers "not supported". CI is
+  expected to satisfy both without an install step, the first because the suite
+  runs unprivileged and the second because the hosted runner's temporary
+  directory is on its ext4 root disk. The second expectation is not checked by
+  anything in the workspace: a runner whose temporary directory moved to a
+  filesystem without user attributes would report `ok` for that one test.
 
 The `exposure_scan.rs` test also prints a SKIP notice, which is not a third convention: the notice
 sits *inside* the ignored test and reports an unset `AOA_R0_CAMPAIGN_RUNS` to
