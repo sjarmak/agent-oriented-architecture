@@ -123,6 +123,15 @@ refuses to run when any of those four variables is set to a non-empty relative
 path, with an error that names the variable. An unset or empty variable is
 left to git.
 
+The refusal and the trust list are both computed by the first data-reading git
+call and kept for the rest of the process (one `OnceLock` holds either the
+rendered list or the error). A change to the environment after that call has
+no effect: a config-locating variable made relative later is not refused, one
+made absolute later is still refused, and a `safe.directory` added to the
+operator's config later is not picked up. Each `aoa` command is one process
+and does not change its own environment, so the first call sees what the
+operator set.
+
 With every config location absolute, reading the list with no repository in
 view yields the set git's own check uses, for the repository AOA was started
 in and for every other one, for every form of config this record measured.
@@ -212,6 +221,26 @@ operator who measures that checkout.
   directory owned by another user who keeps it mode 0755 or sticky passes,
   and that owner can replace entries in it.
 - **Windows has no temporary-directory check.** See the decision above.
+- **An absolute config path that depends on the working directory is not
+  refused.** `GIT_CONFIG_GLOBAL=/proc/self/cwd/<file>` is absolute, so the
+  relative-path refusal passes it, yet it names a different file for each
+  process: one in the empty directory for the trust read, one in the
+  repository for plain `git -C <repo>`. Its only effect is that a file inside
+  the repository cannot withdraw trust that the operator's machine config
+  grants: plain git reads that file's empty `safe.directory` and refuses, and
+  AOA reads the repository. A repository can never gain trust this way. The
+  trust read resolves the path in a directory AOA created empty, so it never
+  opens a file the repository supplies, and the list it hands the data readers
+  is never wider than the machine config read with no repository in view.
+  Measured on git 2.43.0 under `GIT_TEST_ASSUME_DIFFERENT_OWNER=1`: with the
+  system config granting `*` and the repository's file withdrawing it, plain
+  git refuses and `infer-owners` reads; with no machine config granting
+  anything and the repository's file granting `*`, plain git reads and
+  `infer-owners` refuses with git's dubious-ownership message. This
+  is a ruling (aoa-8rzo8, 2026-10-05), not an oversight: the operator's own
+  environment chose a config location that moves with the working directory,
+  and the forms that do so (`/proc/self/cwd`, `/dev/fd`, bind mounts) have no
+  closed list to refuse. No test pins this form.
 - **A conditional include that needs no repository is evaluated once.** An
   `includeIf "hasconfig:remote.*.url:..."` block is matched against the
   operator's machine config alone. Whether git's ownership check matches it
@@ -256,4 +285,6 @@ operator who measures that checkout.
   four config-locating variables set relative is refused, and one set empty is
   not; a temporary directory writable by group or other without the sticky bit
   is refused by name with nothing created in it, while a sticky one and an
-  owner-only one are accepted.
+  owner-only one are accepted. `mine-corpus` answers the same under a global,
+  a system and a home-directory config whose `log.date` makes plain `git log`
+  exit 128.
