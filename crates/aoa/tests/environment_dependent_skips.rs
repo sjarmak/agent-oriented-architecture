@@ -125,7 +125,7 @@ const CLASSIFIED: &[Classified] = &[
     },
     Classified {
         path: "crates/aoa-path-trust/src/nofollow.rs",
-        notices: 1,
+        notices: 2,
         ignored: 0,
     },
     Classified {

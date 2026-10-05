@@ -74,15 +74,18 @@ than an accident:
   Moving the CI jobs into a root container would turn all of them into the forbidden
   case, and nothing in the workspace would notice: the registry test checks the
   tool installs, not the user the suite runs as.
-- `crates/aoa-path-trust/src/nofollow.rs` and
-  `crates/aoa-enforce/src/live_log/open.rs` each hold one unit test with the
-  same precondition and the same answer.
+- `crates/aoa-path-trust/src/nofollow.rs` holds two unit tests and
+  `crates/aoa-enforce/src/live_log/open.rs` one, all with the same
+  precondition and the same answer.
   `an_unreadable_node_fails_closed_rather_than_reading_as_absent` needs the
-  kernel to refuse an lstat beneath a mode-000 directory, and
+  kernel to refuse an lstat beneath a mode-000 directory,
+  `an_unreadable_file_fails_closed_rather_than_reading_as_absent` needs it to
+  refuse opening a mode-000 file, and
   `a_trace_directory_that_cannot_be_created_reports_a_failed_open` needs it to
-  refuse a mkdir in a mode-555 directory. Root is refused neither, so each
-  probes whether the seal took and prints the notice when it did not. Before
-  aoa-n7va7 both returned `ok` without a notice in that case. These are the
+  refuse a mkdir in a mode-555 directory. Root is refused none of these, so
+  each probes whether the seal took and prints the notice when it did not.
+  Before aoa-n7va7 the first and third returned `ok` without a notice in that
+  case, and the second did until aoa-2woex. These are the
   first classified sites inside a `src/` tree; the registry walks every `.rs`
   file under `crates/`, so a unit test is counted the same way as an
   integration test.

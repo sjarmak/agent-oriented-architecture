@@ -14,7 +14,7 @@ use std::path::Path;
 use rustix::fs::{self, AtFlags, FileType, Mode, OFlags};
 use rustix::io::Errno;
 
-use super::PathTrustError;
+use super::{validate_single_component, PathTrustError};
 
 /// Mode for directories this module creates: owner-only.
 const DIR_MODE: Mode = Mode::RWXU;
@@ -99,6 +99,7 @@ pub fn open_regular_file_at(
     name: &str,
     path: &Path,
 ) -> Result<Option<File>, PathTrustError> {
+    validate_single_component(name).map_err(|_| PathTrustError::unsafe_path(path))?;
     let fd = match fs::openat(
         parent.as_fd(),
         name,
@@ -182,6 +183,34 @@ mod tests {
                 .count(),
             0,
             "the planted link's target must not have been touched"
+        );
+    }
+
+    #[test]
+    fn opens_a_regular_file_only_by_a_single_component_name() {
+        let root = tempfile::tempdir().expect("create root");
+        let outside = tempfile::tempdir().expect("create outside");
+        std::fs::write(outside.path().join("policy.yaml"), "outside\n")
+            .expect("plant outside file");
+        symlink(outside.path(), root.path().join("linked")).expect("plant link");
+        std::fs::write(root.path().join("policy.yaml"), "own\n").expect("write own file");
+        let root_fd = open_trust_root(root.path()).expect("open trust root");
+
+        for name in ["linked/policy.yaml", "./policy.yaml", "..", ".", ""] {
+            let path = root.path().join(name);
+            let result = open_regular_file_at(&root_fd, name, &path);
+            assert!(
+                matches!(
+                    &result,
+                    Err(PathTrustError::UnsafePath { path: refused }) if refused == &path
+                ),
+                "{name:?} must be refused before anything is opened: {result:?}"
+            );
+        }
+        assert!(
+            open_regular_file_at(&root_fd, "policy.yaml", &root.path().join("policy.yaml"))
+                .expect("open own file")
+                .is_some()
         );
     }
 }

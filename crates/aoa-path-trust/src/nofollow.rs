@@ -63,6 +63,7 @@ pub fn read_regular_file_nofollow(
     use std::io::Read;
 
     let path = directory.join(name);
+    validate_single_component(name).map_err(|_| PathTrustError::unsafe_path(&path))?;
     let Some(mut file) = open_regular_file_nofollow(directory, name, &path)? else {
         return Ok(None);
     };
@@ -181,13 +182,70 @@ mod tests {
         std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o000))
             .expect("seal file");
 
-        if std::fs::File::open(&sealed).is_err() {
-            let result = read_regular_file_nofollow(root.path(), "policy.yaml");
+        if std::fs::File::open(&sealed).is_ok() {
+            eprintln!(
+                "SKIP (docs/adr/0004-environment-dependent-test-skips.md): this process opens a \
+                 mode-000 file, so it cannot be denied the read"
+            );
+            return;
+        }
+        let result = read_regular_file_nofollow(root.path(), "policy.yaml");
+        assert!(
+            matches!(result, Err(PathTrustError::Io { .. })),
+            "an unreadable file must not read as absent: {result:?}"
+        );
+    }
+
+    #[test]
+    fn refuses_a_name_that_is_not_a_single_component() {
+        let fixture = tempfile::tempdir().expect("create fixture");
+        let root = fixture.path().join("root");
+        std::fs::create_dir_all(root.join("nested")).expect("create nested dir");
+        std::fs::write(root.join("nested/policy.yaml"), "nested\n").expect("write nested file");
+        std::fs::write(root.join("policy.yaml"), "own\n").expect("write own file");
+        std::fs::write(fixture.path().join("policy.yaml"), "outside\n")
+            .expect("plant outside file");
+
+        for name in [
+            "nested/policy.yaml",
+            "../policy.yaml",
+            "nested/../policy.yaml",
+            "policy.yaml/",
+            "..",
+            ".",
+            "",
+        ] {
+            let result = read_regular_file_nofollow(&root, name);
             assert!(
-                matches!(result, Err(PathTrustError::Io { .. })),
-                "an unreadable file must not read as absent: {result:?}"
+                matches!(
+                    &result,
+                    Err(PathTrustError::UnsafePath { path }) if path == &root.join(name)
+                ),
+                "{name:?} must be refused, not resolved beneath or above the root: {result:?}"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_a_name_that_reaches_through_a_linked_directory() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("create root");
+        let outside = tempfile::tempdir().expect("create outside");
+        std::fs::write(outside.path().join("policy.yaml"), "outside\n")
+            .expect("plant outside file");
+        symlink(outside.path(), root.path().join("linked")).expect("plant link");
+
+        let result = read_regular_file_nofollow(root.path(), "linked/policy.yaml");
+        assert!(
+            matches!(
+                &result,
+                Err(PathTrustError::UnsafePath { path })
+                    if path == &root.path().join("linked/policy.yaml")
+            ),
+            "the outside file must not be read through the link: {result:?}"
+        );
     }
 
     #[test]
