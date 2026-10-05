@@ -87,19 +87,27 @@ them refuses.
 
 ## Consequences
 
-**Policies govern the canonical location a write lands in.** The walk starts
-from the target with its symlinks resolved, so a write through a linked
-directory is checked where it arrives. With `/P/nested` a link to `/P/real`, a
-write to `nested/src/lib.rs` is checked against `/P`'s policy as
-`real/src/lib.rs`, and a policy protecting `real/src/**` refuses it. When
-`/P/linked` points at a repository outside `/P`, the destination repository
-and the repositories enclosing it govern the location a write through the link
-lands in, and `/P` additionally matches its own patterns against the spelling
-(`linked/src/lib.rs`) and keeps its reproduction requirement. `/P` has no
-pattern for the destination's own paths, because nothing inside `/P` is
-written; a policy author who wants writes through such a link refused has to
-protect the alias. Matching the spelling is the existing protected-alias rule
-in `write_scope`, unchanged here, and it can only add a refusal.
+**A write is governed where it lands and where it is spelled.** The governing
+roots are the union of the repositories enclosing the canonical target, found
+from its nearest existing ancestor directory with symlinks resolved, and the
+repositories enclosing the spelled path, found from the spelled path's nearest
+existing ancestor directory without following a link at any component (`lstat`,
+so with `/O/P/linked` a link the spelled walk starts at `/O/P`). A root both
+walks reach is evaluated once, and each root still matches its patterns through
+`scope_under`, against the spelling and the destination as that root sees them.
+With `/P/nested` a link to `/P/real`, a write to `nested/src/lib.rs` is checked
+against `/P`'s policy as `real/src/lib.rs`, and a policy protecting
+`real/src/**` refuses it. With `/O/P/linked` a link to a repository `/D`
+outside `/O`, a write to `/O/P/linked/src.rs` is governed by `/D` and the
+repositories enclosing it, where it lands, and by `/O/P` and the repositories
+enclosing it, where it is spelled: `/O/P` matches its patterns against
+`linked/src.rs` and keeps its reproduction requirement whether the session sits
+in `/O/P` or in `/O`. Before this the spelled repository was consulted only when
+it enclosed the session's own, so a session in `/O` wrote through `/O/P`'s link
+unrefused while a session in `/O/P` was refused. `/O/P` has no pattern for
+`/D`'s own paths, because nothing inside `/O/P` is written; a policy author who
+wants writes through such a link refused has to protect the alias, and the
+alias match can only add a refusal.
 
 **The walk stops where the resolver stops.** The resolver strips
 `GIT_CEILING_DIRECTORIES` (record 0007) and walks `.git` entries to the
@@ -166,9 +174,14 @@ repository with no policy contributes nothing; an enclosing repository git
 refuses denies the write; a session in the parent is held to a refusal the
 nested repository adds; a repository the session is not inside stays out of
 scope; a write through a linked directory is refused at the location it lands
-in, and one through a link to another repository by that repository's policy;
+in, one through a link to another repository by that repository's policy, and
+one through a link a nested repository spells by that repository's alias
+pattern from a session in the enclosing repository as well as from one in the
+nested repository itself;
 a symlinked, dangling or malformed policy refuses, including the session's own;
 a write into the session's own `.git/hooks` is denied.
 Each refusal test proves the planted target was not modified.
 `crates/aoa-path-trust/src/nofollow.rs` and `dirfd.rs` hold the reader's own
-refusals as unit tests, including a name of more than one component.
+refusals as unit tests, including a name of more than one component. The
+`governing_roots` unit test in `enforce.rs` shows a repository that encloses
+both the spelling and the destination is listed once.
