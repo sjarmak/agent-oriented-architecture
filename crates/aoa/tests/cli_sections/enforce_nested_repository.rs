@@ -321,9 +321,112 @@ fn assert_enforce_check_refuses_cwd_without_the_parent_policy(parent: &Path, cwd
     );
 }
 
+const NESTED_SRC_PROTECTED_BY_PARENT: &str =
+    "protected_paths: [\"nested/src/**\"]\nreproduction_required: false\n";
+const PLANTED: &str = "planted before the check\n";
+
+fn plant(target: &Path) {
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    std::fs::write(target, PLANTED).unwrap();
+}
+
+fn assert_planted_target_is_untouched(target: &Path) {
+    assert_eq!(
+        std::fs::read_to_string(target).unwrap(),
+        PLANTED,
+        "{} must not be modified by a refused write",
+        target.display()
+    );
+}
+
+fn write_to(target: &str, cwd: &Path) -> String {
+    serde_json::to_string(&serde_json::json!({
+        "session_id": "it-nested-policy",
+        "tool_name": "Write",
+        "tool_input": {"file_path": target},
+        "cwd": cwd.to_str().unwrap(),
+    }))
+    .unwrap()
+}
+
+fn assert_check_is_refused_by_the_policy_of(root: &Path, payload: String, policy: &str) {
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(payload)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(policy))
+        .stderr(predicate::str::contains(format!(
+            "(enforced for {})",
+            root.display()
+        )));
+}
+
+#[test]
+fn enforce_check_holds_a_parents_refusal_inside_a_nested_repository_with_its_own_policy() {
+    let fixture = TempDir::new().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    let parent = root.join("parent");
+    let nested = parent.join("nested");
+    init_git_repo(&parent);
+    init_git_repo(&nested);
+    std::fs::write(
+        parent.join("aoa-policy.yaml"),
+        NESTED_SRC_PROTECTED_BY_PARENT,
+    )
+    .unwrap();
+    std::fs::write(nested.join("aoa-policy.yaml"), PERMISSIVE_POLICY).unwrap();
+    let target = nested.join("src/lib.rs");
+    plant(&target);
+
+    assert_check_is_refused_by_the_policy_of(
+        &parent,
+        write_to_src_from(&nested),
+        "protected path: policy forbids writing 'nested/src/lib.rs'",
+    );
+    assert_planted_target_is_untouched(&target);
+    assert!(
+        !parent.join(".aoa").exists(),
+        "the refusal is recorded in the session's own repository, not the enclosing one"
+    );
+
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(write_to("docs/notes.md", &nested))
+        .assert()
+        .success();
+}
+
+#[test]
+fn enforce_check_holds_a_superprojects_refusal_inside_a_submodule_with_its_own_policy() {
+    let fixture = TempDir::new().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    let upstream = root.join("upstream");
+    let parent = root.join("parent");
+    let nested = parent.join("nested");
+    repo_with_a_commit(&upstream);
+    init_git_repo(&parent);
+    add_submodule(&parent, &upstream, "nested");
+    std::fs::write(
+        parent.join("aoa-policy.yaml"),
+        NESTED_SRC_PROTECTED_BY_PARENT,
+    )
+    .unwrap();
+    std::fs::write(nested.join("aoa-policy.yaml"), PERMISSIVE_POLICY).unwrap();
+    let target = nested.join("src/lib.rs");
+    plant(&target);
+
+    assert_check_is_refused_by_the_policy_of(
+        &parent,
+        write_to_src_from(&nested),
+        "protected path: policy forbids writing 'nested/src/lib.rs'",
+    );
+    assert_planted_target_is_untouched(&target);
+}
+
 #[cfg(unix)]
 #[test]
-fn enforce_check_applies_the_policy_of_a_nested_repository_named_one_space_not_its_parent() {
+fn enforce_check_lets_a_nested_repository_named_one_space_add_a_refusal_its_parent_does_not_make() {
     let fixture = TempDir::new().unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let parent = root.join("parent");
@@ -332,17 +435,121 @@ fn enforce_check_applies_the_policy_of_a_nested_repository_named_one_space_not_i
     init_git_repo(&nested);
     std::fs::write(parent.join("aoa-policy.yaml"), PERMISSIVE_POLICY).unwrap();
     std::fs::write(nested.join("aoa-policy.yaml"), PROTECTIVE_POLICY).unwrap();
+    let target = nested.join("src/lib.rs");
+    plant(&target);
+
+    assert_check_is_refused_by_the_policy_of(
+        &nested,
+        write_to_src_from(&nested),
+        "protected path: policy forbids writing 'src/lib.rs'",
+    );
+    assert_planted_target_is_untouched(&target);
+    assert!(
+        !parent.join(".aoa").exists(),
+        "a nested repository must not be enforced as its parent"
+    );
+}
+
+#[test]
+fn enforce_check_holds_a_parents_refusal_for_a_target_the_nested_repository_does_not_contain() {
+    let fixture = TempDir::new().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    let parent = root.join("parent");
+    let nested = parent.join("nested");
+    init_git_repo(&parent);
+    init_git_repo(&nested);
+    std::fs::write(parent.join("aoa-policy.yaml"), PROTECTIVE_POLICY).unwrap();
+    std::fs::write(nested.join("aoa-policy.yaml"), PERMISSIVE_POLICY).unwrap();
+    let target = parent.join("src/lib.rs");
+    plant(&target);
+
+    let elsewhere = root.join("elsewhere/notes.md");
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(write_to(elsewhere.to_str().unwrap(), &nested))
+        .assert()
+        .success();
+    assert!(
+        !nested.join(".aoa").exists() && !parent.join(".aoa").exists(),
+        "a target no governed repository contains leaves no record"
+    );
+
+    for spelling in ["../src/lib.rs", target.to_str().unwrap()] {
+        assert_check_is_refused_by_the_policy_of(
+            &parent,
+            write_to(spelling, &nested),
+            "protected path: policy forbids writing 'src/lib.rs'",
+        );
+    }
+    assert_planted_target_is_untouched(&target);
+    assert!(
+        !parent.join(".aoa").exists(),
+        "the refusal is recorded in the session's own repository, not the enclosing one"
+    );
+}
+
+#[test]
+fn enforce_check_holds_a_parents_reproduction_requirement_a_nested_policy_switches_off() {
+    let fixture = TempDir::new().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    let parent = root.join("parent");
+    let nested = parent.join("nested");
+    init_git_repo(&parent);
+    init_git_repo(&nested);
+    std::fs::write(parent.join("aoa-policy.yaml"), "protected_paths: []\n").unwrap();
+    std::fs::write(nested.join("aoa-policy.yaml"), PERMISSIVE_POLICY).unwrap();
+    let target = nested.join("src/lib.rs");
+    plant(&target);
+
+    assert_check_is_refused_by_the_policy_of(
+        &parent,
+        write_to_src_from(&nested),
+        "reproduction-before-mutation",
+    );
+    assert_planted_target_is_untouched(&target);
+}
+
+#[test]
+fn enforce_check_lets_an_enclosing_repository_without_a_policy_contribute_nothing() {
+    let fixture = TempDir::new().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    let parent = root.join("parent");
+    let nested = parent.join("nested");
+    init_git_repo(&parent);
+    init_git_repo(&nested);
+    std::fs::write(nested.join("aoa-policy.yaml"), PERMISSIVE_POLICY).unwrap();
+
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(write_to_src_from(&nested))
+        .assert()
+        .success();
+}
+
+#[test]
+fn enforce_check_refuses_a_nested_repository_whose_enclosing_repository_git_refuses() {
+    let fixture = TempDir::new().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    let parent = root.join("parent");
+    let nested = parent.join("nested");
+    std::fs::create_dir_all(parent.join(".git")).unwrap();
+    std::fs::write(parent.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::write(parent.join("aoa-policy.yaml"), PROTECTIVE_POLICY).unwrap();
+    init_git_repo(&nested);
+    std::fs::write(nested.join("aoa-policy.yaml"), PERMISSIVE_POLICY).unwrap();
+    let target = nested.join("src/lib.rs");
+    plant(&target);
 
     aoa_stdin()
         .args(["enforce", "check"])
         .write_stdin(write_to_src_from(&nested))
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("protected path"));
-    assert!(
-        !parent.join(".aoa").exists(),
-        "a nested repository must not be enforced as its parent"
-    );
+        .stderr(predicate::str::contains("validation failed for"))
+        .stderr(predicate::str::contains(
+            parent.join(".git").to_str().unwrap(),
+        ));
+    assert_planted_target_is_untouched(&target);
 }
 
 #[test]

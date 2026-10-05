@@ -78,6 +78,7 @@ use aoa_enforce::{
 };
 use aoa_path_trust::{
     normalize_lexically, resolve_canonicalizing, resolve_repository_root, PathTrustError,
+    RepositoryRootError,
 };
 use aoa_policy::Policy;
 use aoa_trace::SpanType;
@@ -89,6 +90,8 @@ use crate::output::eprint_human;
 /// The wrapper's contents, held here so the installer and the drift test read
 /// one source rather than two copies that can disagree.
 const ENFORCE_WRAPPER_SCRIPT: &str = include_str!("enforce_hook.sh");
+
+const POLICY_ROOT_ATTRIBUTE: &str = "policy_root";
 
 /// The subset of a Claude Code hook payload this gate needs. Unknown fields are
 /// ignored by serde, so the host may add more without breaking the parse.
@@ -266,16 +269,6 @@ fn run_record(event: &HookEvent) -> Result<i32> {
 /// (R7). Protected-path and generated-artifact are unconditional; the
 /// reproduction gate is skippable by policy. Protected-path is checked first —
 /// "may not write at all" outranks "edit the source instead".
-///
-/// Every one of those policies is about *this* repository, so the target's
-/// scope is settled before any of them runs. The hook matcher cannot express
-/// paths — it fires on `Write|Edit|MultiEdit|NotebookEdit` whatever they target
-/// — so if this function did not discriminate, the gate's path domain would be
-/// the whole machine: a session in this checkout could not write a note, a
-/// scratch file, or a report anywhere else until it ran a test here
-/// (aoa-7g14y.1). An over-broad gate is worse than a narrow one, because the
-/// natural workaround is to route the write through Bash, which defeats the
-/// gate for in-repo paths too.
 fn run_check(event: &HookEvent) -> Result<i32> {
     if !HookScope::Mutation.selects(&event.tool_name) {
         // Not a guarded mutation; nothing to gate.
@@ -283,47 +276,77 @@ fn run_check(event: &HookEvent) -> Result<i32> {
     }
 
     let base = resolve_base(event)?;
-    let targets = match write_target(event)
-        .map(|raw| write_scope(&base, raw))
-        .transpose()?
-    {
-        // Out of scope entirely: allowed without consulting the policy, without
-        // the reproduction gate, and — deliberately — without a span. Asking
-        // this gate about a foreign path must not manufacture the `.aoa/traces`
-        // tree whose contents are read as evidence that this plane runs.
-        Some(WriteScope::Outside) => return Ok(0),
-        Some(WriteScope::Inside(targets)) => Some(targets),
-        None => None,
-    };
-    let policy = load_policy(&base)?;
-
-    if let (Some(policy), Some(targets)) = (&policy, targets.as_deref()) {
-        let compiled = policy.compile()?;
-        // R5: protected paths are forbidden outright, regardless of reproduction.
-        if let Some(target) = targets.iter().find(|target| compiled.is_protected(target)) {
-            return block(&base, event, BlockReason::ProtectedPath(target.clone()));
-        }
-        // R6: generated artifacts are derived — redirect the agent to the source
-        // rather than letting it hand-edit the artifact.
-        let rules = generated_rules(policy)?;
-        for target in targets {
-            if let Decision::Block(reason) = generated_artifact_gate(&rules, target) {
-                return block(&base, event, reason);
+    let candidate = write_target(event)
+        .map(|raw| target_candidate(&base, raw))
+        .transpose()?;
+    let mut governed = false;
+    let mut inside_base = false;
+    let mut reproduction_root = None;
+    for root in governing_roots(&base)? {
+        let innermost = root == base;
+        let targets = match candidate
+            .as_deref()
+            .map(|candidate| scope_under(&root, candidate))
+            .transpose()?
+        {
+            Some(WriteScope::Outside) => continue,
+            Some(WriteScope::Inside(targets)) => Some(targets),
+            None => None,
+        };
+        governed = true;
+        inside_base |= innermost;
+        let policy = load_policy(&root)?;
+        if let (Some(policy), Some(targets)) = (&policy, targets.as_deref()) {
+            if let Some(reason) = path_refusal(policy, targets)? {
+                return block(&base, event, &root, reason);
             }
         }
+        let reproduction_required = match &policy {
+            Some(policy) => policy.reproduction_required,
+            None => innermost,
+        };
+        if reproduction_required && reproduction_root.is_none() {
+            reproduction_root = Some(root);
+        }
+    }
+    if !governed {
+        return Ok(0);
     }
 
-    // R7: reproduction gate, on unless the policy explicitly disables it.
-    let reproduction_required = policy.as_ref().is_none_or(|p| p.reproduction_required);
-    if !reproduction_required {
-        return allow(&base, event);
-    }
-
+    let Some(root) = reproduction_root else {
+        return allow(&base, event, inside_base);
+    };
     let prior = LiveLog::for_session(&base, &event.session_id).read_spans()?;
     match reproduction_gate(&prior) {
-        Decision::Allow => allow(&base, event),
-        Decision::Block(reason) => block(&base, event, reason),
+        Decision::Allow => allow(&base, event, inside_base),
+        Decision::Block(reason) => block(&base, event, &root, reason),
     }
+}
+
+fn governing_roots(innermost: &Path) -> Result<Vec<PathBuf>> {
+    let mut roots = vec![innermost.to_path_buf()];
+    while let Some(parent) = roots.last().and_then(|root| root.parent()) {
+        match resolve_repository_root(parent) {
+            Ok(root) => roots.push(root),
+            Err(RepositoryRootError::NotInRepository { .. }) => break,
+            Err(refusal) => return Err(refusal.into()),
+        }
+    }
+    Ok(roots)
+}
+
+fn path_refusal(policy: &Policy, targets: &[String]) -> Result<Option<BlockReason>> {
+    let compiled = policy.compile()?;
+    if let Some(target) = targets.iter().find(|target| compiled.is_protected(target)) {
+        return Ok(Some(BlockReason::ProtectedPath(target.clone())));
+    }
+    let rules = generated_rules(policy)?;
+    Ok(targets
+        .iter()
+        .find_map(|target| match generated_artifact_gate(&rules, target) {
+            Decision::Block(reason) => Some(reason),
+            Decision::Allow => None,
+        }))
 }
 
 /// The allow path for a guarded mutation: record the permitted write as a
@@ -338,18 +361,34 @@ fn run_check(event: &HookEvent) -> Result<i32> {
 /// [`SpanType::is_confirmed_mutation`]. Intent is kept anyway because the gap
 /// between what an agent tried to write and what it managed to write is itself
 /// signal.
-fn allow(base: &Path, event: &HookEvent) -> Result<i32> {
-    record_write_span(base, event, SpanType::WriteAttempt)?;
+fn allow(base: &Path, event: &HookEvent, inside_base: bool) -> Result<i32> {
+    if inside_base {
+        record_write_span(base, event, SpanType::WriteAttempt)?;
+    }
     Ok(0)
 }
 
 /// Emit the `write.blocked` span, surface the reason on stderr, and return the
 /// exit code (2) that signals Claude Code to deny the pending tool call.
-fn block(base: &Path, event: &HookEvent, reason: BlockReason) -> Result<i32> {
+fn block(base: &Path, event: &HookEvent, root: &Path, reason: BlockReason) -> Result<i32> {
     let log = LiveLog::for_session(base, &event.session_id);
     let message = reason.to_string();
-    report_repair(&log, log.append_with(|seq| blocked_span(seq, reason))?);
-    eprint_human(&format!("aoa: blocked {} — {message}", event.tool_name));
+    let policy_root = root.to_string_lossy().into_owned();
+    report_repair(
+        &log,
+        log.append_with(|seq| {
+            let mut span = blocked_span(seq, reason);
+            span.attributes.insert(
+                POLICY_ROOT_ATTRIBUTE.to_string(),
+                Value::String(policy_root.clone()),
+            );
+            span
+        })?,
+    );
+    eprint_human(&format!(
+        "aoa: blocked {} — {message} (enforced for {policy_root})",
+        event.tool_name
+    ));
     Ok(BLOCK_EXIT_CODE)
 }
 
@@ -394,12 +433,19 @@ enum WriteScope {
 /// Only a target outside by both readings is out of scope. Resolution failures
 /// other than containment still propagate, so `check` keeps denying on them.
 fn write_scope(base: &Path, raw: &str) -> Result<WriteScope> {
+    scope_under(base, &target_candidate(base, raw)?)
+}
+
+fn target_candidate(base: &Path, raw: &str) -> Result<PathBuf> {
     if raw.is_empty() {
         return Err(anyhow!("hook write target must not be empty"));
     }
-    let candidate = hook_candidate(base, Path::new(raw));
-    let lexical = contained(base, normalize_lexically(&candidate))?;
-    let resolved = contained(base, resolve_canonicalizing(&candidate))?;
+    Ok(hook_candidate(base, Path::new(raw)))
+}
+
+fn scope_under(root: &Path, candidate: &Path) -> Result<WriteScope> {
+    let lexical = contained(root, normalize_lexically(candidate))?;
+    let resolved = contained(root, resolve_canonicalizing(candidate))?;
 
     Ok(match (lexical, resolved) {
         (None, None) => WriteScope::Outside,
