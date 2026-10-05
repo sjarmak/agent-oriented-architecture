@@ -18,6 +18,9 @@ fn aoa() -> Command {
     Command::cargo_bin("aoa").expect("aoa binary builds")
 }
 
+#[cfg(unix)]
+#[path = "cli_sections/audit_git_environment.rs"]
+mod audit_git_environment;
 #[path = "cli_sections/audit_observe_lint.rs"]
 mod audit_observe_lint;
 #[path = "cli_sections/audit_self.rs"]

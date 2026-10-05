@@ -23,15 +23,14 @@ mod component;
 #[cfg(unix)]
 pub mod dirfd;
 mod error;
+mod git_environment;
 mod nofollow;
 mod resolve;
 mod root;
 
 pub use component::validate_single_component;
 pub use error::{PathTrustError, UnsafePathComponent};
+pub use git_environment::git_free_of_inherited_state;
 pub use nofollow::{is_symlink_nofollow, reject_symlink, safe_join_nofollow};
 pub use resolve::{normalize_lexically, resolve_canonicalizing};
-pub use root::{
-    linked_worktree_points_back, resolve_repository_root, RepositoryRootError,
-    REPOSITORY_LOCAL_GIT_ENV,
-};
+pub use root::{linked_worktree_points_back, resolve_repository_root, RepositoryRootError};

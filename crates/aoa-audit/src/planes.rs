@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use aoa_corpus::PRECOMMIT_HOOK_MARKERS;
-use aoa_trace::{linked_worktree_points_back, RepositoryRootError, REPOSITORY_LOCAL_GIT_ENV};
+use aoa_trace::{git_free_of_inherited_state, linked_worktree_points_back, RepositoryRootError};
 use serde_json::Value;
 
 use crate::error::AuditError;
@@ -242,10 +242,7 @@ fn answer_within_deadline(command: &mut Command, repo: &Path) -> Result<GitAnswe
 }
 
 fn git(repo: &Path) -> Command {
-    let mut command = Command::new("git");
-    for variable in REPOSITORY_LOCAL_GIT_ENV {
-        command.env_remove(variable);
-    }
+    let mut command = git_free_of_inherited_state();
     for variable in MACHINE_CONFIG_ENV {
         command.env(variable, NULL_DEVICE);
     }
