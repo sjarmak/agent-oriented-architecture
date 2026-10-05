@@ -1615,6 +1615,27 @@ fn a_worktree_named_relative_to_the_git_dir_is_resolved_from_the_git_dir() {
     assert!(pre_commit_plane_missing(repo.path()));
 }
 
+#[test]
+fn a_git_directory_whose_worktree_is_a_subdirectory_does_not_lend_its_hook_to_the_directory_holding_it(
+) {
+    let repo = git_fixture_repo();
+    write_hook(&repo.path().join(".git/hooks/pre-commit"));
+    let subdirectory = repo.path().join("nested");
+    std::fs::create_dir(&subdirectory).expect("create the subdirectory");
+    let config = repo.path().join(".git/config");
+    assert!(!pre_commit_plane_missing(repo.path()));
+
+    config_file(&config, "core.worktree", "../nested");
+    assert!(pre_commit_plane_missing(repo.path()));
+
+    config_file(
+        &config,
+        "core.worktree",
+        subdirectory.to_str().expect("utf-8 path"),
+    );
+    assert!(pre_commit_plane_missing(repo.path()));
+}
+
 fn separate_git_dir_repo_with_hook() -> (TempDir, TempDir, std::path::PathBuf) {
     let git_dirs = tempfile::tempdir().expect("git dir parent");
     let git_dir = git_dirs.path().join("module");

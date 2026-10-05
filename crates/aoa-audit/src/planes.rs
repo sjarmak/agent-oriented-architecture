@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use aoa_corpus::PRECOMMIT_HOOK_MARKERS;
-use aoa_trace::{linked_worktree_points_back, RepositoryRootError};
+use aoa_trace::{linked_worktree_points_back, RepositoryRootError, REPOSITORY_LOCAL_GIT_ENV};
 use serde_json::Value;
 
 use crate::error::AuditError;
@@ -19,15 +19,6 @@ const CI_MARKERS: &[&str] = &[
     ".github/workflows",
     ".gitlab-ci.yml",
     ".circleci/config.yml",
-];
-
-const AMBIENT_REPOSITORY_ENV: [&str; 6] = [
-    "GIT_DIR",
-    "GIT_COMMON_DIR",
-    "GIT_WORK_TREE",
-    "GIT_CONFIG",
-    "GIT_CONFIG_PARAMETERS",
-    "GIT_CONFIG_COUNT",
 ];
 
 const MACHINE_CONFIG_ENV: [&str; 2] = ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"];
@@ -252,7 +243,7 @@ fn answer_within_deadline(command: &mut Command, repo: &Path) -> Result<GitAnswe
 
 fn git(repo: &Path) -> Command {
     let mut command = Command::new("git");
-    for variable in AMBIENT_REPOSITORY_ENV {
+    for variable in REPOSITORY_LOCAL_GIT_ENV {
         command.env_remove(variable);
     }
     for variable in MACHINE_CONFIG_ENV {

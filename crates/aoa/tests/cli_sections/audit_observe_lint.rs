@@ -885,3 +885,44 @@ fn audit_reads_the_pre_commit_plane_from_the_repository_not_the_machine_git_conf
         "a hooks path set only in the machine's git config is not this repository's plane"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn audit_reads_the_pre_commit_plane_the_same_under_every_inherited_repository_variable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repo = TempDir::new().expect("tempdir");
+    init_git_repo(repo.path());
+    let hook = repo.path().join(".git/hooks/pre-commit");
+    std::fs::create_dir_all(hook.parent().expect("hooks directory")).unwrap();
+    std::fs::write(&hook, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let ambient = TempDir::new().expect("tempdir");
+    let elsewhere = ambient.path().join("elsewhere");
+    let reports_the_plane_missing = |inherited: Option<&str>| {
+        let mut audit = aoa();
+        audit.args(["audit", "--json", "--repo"]).arg(repo.path());
+        if let Some(variable) = inherited {
+            audit.env(variable, &elsewhere);
+        }
+        let output = audit.output().expect("run");
+        assert!(output.status.success(), "{inherited:?}: {output:?}");
+        let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+        parsed["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .any(|item| item["plane"] == "pre-commit")
+    };
+    assert!(!reports_the_plane_missing(None));
+
+    let changed_the_answer: Vec<&str> = aoa_trace::REPOSITORY_LOCAL_GIT_ENV
+        .into_iter()
+        .filter(|variable| reports_the_plane_missing(Some(variable)))
+        .collect();
+
+    assert!(
+        changed_the_answer.is_empty(),
+        "the caller's environment changed what the audit reports: {changed_the_answer:?}"
+    );
+}

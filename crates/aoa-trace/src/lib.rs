@@ -25,7 +25,7 @@ pub use path_trust::dirfd;
 pub use path_trust::{
     is_symlink_nofollow, linked_worktree_points_back, normalize_lexically, reject_symlink,
     resolve_canonicalizing, resolve_repository_root, safe_join_nofollow, validate_single_component,
-    PathTrustError, RepositoryRootError, UnsafePathComponent,
+    PathTrustError, RepositoryRootError, UnsafePathComponent, REPOSITORY_LOCAL_GIT_ENV,
 };
 pub use report::TraceReport;
 pub use span_type::{SpanSource, SpanType};

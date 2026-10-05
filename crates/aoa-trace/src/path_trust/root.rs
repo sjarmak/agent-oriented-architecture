@@ -268,34 +268,32 @@ impl fmt::Display for GitCommandRejection {
     }
 }
 
+pub const REPOSITORY_LOCAL_GIT_ENV: [&str; 17] = [
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+];
+
 fn git_resolved_path(
     candidate: &Path,
     field: &'static str,
 ) -> Result<GitPathResolution, RepositoryRootError> {
-    // Git's complete `rev-parse --local-env-vars` set, plus the two discovery
-    // controls it omits. Any one of these must describe the candidate itself,
-    // never ambient state inherited from the host.
-    const REPOSITORY_ENV: [&str; 17] = [
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_CONFIG",
-        "GIT_CONFIG_PARAMETERS",
-        "GIT_CONFIG_COUNT",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_IMPLICIT_WORK_TREE",
-        "GIT_GRAFT_FILE",
-        "GIT_INDEX_FILE",
-        "GIT_NO_REPLACE_OBJECTS",
-        "GIT_REPLACE_REF_BASE",
-        "GIT_PREFIX",
-        "GIT_SHALLOW_FILE",
-        "GIT_COMMON_DIR",
-        "GIT_CEILING_DIRECTORIES",
-        "GIT_DISCOVERY_ACROSS_FILESYSTEM",
-    ];
     let mut command = Command::new("git");
-    for variable in REPOSITORY_ENV {
+    for variable in REPOSITORY_LOCAL_GIT_ENV {
         command.env_remove(variable);
     }
     let output = command
