@@ -124,11 +124,11 @@ fn run_git(cmd: &[String]) -> std::result::Result<String, String> {
         Some((program, args)) if program == "git" => args,
         _ => return Err(format!("not a git command: {}", cmd.join(" "))),
     };
-    let mut command = git::reading_repository_data()?;
-    command.args(args);
+    let mut git = git::reading_repository_data()?;
+    git.command.args(args);
     // Strict decode: git output here (revert logs, OIDs) must be valid UTF-8;
     // garbage is a real error, not something to paper over lossily.
-    let stdout = git::checked(command, &cmd.join(" "))?;
+    let stdout = git.checked(&cmd.join(" "))?;
     String::from_utf8(stdout).map_err(|e| format!("git output was not UTF-8: {e}"))
 }
 
@@ -144,8 +144,8 @@ fn run_git(cmd: &[String]) -> std::result::Result<String, String> {
 /// form. `--verify … ^{commit}` also fails loud on a shallow/stale clone that
 /// lacks the commit, so the operator re-clones with full history.
 fn resolve_commit(clone: &Path, sha: &str) -> Result<String> {
-    let mut command = git::reading_repository_data().map_err(|e| anyhow!(e))?;
-    command.arg("-C").arg(clone).args([
+    let mut git = git::reading_repository_data().map_err(|e| anyhow!(e))?;
+    git.command.arg("-C").arg(clone).args([
         "rev-parse",
         "--verify",
         "--quiet",
@@ -155,7 +155,8 @@ fn resolve_commit(clone: &Path, sha: &str) -> Result<String> {
     // stderr when the ref is absent, so a generic stderr-folding error would be
     // blank. Here that non-zero exit is a domain signal — the commit is not in
     // the clone — with its own operator guidance below.
-    let output = git::spawn(command, &format!("git rev-parse in {}", clone.display()))
+    let output = git
+        .spawn(&format!("git rev-parse in {}", clone.display()))
         .map_err(|e| anyhow!(e))?;
     if !output.status.success() {
         bail!(

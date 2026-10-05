@@ -35,11 +35,11 @@ thiserror = { workspace = true }
 clap = { version = "4.5.40", features = ["derive"] }
 anyhow = "1.0.98"
 sha2 = "0.10.9"
+tempfile = "3.10.1"
 
 [dev-dependencies]
 assert_cmd = "2.0.16"
 predicates = "3.1.2"
-tempfile = "3.10.1"
 # `architecture_doc.rs` reads every crate manifest to check layer order. Parsing
 # them properly matters: a hand-rolled line scanner that missed a dependency
 # table form would fail open, passing the order check by finding no edges.

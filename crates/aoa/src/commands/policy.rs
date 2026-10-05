@@ -231,12 +231,13 @@ fn render_infer_owners_human(view: &InferOwnersView) -> String {
 /// would list a merge-conflicted path once per unmerged stage (tripling its
 /// counts) and would include staged-but-uncommitted files HEAD cannot blame.
 fn head_blob_paths(repo: &Path) -> Result<Vec<String>> {
-    let mut command = git::reading_repository_data().map_err(|e| anyhow!(e))?;
-    command
+    let mut git = git::reading_repository_data().map_err(|e| anyhow!(e))?;
+    git.command
         .arg("-C")
         .arg(repo)
         .args(["ls-tree", "-r", "-z", "HEAD"]);
-    let stdout = git::checked(command, &format!("git ls-tree in {}", repo.display()))
+    let stdout = git
+        .checked(&format!("git ls-tree in {}", repo.display()))
         .map_err(|e| anyhow!(e))?;
     // Strict decode: tree paths must be valid UTF-8 — a garbage path fed back
     // into `git blame` would surface as a confusing downstream error, so fail
@@ -260,13 +261,15 @@ fn head_blob_paths(repo: &Path) -> Result<Vec<String>> {
 /// Count blamed lines per author for one committed file. Uses
 /// `--line-porcelain` so every line carries its `author-mail` attribution.
 fn blame_counts(repo: &Path, path: &str) -> Result<Vec<BlameCount>> {
-    let mut command = git::reading_repository_data().map_err(|e| anyhow!(e))?;
-    command
+    let mut git = git::reading_repository_data().map_err(|e| anyhow!(e))?;
+    git.command
         .arg("-C")
         .arg(repo)
         .args(["blame", "--line-porcelain", "HEAD", "--"])
         .arg(path);
-    let stdout = git::checked(command, &format!("git blame for {path}")).map_err(|e| anyhow!(e))?;
+    let stdout = git
+        .checked(&format!("git blame for {path}"))
+        .map_err(|e| anyhow!(e))?;
     // Lossy decode on purpose: `--line-porcelain` emits raw commit bytes, and an
     // author name / mail may be non-UTF-8 (legacy or Latin-1 history). One bad
     // byte must degrade to U+FFFD in a single author key, not abort the run.
