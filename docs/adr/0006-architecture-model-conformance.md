@@ -150,8 +150,15 @@ the action's `likec4-version` input instead of the likec4 bundled with the
 action. That is what lets the gate predict the deploy. To bump, change every
 occurrence in both workflows in one commit;
 `crates/aoa/tests/likec4_pin.rs` fails the workspace tests if any of them names
-a different or a moving version, if an action step drops the input, or if the
-validating step is removed, made conditional, or path-filtered.
+a different or a moving version, if a run step invokes likec4 with no version at
+all, or if an action step drops the input. It also fails if the validating step
+is removed, if its `run` is anything but `npx -y likec4@<version> validate
+architecture` (an `echo` in front, a `|| true` after, or a `shell:` key on the
+step would let the step pass without the validator's verdict), if the step or
+its job carries `if`, `continue-on-error` or `needs`, or if the `pull_request`
+trigger carries any filter. The test is a drift guard: each of those is the
+cheapest structural check that turns the edit red, not a model of what GitHub
+would schedule.
 
 What the pin does not reach: `npx` still resolves the dependency tree below
 likec4 on every run, since there is no lockfile for it as there is for the
