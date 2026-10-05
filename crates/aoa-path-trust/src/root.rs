@@ -432,6 +432,18 @@ mod tests {
 
     use super::*;
 
+    #[cfg(unix)]
+    fn make_fifo(path: &Path) {
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            path,
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+            0,
+        )
+        .expect("make a fifo");
+    }
+
     fn init_git_repo(path: &Path) {
         let status = Command::new("git")
             .args(["init", "--quiet"])
@@ -670,11 +682,7 @@ mod tests {
         let (_fixture, candidate) = candidate_fixture();
         let git_dir = candidate.join("admin/worktrees/fixture");
         std::fs::create_dir_all(&git_dir).unwrap();
-        let made = Command::new("mkfifo")
-            .arg(git_dir.join("gitdir"))
-            .status()
-            .unwrap();
-        assert!(made.success(), "mkfifo failed");
+        make_fifo(&git_dir.join("gitdir"));
 
         let refusal = linked_worktree_points_back(&candidate, &git_dir).unwrap_err();
         assert!(

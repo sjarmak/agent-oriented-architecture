@@ -377,11 +377,7 @@ fn ignore_file_link_leaving_the_linted_directory_is_refused_without_being_read_t
 
     let dir = TempDir::new().expect("tempdir");
     let base = dir.path().canonicalize().expect("canonical");
-    let made = std::process::Command::new("mkfifo")
-        .arg(base.join("probed"))
-        .status()
-        .expect("run mkfifo");
-    assert!(made.success());
+    make_fifo(&base.join("probed"));
 
     write(&base, "direct/repo/AGENTS.md", "# Root\n");
     symlink("../../probed", base.join("direct/repo/.gitignore")).expect("direct link");
@@ -425,11 +421,7 @@ fn ignore_files_above_the_linted_directory_are_never_opened() {
 
         assert_eq!(roots_within_five_seconds(&base), expected, "{name} absent");
 
-        let made = std::process::Command::new("mkfifo")
-            .arg(base.join("outside"))
-            .status()
-            .expect("run mkfifo");
-        assert!(made.success());
+        make_fifo(&base.join("outside"));
         symlink("outside", &above).expect("link to a fifo");
         assert_eq!(roots_within_five_seconds(&base), expected, "{name} fifo");
 
@@ -494,11 +486,14 @@ fn special_file_error_within_five_seconds(base: &Path, ignore_file: &'static str
 
 #[cfg(unix)]
 fn make_fifo(path: &Path) {
-    let made = std::process::Command::new("mkfifo")
-        .arg(path)
-        .status()
-        .expect("run mkfifo");
-    assert!(made.success());
+    rustix::fs::mknodat(
+        rustix::fs::CWD,
+        path,
+        rustix::fs::FileType::Fifo,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        0,
+    )
+    .expect("make a fifo");
 }
 
 #[cfg(unix)]
@@ -535,4 +530,62 @@ fn ignore_file_that_is_a_fifo_inside_the_linted_directory_is_refused_without_bei
         special_file_error_within_five_seconds(&linked, ".ignore"),
         "repo/.ignore"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn ignore_file_with_a_second_name_outside_the_linted_directory_is_refused_and_left_alone() {
+    for name in [".gitignore", ".ignore"] {
+        let dir = TempDir::new().expect("tempdir");
+        let base = dir.path().canonicalize().expect("canonical");
+        write(&base, "repo/AGENTS.md", "# Root\n");
+        write(&base, "repo/services/AGENTS.md", "# Services\n");
+        let outside = write(&base, "outside", "AGENTS.md\n");
+
+        for holder in ["repo", "repo/services"] {
+            let planted = base.join(holder).join(name);
+            fs::hard_link(&outside, &planted).expect("hard link the ignore file");
+
+            let refused = discover_context_roots(&base.join("repo"));
+
+            assert!(
+                matches!(
+                    &refused,
+                    Err(LintError::IgnoreFileHardLinked { path }) if path == &planted
+                ),
+                "{holder}/{name}: {refused:?}"
+            );
+            assert_eq!(
+                fs::read_to_string(&outside).expect("read outside file"),
+                "AGENTS.md\n"
+            );
+            fs::remove_file(&planted).expect("remove the hard link");
+        }
+        assert_eq!(
+            relative_roots(&base.join("repo")),
+            [
+                PathBuf::from("AGENTS.md"),
+                PathBuf::from("services/AGENTS.md"),
+            ]
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn ignore_file_caught_in_a_link_loop_fails_discovery_and_names_the_file() {
+    for name in [".gitignore", ".ignore"] {
+        let dir = TempDir::new().expect("tempdir");
+        let base = dir.path().canonicalize().expect("canonical");
+        write(&base, "repo/AGENTS.md", "# Root\n");
+        let looping = base.join("repo").join(name);
+        std::os::unix::fs::symlink(name, &looping).expect("link the ignore file to itself");
+
+        let refused = discover_context_roots(&base.join("repo"));
+
+        assert!(
+            matches!(&refused, Err(LintError::Walk { dir, .. }) if dir == &looping),
+            "{name}: {refused:?}"
+        );
+    }
 }

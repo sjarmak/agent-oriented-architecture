@@ -223,11 +223,7 @@ fn enforce_check_fails_closed_on_a_fifo_span_log() {
     let repo = TempDir::new().unwrap();
     let log = live_log_path(repo.path());
     std::fs::create_dir_all(log.parent().unwrap()).unwrap();
-    let made = std::process::Command::new("mkfifo")
-        .arg(&log)
-        .status()
-        .expect("mkfifo is available");
-    assert!(made.success(), "mkfifo failed");
+    make_fifo(&log);
 
     aoa_stdin()
         .timeout(std::time::Duration::from_secs(20))

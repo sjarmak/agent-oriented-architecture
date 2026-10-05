@@ -19,6 +19,18 @@ fn aoa() -> Command {
 }
 
 #[cfg(unix)]
+fn make_fifo(path: &Path) {
+    rustix::fs::mknodat(
+        rustix::fs::CWD,
+        path,
+        rustix::fs::FileType::Fifo,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        0,
+    )
+    .expect("make a fifo");
+}
+
+#[cfg(unix)]
 #[path = "cli_sections/audit_git_environment.rs"]
 mod audit_git_environment;
 #[path = "cli_sections/audit_observe_lint.rs"]

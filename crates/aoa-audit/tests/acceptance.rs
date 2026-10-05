@@ -25,6 +25,18 @@ fn fixture_repo() -> TempDir {
     dir
 }
 
+#[cfg(unix)]
+fn make_fifo(path: &Path) {
+    rustix::fs::mknodat(
+        rustix::fs::CWD,
+        path,
+        rustix::fs::FileType::Fifo,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        0,
+    )
+    .expect("make a fifo");
+}
+
 /// Recursively collect every file path under `root`, relative to `root`.
 fn file_set(root: &Path) -> HashSet<PathBuf> {
     fn walk(dir: &Path, root: &Path, out: &mut HashSet<PathBuf>) {
@@ -290,11 +302,7 @@ fn write_trace_refuses_a_fifo_without_hanging() {
     let repo = fixture_repo();
     let outcome = observe(repo.path()).expect("observe succeeds");
     let fifo = outcome.traces_dir.join("blocked.json");
-    let made = std::process::Command::new("mkfifo")
-        .arg(&fifo)
-        .status()
-        .expect("mkfifo is available");
-    assert!(made.success(), "mkfifo failed");
+    make_fifo(&fifo);
 
     let err = write_trace(&outcome, "blocked.json", &valid_trace())
         .expect_err("write_trace must refuse a FIFO");
@@ -435,11 +443,7 @@ mod install_path_symlinks {
         let repo = fixture_repo();
         std::fs::create_dir(repo.path().join(".aoa")).expect("create .aoa");
         let planted = repo.path().join(".aoa/.gitignore");
-        let made = std::process::Command::new("mkfifo")
-            .arg(&planted)
-            .status()
-            .expect("mkfifo is available");
-        assert!(made.success(), "mkfifo failed");
+        make_fifo(&planted);
 
         let (tx, rx) = mpsc::channel();
         let repo_path = repo.path().to_path_buf();
@@ -1302,11 +1306,7 @@ fn a_back_pointer_that_is_a_fifo_is_refused_without_hanging() {
     let (main, _linked_parent, linked) = linked_worktree_with_main_hook();
     let back_pointer = main.path().join(".git/worktrees/linked/gitdir");
     std::fs::remove_file(&back_pointer).expect("remove the back-pointer");
-    let made = std::process::Command::new("mkfifo")
-        .arg(&back_pointer)
-        .status()
-        .expect("mkfifo is available");
-    assert!(made.success(), "mkfifo failed");
+    make_fifo(&back_pointer);
 
     assert!(pre_commit_plane_missing(&linked));
 }
@@ -1318,11 +1318,7 @@ fn a_git_config_that_is_a_fifo_fails_the_audit_instead_of_hanging() {
     write_hook(&repo.path().join(".git/hooks/pre-commit"));
     let config = repo.path().join(".git/config");
     std::fs::remove_file(&config).expect("remove the config");
-    let made = std::process::Command::new("mkfifo")
-        .arg(&config)
-        .status()
-        .expect("mkfifo is available");
-    assert!(made.success(), "mkfifo failed");
+    make_fifo(&config);
 
     let refused = audit(repo.path(), &audit_config()).expect_err("git never answers");
 

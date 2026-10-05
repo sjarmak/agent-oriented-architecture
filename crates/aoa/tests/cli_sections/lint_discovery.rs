@@ -66,11 +66,7 @@ fn lint_context_output_does_not_depend_on_an_ignore_file_above_the_linted_direct
             assert!(output.status.success(), "{name}: {stderr}");
         }
 
-        let made = Command::new("mkfifo")
-            .arg(dir.path().join("outside"))
-            .status()
-            .expect("run mkfifo");
-        assert!(made.success());
+        make_fifo(&dir.path().join("outside"));
         std::os::unix::fs::symlink("outside", &above).expect("link to a fifo");
         let while_a_fifo = lint_outputs_within_five_seconds(&repo);
         assert_eq!(while_absent, while_a_fifo, "{name}");
@@ -99,11 +95,7 @@ fn lint_context_refuses_an_ignore_file_that_is_a_fifo_instead_of_waiting_on_it()
         let repo = dir.path().join("repo");
         std::fs::create_dir(&repo).expect("create repo");
         std::fs::write(repo.join("AGENTS.md"), "# Root\n").expect("write root");
-        let made = Command::new("mkfifo")
-            .arg(repo.join(name))
-            .status()
-            .expect("run mkfifo");
-        assert!(made.success());
+        make_fifo(&repo.join(name));
 
         for output in lint_outputs_within_five_seconds(&repo) {
             let stderr = String::from_utf8_lossy(&output.stderr);

@@ -22,6 +22,9 @@ pub enum LintError {
     #[error("ignore file {path} is not a regular file")]
     IgnoreFileNotRegular { path: PathBuf },
 
+    #[error("ignore file {path} has another name, so what it holds can be written from outside the linted directory")]
+    IgnoreFileHardLinked { path: PathBuf },
+
     #[error("no context files to lint")]
     NoRoots,
 }

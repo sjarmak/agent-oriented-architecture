@@ -1,4 +1,4 @@
-use std::fs::File;
+use std::fs::{File, Metadata};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -93,23 +93,50 @@ fn is_walked_dir(entry: &DirEntry) -> bool {
 fn refuse_unsafe_ignore_files(linted: &Path, dir: &Path) -> Result<(), LintError> {
     for name in IGNORE_FILE_NAMES {
         let path = dir.join(name);
-        let is_link = path
-            .symlink_metadata()
-            .is_ok_and(|found| found.file_type().is_symlink());
-        if is_link && leaves_boundary(&path, linted)? {
+        let Some(entry) = found(&path, Path::symlink_metadata)? else {
+            continue;
+        };
+        if entry.file_type().is_symlink() && leaves_boundary(&path, linted)? {
             return Err(LintError::IgnoreFileOutside {
                 path,
                 dir: linted.to_path_buf(),
             });
         }
-        let blocks_on_open = path
-            .metadata()
-            .is_ok_and(|reached| !reached.is_file() && !reached.is_dir());
-        if blocks_on_open {
+        let Some(reached) = found(&path, Path::metadata)? else {
+            continue;
+        };
+        if !reached.is_file() && !reached.is_dir() {
             return Err(LintError::IgnoreFileNotRegular { path });
+        }
+        if reached.is_file() && has_another_name(&reached) {
+            return Err(LintError::IgnoreFileHardLinked { path });
         }
     }
     Ok(())
+}
+
+fn found(
+    path: &Path,
+    read: fn(&Path) -> std::io::Result<Metadata>,
+) -> Result<Option<Metadata>, LintError> {
+    match read(path) {
+        Ok(found) => Ok(Some(found)),
+        Err(absent) if absent.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(LintError::Walk {
+            dir: path.to_path_buf(),
+            source: source.into(),
+        }),
+    }
+}
+
+#[cfg(unix)]
+fn has_another_name(file: &Metadata) -> bool {
+    std::os::unix::fs::MetadataExt::nlink(file) > 1
+}
+
+#[cfg(not(unix))]
+fn has_another_name(_file: &Metadata) -> bool {
+    false
 }
 
 fn require_readable_ignore_files(dir: &Path) -> Result<(), LintError> {
