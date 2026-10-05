@@ -130,7 +130,7 @@ fn is_the_file_at(entry: &Path, file: &Path) -> std::io::Result<bool> {
 
 #[cfg(not(unix))]
 fn is_the_file_at(entry: &Path, file: &Path) -> std::io::Result<bool> {
-    Ok(entry == file)
+    Ok(std::fs::canonicalize(entry)? == std::fs::canonicalize(file)?)
 }
 
 fn replace(path: &Path, body: &str, permissions: std::fs::Permissions) -> Result<(), BudgetError> {
