@@ -39,13 +39,35 @@ A write is checked against the policy of every governed repository that
 encloses the target, from the innermost outward, and it is refused if any of
 them refuses.
 
-- The walk is `governing_roots` in `crates/aoa/src/commands/enforce.rs`. It
-  starts from the target, not from the session: the innermost root is the one
-  `resolve_repository_root` gives for the target's nearest existing ancestor
-  directory, and each further root is the one it gives for the directory above
-  the last. Every root is found by the same resolver, with the same refusals,
-  as the session's own. A session in the parent that writes into `nested/` is
-  therefore held to the refusals `nested` adds.
+- The walk is `governed_write` in `crates/aoa/src/commands/enforce.rs`, and
+  it starts from the written path, not from the session. The path is walked
+  component by component, each inspected without following links
+  (`resolve_written_path` in `aoa-path-trust`): a component that is a link is
+  read and the walk continues from what it names, and every link passed
+  records one *spelling*, the canonical path of the link's parent directory
+  joined with the link's name and the rest of the path as written, unresolved.
+  The walk follows at most 40 links (`MAX_LINKS_FOLLOWED`) and refuses the
+  write past that bound, as the resolver's own `ELOOP`. Where the walk ends is
+  the canonical target. The governing roots are the repositories enclosing
+  the canonical target's nearest existing ancestor directory and, for each
+  spelling, the repositories enclosing that link's canonical parent directory,
+  together with the repositories enclosing the session's own; every chain is
+  found by `resolve_repository_root`, with the same refusals as the session's
+  own. A root more than one chain reaches is listed once, and the list is
+  ordered innermost first by path depth, so with `/O`, `/O/P`, `/O/P/Q` and
+  `/O/P/Q/linked` a link to `/O/P/real`, a write to `/O/P/Q/linked/src.rs`
+  lists `Q`, `P`, `O`, and a refusal by `Q` names `Q`. Each root's policy is
+  evaluated, through `scope_under`, against the written path and against
+  every spelling, and the write is refused if any match refuses. With `/alias`
+  a link to `/real` above every repository and `/real/O/P/linked` a link to a
+  repository `/D`, a write spelled `/alias/O/P/linked/src.rs` from a session
+  in `/D` is governed by `/D`, where it lands, and by `/O/P` and `/O`, where
+  the inner link is spelled; `/O/P` matches its patterns against
+  `linked/src.rs` and keeps its reproduction requirement. `/O/P` has no
+  pattern for `/D`'s own paths, because nothing inside `/O/P` is written: a
+  policy author who wants writes through such a link refused protects the
+  alias, and the alias match can only add a refusal. A session in the parent
+  that writes into `nested/` is likewise held to the refusals `nested` adds.
 - Scope is unchanged from aoa-7g14y.1. A target that lies outside every
   repository enclosing the session's own is out of scope: it is allowed, no
   policy is read for it and nothing is recorded. Starting the walk from the
@@ -86,28 +108,6 @@ them refuses.
   encloses.
 
 ## Consequences
-
-**A write is governed where it lands and where it is spelled.** The governing
-roots are the union of the repositories enclosing the canonical target, found
-from its nearest existing ancestor directory with symlinks resolved, and the
-repositories enclosing the spelled path, found from the spelled path's nearest
-existing ancestor directory without following a link at any component (`lstat`,
-so with `/O/P/linked` a link the spelled walk starts at `/O/P`). A root both
-walks reach is evaluated once, and each root still matches its patterns through
-`scope_under`, against the spelling and the destination as that root sees them.
-With `/P/nested` a link to `/P/real`, a write to `nested/src/lib.rs` is checked
-against `/P`'s policy as `real/src/lib.rs`, and a policy protecting
-`real/src/**` refuses it. With `/O/P/linked` a link to a repository `/D`
-outside `/O`, a write to `/O/P/linked/src.rs` is governed by `/D` and the
-repositories enclosing it, where it lands, and by `/O/P` and the repositories
-enclosing it, where it is spelled: `/O/P` matches its patterns against
-`linked/src.rs` and keeps its reproduction requirement whether the session sits
-in `/O/P` or in `/O`. Before this the spelled repository was consulted only when
-it enclosed the session's own, so a session in `/O` wrote through `/O/P`'s link
-unrefused while a session in `/O/P` was refused. `/O/P` has no pattern for
-`/D`'s own paths, because nothing inside `/O/P` is written; a policy author who
-wants writes through such a link refused has to protect the alias, and the
-alias match can only add a refusal.
 
 **The walk stops where the resolver stops.** The resolver strips
 `GIT_CEILING_DIRECTORIES` (record 0007) and walks `.git` entries to the
@@ -177,11 +177,19 @@ scope; a write through a linked directory is refused at the location it lands
 in, one through a link to another repository by that repository's policy, and
 one through a link a nested repository spells by that repository's alias
 pattern from a session in the enclosing repository as well as from one in the
-nested repository itself;
+nested repository itself, one spelled through a link above every repository by
+the repository owning the inner link from a session in the repository it lands
+in, one through a nested link by the innermost refusing repository by name, and
+one through a chain of two links by either repository spelling a link in it; a
+path that loops through links is refused;
 a symlinked, dangling or malformed policy refuses, including the session's own;
 a write into the session's own `.git/hooks` is denied.
 Each refusal test proves the planted target was not modified.
 `crates/aoa-path-trust/src/nofollow.rs` and `dirfd.rs` hold the reader's own
-refusals as unit tests, including a name of more than one component. The
-`governing_roots` unit test in `enforce.rs` shows a repository that encloses
-both the spelling and the destination is listed once.
+refusals as unit tests, including a name of more than one component, and
+`resolve.rs` holds the spelling walk's: the spelling recorded at each link of
+a chain, a loop refused at the bound, and a chain as long as the bound still
+resolved. The `governed_write` unit tests in `enforce.rs` show a root every
+chain reaches is listed once with its spelling listed once, roots ordered
+innermost first whichever chain found them, and a chain of links collecting
+every repository it passes through.
