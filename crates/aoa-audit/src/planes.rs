@@ -345,11 +345,7 @@ fn names_enforcement(command: &str) -> bool {
         .split_whitespace()
         .map(|word| word.trim_matches(|c| matches!(c, '"' | '\'' | ';')))
         .collect();
-    let runs_wrapper = words.iter().any(|word| {
-        word.strip_suffix(ENFORCE_WRAPPER_REL)
-            .is_some_and(|parent| parent.is_empty() || parent.ends_with('/'))
-    });
-    runs_wrapper
+    words.iter().any(|word| word.ends_with(ENFORCE_WRAPPER_REL))
         || words
             .windows(2)
             .any(|pair| pair[0].rsplit('/').next() == Some("aoa") && pair[1] == "enforce")
@@ -576,6 +572,83 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn old_token_matcher(command: &str, verb: &str) -> bool {
+        let words: Vec<&str> = command
+            .split_whitespace()
+            .map(|word| word.trim_matches(|c| matches!(c, '"' | '\'' | ';')))
+            .collect();
+        if words.iter().any(|word| word.ends_with(ENFORCE_WRAPPER_REL)) {
+            return words.contains(&verb);
+        }
+        let [entrypoint, rest @ ..] = words.as_slice() else {
+            return false;
+        };
+        entrypoint.split('/').next_back() == Some("aoa") && rest == ["enforce", verb]
+    }
+
+    fn pick<'a>(index: &mut usize, options: &[&'a str]) -> &'a str {
+        let picked = options[*index % options.len()];
+        *index /= options.len();
+        picked
+    }
+
+    #[test]
+    fn every_command_the_old_token_matcher_accepted_is_still_accepted_or_warned() {
+        let wrapper_lookalike = format!("{ENFORCE_WRAPPER_REL}ment");
+        let other_binary = "notaoa enforce";
+        let prefixes = [
+            "", "true;", "true&&", "true; ", "/opt/x", "./", "\"", "'", "x",
+        ];
+        let entrypoints = [
+            ENFORCE_WRAPPER_REL,
+            "aoa enforce",
+            "/usr/bin/aoa enforce",
+            other_binary,
+            &wrapper_lookalike,
+        ];
+        let joiners = [" ", "  ", "\t"];
+        let verbs = ENFORCE_HOOK_SET.map(|(_, verb)| verb);
+        let suffixes = ["", ";", "\"", "'", " || true"];
+        let combinations = [
+            prefixes.len(),
+            entrypoints.len(),
+            joiners.len(),
+            verbs.len(),
+            suffixes.len(),
+        ]
+        .iter()
+        .product();
+
+        let mut old_accepted = 0;
+        let mut dropped = Vec::new();
+        let mut lookalikes_warned = Vec::new();
+        for combination in 0..combinations {
+            let mut index = combination;
+            let prefix = pick(&mut index, &prefixes);
+            let entrypoint = pick(&mut index, &entrypoints);
+            let joiner = pick(&mut index, &joiners);
+            let verb = pick(&mut index, &verbs);
+            let suffix = pick(&mut index, &suffixes);
+            let command = format!("{prefix}{entrypoint}{joiner}{verb}{suffix}");
+
+            if old_token_matcher(&command, verb) {
+                old_accepted += 1;
+                if !is_enforce_command(&command, verb) && !names_enforcement(&command) {
+                    dropped.push(command.clone());
+                }
+            }
+            if (entrypoint == other_binary || entrypoint == wrapper_lookalike)
+                && names_enforcement(&command)
+            {
+                lookalikes_warned.push(command);
+            }
+        }
+
+        assert_ne!(old_accepted, 0);
+        assert_eq!(dropped, Vec::<String>::new());
+        assert_eq!(lookalikes_warned, Vec::<String>::new());
     }
 
     #[test]

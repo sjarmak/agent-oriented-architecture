@@ -242,7 +242,7 @@ impl HookSetDefect {
                 "{wrapper} is not executable; enforce hooks cannot run — rerun `aoa observe --enforce`"
             ),
             HookSetDefect::CommandNotInstallerWritten => format!(
-                "{settings} registers an enforce hook command the installer did not write, which does not count as the runtime plane; rerun `aoa observe --enforce`"
+                "{settings} names an enforce hook command the installer did not write, which does not count as the runtime plane; rerun `aoa observe --enforce`"
             ),
         }
     }
@@ -484,6 +484,9 @@ mod tests {
             |verb: &str| format!("aoa  enforce {verb}"),
             |verb: &str| format!("aoa\tenforce {verb}"),
             |verb: &str| format!("'aoa' enforce {verb}"),
+            |verb: &str| format!("true;{ENFORCE_WRAPPER_REL} {verb}"),
+            |verb: &str| format!("true&&{ENFORCE_WRAPPER_REL} {verb}"),
+            |verb: &str| format!("/opt/x{ENFORCE_WRAPPER_REL} {verb}"),
         ] {
             let mut hooks = serde_json::Map::new();
             for (event, verb) in crate::hook_set::ENFORCE_HOOK_SET {
