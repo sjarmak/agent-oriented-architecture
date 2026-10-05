@@ -151,14 +151,22 @@ action. That is what lets the gate predict the deploy. To bump, change every
 occurrence in both workflows in one commit;
 `crates/aoa/tests/likec4_pin.rs` fails the workspace tests if any of them names
 a different or a moving version, if a run step invokes likec4 with no version at
-all, or if an action step drops the input. It also fails if the validating step
-is removed, if its `run` is anything but `npx -y likec4@<version> validate
-architecture` (an `echo` in front, a `|| true` after, or a `shell:` key on the
-step would let the step pass without the validator's verdict), if the step or
-its job carries `if`, `continue-on-error` or `needs`, or if the `pull_request`
-trigger carries any filter. The test is a drift guard: each of those is the
-cheapest structural check that turns the edit red, not a model of what GitHub
-would schedule.
+all (shell quotes around the package do not hide it), or if an action step drops
+the input. It also fails if the validating step is removed, if its `run` is
+anything but `npx -y likec4@<version> validate architecture` (an `echo` in
+front, a `|| true` after, or a `shell:` key on the step would let the step pass
+without the validator's verdict), if the step or its job carries `if`,
+`continue-on-error` or `needs`, if a `defaults.run.shell` on the job or on the
+workflow reaches the step, or if the `pull_request` trigger carries any filter.
+Each of those is the cheapest structural check that turns the edit red, not a
+model of what GitHub would schedule.
+
+The test is a drift guard, and that is the whole of its scope: it catches the
+plausible accidental edit (a version bumped in one place, a filter added for
+speed, a step made tolerant to get CI green) and does not try to defeat a
+deliberate edit meant to disable the check, which reviewing the workflow change
+covers. A legitimate workflow shape it does not understand may fail it; the
+failure message then says to teach the test.
 
 What the pin does not reach: `npx` still resolves the dependency tree below
 likec4 on every run, since there is no lockfile for it as there is for the
