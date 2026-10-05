@@ -119,8 +119,48 @@ oversight:
   endpoints are checked; their steps are not. The one step that had gone
   factually wrong about the run itself (`recommend -> migrator` in
   `migrateFlow`) was routed through the CLI, which is what performs it.
-- **LikeC4's own validator.** It runs in the Pages workflow, which triggers on
-  push to main, so a model that this test parses but LikeC4 does not would reach
-  main before anything said so. Adding `likec4 validate` to PR CI means either
-  an unpinned network fetch on every pull request or a pinned version to
-  maintain; filed as its own unit of work rather than folded in here.
+
+This record originally listed a second limit, **LikeC4's own validator**: it ran
+only in the Pages workflow, which triggers on push to main, so a model this test
+parses but LikeC4 rejects reached main before anything said so. Closing it meant
+choosing between an unpinned network fetch on every pull request and a pinned
+version to maintain, which is why it was deferred rather than folded in.
+
+aoa-vvvtx made that choice. `.github/workflows/rust-ci.yml` now carries a
+`likec4` job, so `likec4 validate architecture` runs on every pull request, and
+a model LikeC4 rejects fails that pull request instead of the deploy after it.
+It is its own job rather than a step in `ci` because it needs a newer Node than
+that job's ESLint install: the pinned release declares the Node it supports in
+its `engines` field, and both workflows have to provide it.
+
+The version is pinned to one exact release rather than floating on `@latest`:
+
+- A gate whose verdict depends on when it ran is not a gate. Floating lets an
+  upstream release change what "valid" means between a pull request's run and
+  the merge run, and turn every open pull request red with no commit here.
+- `npx -y likec4@latest` fetches and executes whatever was published minutes
+  ago, on every pull request. A pin makes a new likec4 arrive as a diff somebody
+  reads.
+- It is already the convention for CI tools in that workflow (`ruff`,
+  `cargo-llvm-cov`). The cost is a bump commit, which both already pay.
+
+`likec4-pages.yml` runs the same release in all three places it runs likec4: the
+`export json` step names it, and the two `likec4/actions` steps take it through
+the action's `likec4-version` input instead of the likec4 bundled with the
+action. That is what lets the gate predict the deploy. To bump, change every
+occurrence in both workflows in one commit;
+`crates/aoa/tests/likec4_pin.rs` fails the workspace tests if any of them names
+a different or a moving version, if an action step drops the input, or if the
+validating step is removed, made conditional, or path-filtered.
+
+What the pin does not reach: `npx` still resolves the dependency tree below
+likec4 on every run, since there is no lockfile for it as there is for the
+vendored ESLint, and `likec4/actions@v1` is itself a moving tag whose wrapper
+code can change under the pinned likec4.
+
+That job's reach is wider than this test's, not narrower: LikeC4 reads all four
+sources under `architecture/`, while the parser here opens only `model.c4` and
+`views.c4`. A dangling `instanceOf` in `deployment.c4` passes every assertion
+above and fails `likec4 validate`. Neither subsumes the other: LikeC4 checks
+that the model is well-formed and says nothing about whether its arrows match
+the crates on disk, which is the only thing this test checks.

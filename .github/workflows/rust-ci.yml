@@ -51,6 +51,17 @@ jobs:
         run: pipx install ruff==0.15.8
       - name: Test
         run: cargo test --workspace
+  likec4:
+    name: LikeC4 validate, version pinned (why and how to bump in docs/adr/0006-architecture-model-conformance.md)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate architecture model (LikeC4)
+        run: npx -y likec4@1.59.2 validate architecture
   # Workspace coverage, measured and gated. Separate job so the instrumented
   # build (different artifacts, ~2-4x slower) never sits on the fmt/clippy/test
   # critical path and a coverage failure is diagnosable on its own.

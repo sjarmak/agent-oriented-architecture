@@ -135,9 +135,13 @@ crates is an arrow, so adding a crate or changing an edge means editing the
 model. `crates/aoa/tests/architecture_model.rs` fails the workspace tests
 otherwise, and
 [docs/adr/0006-architecture-model-conformance.md](docs/adr/0006-architecture-model-conformance.md)
-records the rule and what it deliberately leaves unenforced. The model's
-containers group by concern and do not mirror the layers above — the layer list
-here is the one that decides where new code goes.
+records the rule and what it deliberately leaves unenforced. Whether the model is
+well-formed at all is a separate question, and LikeC4's own validator answers it
+on every pull request from `rust-ci.yml`'s `likec4` job, at a version pinned to
+match `likec4-pages.yml` — `crates/aoa/tests/likec4_pin.rs` fails the workspace
+tests if the two drift apart. The model's containers group by concern and do not
+mirror the layers above — the layer list here is the one that decides where new
+code goes.
 
 ## Decision records
 

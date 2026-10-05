@@ -48,13 +48,6 @@
 // separately by crates/aoa/tests/architecture_doc.rs. The two do not line up
 // element for element — `recommend` sits under measurement here and in
 // decisions there — so reading one as the other will mislead you.
-//
-// The dynamic views in views.c4 are walkthroughs of what happens at run time,
-// not claims about the build graph, and are deliberately not held to the rules
-// above; only their endpoints are checked. Also left unenforced on purpose
-// (aoa-enzj8): LikeC4's own validator runs on push to main, so a model that
-// parses for the test above but not for LikeC4 reaches main before anything
-// says so.
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Elements carry `link`s to their source crate so a reviewer can jump from

@@ -18,17 +18,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
       - name: Check model source links resolve (drift guard)
         run: node architecture/site/check-links.mjs
       - uses: likec4/actions@v1
-        with: { export: png, path: architecture, output: _site/figures }
+        with: { export: png, path: architecture, output: _site/figures, likec4-version: '1.59.2' }
       - uses: likec4/actions@v1
-        with: { action: build, path: architecture, output: _site/explore, base: /agent-oriented-architecture/explore/, use-hash-history: 'true' }
+        with: { action: build, path: architecture, output: _site/explore, base: /agent-oriented-architecture/explore/, use-hash-history: 'true', likec4-version: '1.59.2' }
       - name: Assemble website-matched landing page
         run: |
           sudo chown -R "$USER":"$USER" _site
-          npx -y likec4@latest export json architecture -o model.json
+          npx -y likec4@1.59.2 export json architecture -o model.json
           node architecture/site/build-page.mjs --model model.json --figures _site/figures --out _site/index.html --repo agent-oriented-architecture --explore ./explore/
           cp architecture/site/styles.css architecture/site/favicon.svg _site/
           cp -r architecture/site/fonts _site/fonts
