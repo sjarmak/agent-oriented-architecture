@@ -23,6 +23,8 @@ const CI_MARKERS: &[&str] = &[
 
 const MACHINE_CONFIG_ENV: [&str; 2] = ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"];
 
+const ASSUMED_OWNERSHIP_ENV: &str = "GIT_TEST_ASSUME_DIFFERENT_OWNER";
+
 #[cfg(unix)]
 const NULL_DEVICE: &str = "/dev/null";
 #[cfg(not(unix))]
@@ -243,6 +245,7 @@ fn answer_within_deadline(command: &mut Command, repo: &Path) -> Result<GitAnswe
 
 fn git(repo: &Path) -> Command {
     let mut command = git_free_of_inherited_state();
+    command.env_remove(ASSUMED_OWNERSHIP_ENV);
     for variable in MACHINE_CONFIG_ENV {
         command.env(variable, NULL_DEVICE);
     }

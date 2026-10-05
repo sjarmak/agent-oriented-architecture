@@ -34,6 +34,10 @@ const INHERITED_TRACE_VARIABLES: [&str; 5] = [
 
 const STANDARD_OUTPUT: &str = "/dev/stdout";
 
+const ASSUMED_OWNERSHIP_VARIABLE: [&str; 1] = ["GIT_TEST_ASSUME_DIFFERENT_OWNER"];
+
+const ASSUMED: &str = "1";
+
 fn repository_with_a_pre_commit_hook() -> TempDir {
     let repo = TempDir::new().expect("tempdir");
     init_git_repo(repo.path());
@@ -94,5 +98,16 @@ fn audit_reads_the_pre_commit_plane_the_same_when_the_caller_traces_git_to_stand
     assert!(
         changed_the_answer.is_empty(),
         "the caller's git tracing changed what the audit reports: {changed_the_answer:?}"
+    );
+}
+
+#[test]
+fn audit_reads_the_pre_commit_plane_the_same_when_the_caller_has_git_assume_a_different_owner() {
+    let changed_the_answer =
+        variables_that_change_the_answer(&ASSUMED_OWNERSHIP_VARIABLE, OsStr::new(ASSUMED));
+
+    assert!(
+        changed_the_answer.is_empty(),
+        "the caller's assumed ownership changed what the audit reports: {changed_the_answer:?}"
     );
 }
