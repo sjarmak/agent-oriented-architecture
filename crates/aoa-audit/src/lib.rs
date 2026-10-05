@@ -37,10 +37,10 @@ pub use audit::{
 };
 pub use error::AuditError;
 pub use hook_set::{
-    hook_command, hook_set_defect, matchers_running, misplaced_matcher, superseded_hook_commands,
-    HookScope, HookSetDefect, AOA_SETTINGS_KEY, BLOCK_EXIT_CODE, COMMAND_HOOK_TYPE,
-    ENFORCE_HOOK_SET, ENFORCE_HOOK_SET_VERSION, ENFORCE_WRAPPER_REL, HOOK_VERSION_KEY,
-    LOCAL_SETTINGS_REL, SETTINGS_REL,
+    hook_command, hook_set_defect, matchers_running, misplaced_matcher, runs_detached,
+    superseded_hook_commands, HookScope, HookSetDefect, AOA_SETTINGS_KEY, BLOCK_EXIT_CODE,
+    COMMAND_HOOK_TYPE, ENFORCE_HOOK_SET, ENFORCE_HOOK_SET_VERSION, ENFORCE_WRAPPER_REL,
+    HOOK_VERSION_KEY, LOCAL_SETTINGS_REL, SETTINGS_REL,
 };
 pub use liveness::{enforcement_liveness, EnforcementLiveness, Silence};
 pub use observe::{

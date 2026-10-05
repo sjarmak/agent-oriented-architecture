@@ -11,8 +11,9 @@ use serde_json::Value;
 use crate::answer::{Answering, POLL_INTERVAL};
 use crate::error::AuditError;
 use crate::hook_set::{
-    hook_command, hooks_disabled, matchers_running, read_settings, superseded_hook_commands,
-    HookScope, AOA_SETTINGS_KEY, ENFORCE_HOOK_SET, ENFORCE_WRAPPER_REL, SETTINGS_REL,
+    hook_command, hooks_disabled, matchers_running, read_settings, runs_detached,
+    superseded_hook_commands, HookScope, AOA_SETTINGS_KEY, ENFORCE_HOOK_SET, ENFORCE_WRAPPER_REL,
+    SETTINGS_REL,
 };
 use crate::tier::EnforcementPlane;
 
@@ -218,7 +219,7 @@ fn answer_within_deadline(command: &mut Command, repo: &Path) -> Result<GitAnswe
     };
     let started = Instant::now();
     loop {
-        let waited = match answering.take_written() {
+        let waited = match answering.take_written(started + GIT_DEADLINE) {
             Ok(()) => child
                 .try_wait()
                 .map_err(|source| unasked("git could not be waited for", &source)),
@@ -422,6 +423,14 @@ pub(crate) fn enforce_hook_matchers<'a>(
         .and_then(Value::as_array)
         .map(|groups| matchers_running(groups, |command| is_enforce_command(command, verb)))
         .unwrap_or_default()
+}
+
+pub(crate) fn enforce_hook_detached(settings: &Value, event: &str, verb: &str) -> bool {
+    settings
+        .get("hooks")
+        .and_then(|hooks| hooks.get(event))
+        .and_then(Value::as_array)
+        .is_some_and(|groups| runs_detached(groups, |command| is_enforce_command(command, verb)))
 }
 
 fn is_enforce_command(command: &str, verb: &str) -> bool {
@@ -919,6 +928,20 @@ mod tests {
 
             assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::Missing);
             assert!(runtime_hook_missing(repo.path()));
+        }
+    }
+
+    #[test]
+    fn an_enforce_hook_set_the_host_does_not_wait_for_does_not_satisfy_the_plane() {
+        for key in ["async", "asyncRewake"] {
+            let mut installed: Value =
+                serde_json::from_str(&hook_set_settings(hook_command, contract_matcher)).unwrap();
+            installed["hooks"]["PreToolUse"][0]["hooks"][0][key] = true.into();
+            let repo = tempfile::tempdir().unwrap();
+            settings(repo.path(), &installed.to_string());
+
+            assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::Missing, "{key}");
+            assert!(runtime_hook_missing(repo.path()), "{key}");
         }
     }
 

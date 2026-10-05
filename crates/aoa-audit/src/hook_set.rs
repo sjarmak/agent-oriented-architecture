@@ -40,6 +40,8 @@ pub const COMMAND_HOOK_TYPE: &str = "command";
 
 const DISABLE_ALL_HOOKS_KEY: &str = "disableAllHooks";
 
+const DETACHING_KEYS: [&str; 2] = ["async", "asyncRewake"];
+
 /// Bumped whenever [`hook_command`] changes shape, so a repo carrying the old
 /// spelling reports as behind and re-running the installer retires it.
 pub const ENFORCE_HOOK_SET_VERSION: u64 = 3;
@@ -225,6 +227,7 @@ pub fn matchers_running(groups: &[Value], runs: impl Fn(&str) -> bool) -> Vec<Op
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
+                .filter(|hook| !detached(hook))
                 .filter_map(run_command)
                 .any(&runs)
         })
@@ -232,10 +235,27 @@ pub fn matchers_running(groups: &[Value], runs: impl Fn(&str) -> bool) -> Vec<Op
         .collect()
 }
 
+#[must_use]
+pub fn runs_detached(groups: &[Value], runs: impl Fn(&str) -> bool) -> bool {
+    groups
+        .iter()
+        .filter_map(|group| group.get("hooks").and_then(Value::as_array))
+        .flatten()
+        .filter(|hook| detached(hook))
+        .filter_map(run_command)
+        .any(runs)
+}
+
 fn run_command(hook: &Value) -> Option<&str> {
     (hook.get("type").and_then(Value::as_str) == Some(COMMAND_HOOK_TYPE))
         .then(|| hook.get("command").and_then(Value::as_str))
         .flatten()
+}
+
+fn detached(hook: &Value) -> bool {
+    DETACHING_KEYS
+        .iter()
+        .any(|key| hook.get(key).is_some_and(|set| set != &Value::Bool(false)))
 }
 
 #[must_use]
@@ -291,6 +311,10 @@ pub enum HookSetDefect {
         verb: &'static str,
         found: Option<String>,
         required: String,
+    },
+    HookDetached {
+        event: &'static str,
+        verb: &'static str,
     },
 }
 
@@ -356,6 +380,11 @@ impl HookSetDefect {
                     |found| format!("matcher \"{found}\"")
                 )
             ),
+            HookSetDefect::HookDetached { event, verb } => format!(
+                "{settings} runs the enforce \"{verb}\" hook on {event} with `async` or \
+                 `asyncRewake` set, so the host does not wait for it and it cannot block a \
+                 write. Remove that setting from the entry and rerun `aoa observe --enforce`"
+            ),
         }
     }
 }
@@ -381,6 +410,7 @@ pub fn hook_set_defect(repo: &Path) -> Option<HookSetDefect> {
     stamp_defect(repo, &settings)
         .or_else(|| disabled_defect(repo, &settings))
         .or_else(|| scope_defect(&settings))
+        .or_else(|| detached_defect(&settings))
         .or_else(|| {
             crate::planes::names_enforcement_without_installing_it(&settings)
                 .then_some(HookSetDefect::CommandNotInstallerWritten)
@@ -411,6 +441,13 @@ fn scope_defect(settings: &Value) -> Option<HookSetDefect> {
                 required,
             })
         })
+}
+
+fn detached_defect(settings: &Value) -> Option<HookSetDefect> {
+    ENFORCE_HOOK_SET
+        .into_iter()
+        .find(|(event, verb, _)| crate::planes::enforce_hook_detached(settings, event, verb))
+        .map(|(event, verb, _)| HookSetDefect::HookDetached { event, verb })
 }
 
 fn stamp_defect(repo: &Path, settings: &Value) -> Option<HookSetDefect> {
@@ -889,6 +926,73 @@ mod tests {
     fn settings_that_switch_hooks_off_with_no_enforce_install_have_nothing_to_report() {
         let repo = tempfile::tempdir().unwrap();
         write_settings(repo.path(), r#"{"disableAllHooks":true}"#);
+        assert_eq!(hook_set_defect(repo.path()), None);
+    }
+
+    fn detaching(mut installed: Value, event: &str, key: &str, set: Value) -> Value {
+        installed["hooks"][event][0]["hooks"][0][key] = set;
+        installed
+    }
+
+    #[test]
+    fn an_enforce_hook_the_host_does_not_wait_for_is_a_defect_naming_the_hook() {
+        let repo = stamped_repo(ENFORCE_HOOK_SET_VERSION);
+        for (event, verb) in [("PreToolUse", "check"), ("PermissionDenied", "deny")] {
+            for (key, set) in [
+                ("async", Value::Bool(true)),
+                ("asyncRewake", Value::Bool(true)),
+                ("async", "true".into()),
+            ] {
+                let installed = detaching(stamped_hook_set(contract_matcher), event, key, set);
+                write_settings(repo.path(), &installed.to_string());
+
+                let defect = hook_set_defect(repo.path());
+                assert_eq!(
+                    defect,
+                    Some(HookSetDefect::HookDetached { event, verb }),
+                    "{installed}"
+                );
+                let line = defect.unwrap().render_line(repo.path());
+                for expected in [event, &format!("\"{verb}\""), "async", SETTINGS_REL] {
+                    assert!(line.contains(expected), "{expected:?} missing from: {line}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_detached_copy_beside_the_installed_hook_is_still_a_defect() {
+        let repo = stamped_repo(ENFORCE_HOOK_SET_VERSION);
+        let mut installed = stamped_hook_set(contract_matcher);
+        installed["hooks"]["PreToolUse"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "matcher": HookScope::Mutation.matcher(),
+                "hooks": [{"type": "command", "command": hook_command("check"), "async": true}],
+            }));
+        write_settings(repo.path(), &installed.to_string());
+
+        assert_eq!(
+            hook_set_defect(repo.path()),
+            Some(HookSetDefect::HookDetached {
+                event: "PreToolUse",
+                verb: "check"
+            })
+        );
+    }
+
+    #[test]
+    fn a_hook_that_says_it_is_not_detached_has_no_defect() {
+        let repo = stamped_repo(ENFORCE_HOOK_SET_VERSION);
+        let installed = detaching(
+            stamped_hook_set(contract_matcher),
+            "PreToolUse",
+            "async",
+            Value::Bool(false),
+        );
+        write_settings(repo.path(), &installed.to_string());
+
         assert_eq!(hook_set_defect(repo.path()), None);
     }
 

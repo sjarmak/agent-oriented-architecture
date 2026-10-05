@@ -66,9 +66,10 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use aoa_audit::{
-    hook_command, hook_set_defect, matchers_running, misplaced_matcher, superseded_hook_commands,
-    HookScope, AOA_SETTINGS_KEY, BLOCK_EXIT_CODE, COMMAND_HOOK_TYPE, ENFORCE_HOOK_SET,
-    ENFORCE_HOOK_SET_VERSION, ENFORCE_WRAPPER_REL, HOOK_VERSION_KEY, SETTINGS_REL,
+    hook_command, hook_set_defect, matchers_running, misplaced_matcher, runs_detached,
+    superseded_hook_commands, HookScope, AOA_SETTINGS_KEY, BLOCK_EXIT_CODE, COMMAND_HOOK_TYPE,
+    ENFORCE_HOOK_SET, ENFORCE_HOOK_SET_VERSION, ENFORCE_WRAPPER_REL, HOOK_VERSION_KEY,
+    SETTINGS_REL,
 };
 use aoa_codeprobe_shim::bash_runs_tests;
 use aoa_enforce::{
@@ -702,6 +703,13 @@ fn add_hook(
         ));
     };
 
+    if runs_detached(groups, |registered| registered == command) {
+        return Err(anyhow!(
+            "hook event \"{event}\" runs \"{command}\" with `async` or `asyncRewake` set, \
+             so the host does not wait for it and it cannot block a write. Remove that \
+             setting from the entry and re-run."
+        ));
+    }
     let registered = matchers_running(groups, |registered| registered == command);
     if let Some(found) = misplaced_matcher(&registered, matcher) {
         return Err(anyhow!(
@@ -1152,6 +1160,63 @@ mod tests {
             !message.contains("matcher \"\""),
             "must not render the missing key as an empty matcher, got: {message}"
         );
+    }
+
+    #[test]
+    fn the_installer_and_the_audit_both_refuse_an_enforce_hook_the_host_does_not_wait_for() {
+        for (key, alone) in [
+            ("async", true),
+            ("async", false),
+            ("asyncRewake", true),
+            ("asyncRewake", false),
+        ] {
+            let repo = tempfile::tempdir().unwrap();
+            let mut installed = merge_enforce_hooks(json!({})).unwrap();
+            let groups = installed["hooks"]["PreToolUse"].as_array_mut().unwrap();
+            if alone {
+                groups[0]["hooks"][0][key] = true.into();
+            } else {
+                groups.push(json!({
+                    "matcher": HookScope::Mutation.matcher(),
+                    "hooks": [{ "type": "command", "command": hook_command("check"), key: true }],
+                }));
+            }
+            let settings = repo.path().join(SETTINGS_REL);
+            std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+            std::fs::write(&settings, installed.to_string()).unwrap();
+            let wrapper = repo.path().join(ENFORCE_WRAPPER_REL);
+            std::fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+            std::fs::write(&wrapper, "#!/bin/sh\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+
+            let refused = merge_enforce_hooks(installed).unwrap_err().to_string();
+            for expected in ["PreToolUse", &hook_command("check"), "cannot block a write"] {
+                assert!(
+                    refused.contains(expected),
+                    "{key}, alone: {alone}, {expected:?} missing from: {refused}"
+                );
+            }
+            assert_eq!(
+                hook_set_defect(repo.path()),
+                Some(aoa_audit::HookSetDefect::HookDetached {
+                    event: "PreToolUse",
+                    verb: "check",
+                }),
+                "{key}, alone: {alone}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_installer_leaves_a_hook_that_says_it_is_not_detached_as_it_stands() {
+        let mut installed = merge_enforce_hooks(json!({})).unwrap();
+        installed["hooks"]["PreToolUse"][0]["hooks"][0]["async"] = false.into();
+
+        assert_eq!(merge_enforce_hooks(installed.clone()).unwrap(), installed);
     }
 
     #[test]

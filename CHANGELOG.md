@@ -28,3 +28,10 @@ Changes an operator can observe, newest first.
   `.claude/settings.json` or `.claude/settings.local.json`, and reports an
   enforce hook that also runs under a matcher outside its scope, which
   `aoa observe --enforce` already refused to install over.
+- `aoa audit` and `aoa observe --enforce` refuse an enforce hook entry that
+  sets `async` or `asyncRewake`. The host does not wait for such a hook, so it
+  cannot block a write. The audit reports the runtime plane as missing when an
+  enforce hook runs only that way and names the hook as a defect; the installer
+  stops with an error instead of adding a second entry beside it.
+- `aoa audit` stops waiting for git at its deadline even when git, or a process
+  holding git's output open, never stops writing.
