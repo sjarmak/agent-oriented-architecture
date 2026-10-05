@@ -1,4 +1,4 @@
-# 0009: `fix_oversized` replaces two files with two renames, archive first
+# 0010: `fix_oversized` replaces two files with two renames, archive first
 
 **Status:** Accepted. Recorded in 2026-10 from aoa-a03ih, the second review
 round of aoa-4xshs. The review found that the previous change described the
