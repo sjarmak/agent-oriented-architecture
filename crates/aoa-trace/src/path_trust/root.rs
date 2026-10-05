@@ -125,14 +125,14 @@ pub fn resolve_repository_root(candidate: &Path) -> Result<PathBuf, RepositoryRo
             }
             Ok(metadata) => match git_candidate_is_root(ancestor, metadata.is_dir())? {
                 None => return Ok(ancestor.to_path_buf()),
-                Some(GitCandidateRejection::Command(refusal)) => {
+                Some(mismatch @ GitCandidateRejection::RootMismatch { .. }) => {
+                    nearest_rejection.get_or_insert((marker, mismatch));
+                }
+                Some(refusal) => {
                     return Err(RepositoryRootError::NotAGitRoot {
                         marker,
                         reason: refusal.to_string(),
                     });
-                }
-                Some(rejection) => {
-                    nearest_rejection.get_or_insert((marker, rejection));
                 }
             },
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -765,21 +765,24 @@ mod tests {
     }
 
     #[test]
-    fn ignores_a_nested_marker_redirecting_to_its_parent() {
-        let repo = tempfile::tempdir().unwrap();
-        init_git_repo(repo.path());
-        let nested = repo.path().join("nested");
+    fn refuses_a_nested_marker_redirecting_to_its_parent() {
+        let (_fixture, repo) = candidate_fixture();
+        init_git_repo(&repo);
+        let nested = repo.join("nested");
         std::fs::create_dir(&nested).unwrap();
         std::fs::write(
             nested.join(".git"),
-            format!("gitdir: {}\n", repo.path().join(".git").display()),
+            format!("gitdir: {}\n", repo.join(".git").display()),
         )
         .unwrap();
 
-        assert_eq!(
-            resolve_repository_root(&nested).unwrap(),
-            repo.path().canonicalize().unwrap()
-        );
+        match resolve_repository_root(&nested) {
+            Err(RepositoryRootError::NotAGitRoot { marker, reason }) => {
+                assert_eq!(marker, nested.join(".git"));
+                assert!(reason.contains("linked-worktree layout"), "{reason}");
+            }
+            other => panic!("expected a refusal naming the nested marker, got {other:?}"),
+        }
     }
 
     /// The anchor may not be derived from ambient process state: a relative
