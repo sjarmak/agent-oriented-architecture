@@ -2,6 +2,10 @@ use std::fs::{File, OpenOptions, Permissions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use tempfile::{NamedTempFile, PersistError};
+
+use crate::error::BudgetError;
+
 pub(crate) struct Standing {
     permissions: Permissions,
     #[cfg(unix)]
@@ -62,30 +66,99 @@ impl Standing {
     }
 }
 
+#[derive(Debug)]
+pub(crate) enum Unplaced {
+    Refused(io::Error),
+    LeftBehind {
+        temp: PathBuf,
+        source: io::Error,
+        removal: io::Error,
+    },
+}
+
+impl Unplaced {
+    pub(crate) fn at(self, path: &Path) -> BudgetError {
+        let path = path.to_path_buf();
+        match self {
+            Unplaced::Refused(source) => BudgetError::Io { path, source },
+            Unplaced::LeftBehind {
+                temp,
+                source,
+                removal,
+            } => BudgetError::TempFileLeftBehind {
+                path,
+                temp,
+                source,
+                removal,
+            },
+        }
+    }
+
+    pub(crate) fn withdrawing(self, prepared: Replacement) -> Self {
+        match self {
+            Unplaced::Refused(source) => withdrawn(prepared.fresh, source),
+            left_behind @ Unplaced::LeftBehind { .. } => left_behind,
+        }
+    }
+}
+
+fn withdrawn(fresh: NamedTempFile, source: io::Error) -> Unplaced {
+    let temp = fresh.path().to_path_buf();
+    match fresh.close() {
+        Ok(()) => Unplaced::Refused(source),
+        Err(removal) => Unplaced::LeftBehind {
+            temp,
+            source,
+            removal,
+        },
+    }
+}
+
+pub(crate) struct Placing<'a> {
+    pub(crate) rename: &'a dyn Fn(NamedTempFile, &Path) -> Result<(), PersistError>,
+    pub(crate) sync_directory: &'a dyn Fn(&Path) -> io::Result<()>,
+}
+
+impl Placing<'static> {
+    pub(crate) const REAL: Self = Self {
+        rename: &persist,
+        sync_directory: &sync_directory,
+    };
+}
+
+fn persist(fresh: NamedTempFile, to: &Path) -> Result<(), PersistError> {
+    fresh.persist(to).map(drop)
+}
+
 pub(crate) struct Replacement {
-    fresh: tempfile::NamedTempFile,
+    fresh: NamedTempFile,
     path: PathBuf,
 }
 
 impl Replacement {
-    pub(crate) fn prepare(path: &Path, body: &str, standing: &Standing) -> io::Result<Self> {
+    pub(crate) fn prepare(path: &Path, body: &str, standing: &Standing) -> Result<Self, Unplaced> {
         let mut fresh = tempfile::Builder::new()
             .prefix(".aoa-budget-")
-            .tempfile_in(directory_of(path))?;
-        fresh.write_all(body.as_bytes())?;
-        standing.dress(fresh.as_file())?;
-        fresh.as_file().sync_all()?;
-        Ok(Self {
-            fresh,
-            path: path.to_path_buf(),
-        })
+            .tempfile_in(directory_of(path))
+            .map_err(Unplaced::Refused)?;
+        let filled = fresh
+            .write_all(body.as_bytes())
+            .and_then(|()| standing.dress(fresh.as_file()))
+            .and_then(|()| fresh.as_file().sync_all());
+        match filled {
+            Ok(()) => Ok(Self {
+                fresh,
+                path: path.to_path_buf(),
+            }),
+            Err(source) => Err(withdrawn(fresh, source)),
+        }
     }
 
-    pub(crate) fn put(self) -> io::Result<()> {
-        self.fresh
-            .persist(&self.path)
-            .map_err(|refused| refused.error)?;
-        sync_directory(directory_of(&self.path))
+    pub(crate) fn put(self, placing: &Placing) -> Result<(), Unplaced> {
+        match (placing.rename)(self.fresh, &self.path) {
+            Ok(()) => (placing.sync_directory)(directory_of(&self.path)).map_err(Unplaced::Refused),
+            Err(refused) => Err(withdrawn(refused.file, refused.error)),
+        }
     }
 }
 
@@ -161,4 +234,60 @@ fn sized(read: impl Fn(&mut [u8]) -> rustix::io::Result<usize>) -> rustix::io::R
     let filled = read(&mut buffer)?;
     buffer.truncate(filled);
     Ok(buffer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_temporary_file_that_can_be_neither_placed_nor_removed_is_named_in_the_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.md");
+        std::fs::write(&path, "standing").unwrap();
+        let standing = Standing::of_writable(&path).unwrap().unwrap();
+        let replacement = Replacement::prepare(&path, "fresh", &standing).unwrap();
+        let temp = replacement.fresh.path().to_path_buf();
+        std::fs::remove_file(&temp).unwrap();
+        std::fs::create_dir(&temp).unwrap();
+        std::fs::write(temp.join("held"), "").unwrap();
+
+        let refused = replacement.put(&Placing::REAL);
+
+        assert!(
+            matches!(&refused, Err(Unplaced::LeftBehind { temp: named, .. }) if named == &temp),
+            "{refused:?}"
+        );
+        let reported = refused.unwrap_err().at(&path).to_string();
+        assert!(reported.contains(&temp.display().to_string()), "{reported}");
+        assert!(temp.exists());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "standing");
+    }
+
+    #[test]
+    fn a_temporary_file_that_was_removed_leaves_the_refusal_as_it_was() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.md");
+        std::fs::write(&path, "standing").unwrap();
+        let standing = Standing::of_writable(&path).unwrap().unwrap();
+        let replacement = Replacement::prepare(&path, "fresh", &standing).unwrap();
+        let refusing = Placing {
+            rename: &|fresh, _to| {
+                Err(PersistError {
+                    error: io::Error::other("refused by the test"),
+                    file: fresh,
+                })
+            },
+            sync_directory: Placing::REAL.sync_directory,
+        };
+
+        let refused = replacement.put(&refusing);
+
+        assert!(matches!(&refused, Err(Unplaced::Refused(_))), "{refused:?}");
+        let left: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(left, ["big.md"]);
+    }
 }

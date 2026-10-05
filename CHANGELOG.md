@@ -35,3 +35,6 @@ Changes an operator can observe, newest first.
   stops with an error instead of adding a second entry beside it.
 - `aoa audit` stops waiting for git at its deadline even when git, or a process
   holding git's output open, never stops writing.
+- `aoa_budget::fix_oversized` returns `BudgetError::TempFileLeftBehind`, naming
+  the file, when a temporary file it wrote can be neither moved into place nor
+  removed. Before, the file was left behind without a word.

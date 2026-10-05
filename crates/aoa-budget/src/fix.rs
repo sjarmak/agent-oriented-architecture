@@ -5,7 +5,7 @@ use crate::budget::{count_budget, Config, Verdict};
 use crate::closure::{resolve_closure_within, resolve_contained_closure, Closure};
 use crate::error::BudgetError;
 use crate::path::normalize_path;
-use crate::replace::{Replacement, Standing};
+use crate::replace::{Placing, Replacement, Standing};
 use crate::tokenizer::{count_tokens, target_encoder};
 
 /// The outcome of a [`fix_oversized`] operation.
@@ -37,6 +37,16 @@ pub fn fix_oversized(
     boundary: &Path,
     ceiling: usize,
     target: &str,
+) -> Result<FixOutcome, BudgetError> {
+    fix_placing(path, boundary, ceiling, target, &Placing::REAL)
+}
+
+fn fix_placing(
+    path: &Path,
+    boundary: &Path,
+    ceiling: usize,
+    target: &str,
+    placing: &Placing,
 ) -> Result<FixOutcome, BudgetError> {
     let path = &normalize_path(path);
     let original = root_text(resolve_contained_closure(path, boundary)?, path)?;
@@ -82,15 +92,17 @@ pub fn fix_oversized(
         .map_err(archive_trouble)?
         .flatten()
         .unwrap_or_else(|| root_standing.of_a_new_file());
-    let root_trouble = |source| BudgetError::Io {
-        path: read_from.clone(),
-        source,
-    };
     let archive = Replacement::prepare(&archive_path, &original, &archive_standing)
-        .map_err(archive_trouble)?;
-    let root = Replacement::prepare(&read_from, &summary, &root_standing).map_err(root_trouble)?;
-    archive.put().map_err(archive_trouble)?;
-    root.put().map_err(root_trouble)?;
+        .map_err(|unplaced| unplaced.at(&archive_path))?;
+    let root = match Replacement::prepare(&read_from, &summary, &root_standing) {
+        Ok(root) => root,
+        Err(unplaced) => return Err(unplaced.withdrawing(archive).at(&read_from)),
+    };
+    if let Err(unplaced) = archive.put(placing) {
+        return Err(unplaced.withdrawing(root).at(&archive_path));
+    }
+    root.put(placing)
+        .map_err(|unplaced| unplaced.at(&read_from))?;
 
     let closure = resolve_closure_within(path, boundary)?;
     let report = count_budget(&closure, target, &Config::blocking(ceiling))?;
@@ -225,9 +237,196 @@ fn summarize_under(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::collections::BTreeSet;
+    use std::ffi::OsString;
+
+    use tempfile::PersistError;
 
     use super::*;
+
+    const EARLIER_ARCHIVES: [Option<&str>; 2] = [None, Some("an earlier archive\n")];
+
+    struct Tree {
+        dir: tempfile::TempDir,
+        root: PathBuf,
+        archive: PathBuf,
+    }
+
+    fn oversized_body() -> String {
+        "A paragraph of guidance that every package must follow.\n\n".repeat(200)
+    }
+
+    fn tree(earlier_archive: Option<&str>) -> Tree {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("big.md");
+        std::fs::write(&root, oversized_body()).unwrap();
+        let archive = dir.path().join("big.archive.md");
+        if let Some(earlier) = earlier_archive {
+            std::fs::write(&archive, earlier).unwrap();
+        }
+        Tree { dir, root, archive }
+    }
+
+    fn fix(tree: &Tree, placing: &Placing) -> Result<FixOutcome, BudgetError> {
+        fix_placing(&tree.root, tree.dir.path(), 200, "gpt-4o", placing)
+    }
+
+    fn names_in(dir: &Path) -> Vec<OsString> {
+        let mut names: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn refused() -> std::io::Error {
+        std::io::Error::other("refused by the test")
+    }
+
+    fn is_named(path: &Path, name: &str) -> bool {
+        path.file_name().is_some_and(|found| found == name)
+    }
+
+    fn assert_nothing_was_lost_and_a_rerun_converges(
+        tree: &Tree,
+        earlier_archive: Option<&str>,
+        interrupted: Result<FixOutcome, BudgetError>,
+        stopped_at: &str,
+    ) {
+        assert!(
+            matches!(&interrupted, Err(BudgetError::Io { path, .. }) if is_named(path, stopped_at)),
+            "{interrupted:?}"
+        );
+        let body = oversized_body();
+        assert_eq!(std::fs::read_to_string(&tree.root).unwrap(), body);
+        assert_eq!(std::fs::read_to_string(&tree.archive).unwrap(), body);
+        assert_eq!(names_in(tree.dir.path()), ["big.archive.md", "big.md"]);
+
+        let uninterrupted = tree_fixed_in_one_run(earlier_archive);
+        fix(tree, &Placing::REAL).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&tree.root).unwrap(),
+            std::fs::read_to_string(&uninterrupted.root).unwrap()
+        );
+        assert_eq!(std::fs::read_to_string(&tree.archive).unwrap(), body);
+        assert_eq!(
+            std::fs::read_to_string(&uninterrupted.archive).unwrap(),
+            body
+        );
+        assert_eq!(
+            names_in(tree.dir.path()),
+            names_in(uninterrupted.dir.path())
+        );
+    }
+
+    fn tree_fixed_in_one_run(earlier_archive: Option<&str>) -> Tree {
+        let uninterrupted = tree(earlier_archive);
+        fix(&uninterrupted, &Placing::REAL).unwrap();
+        uninterrupted
+    }
+
+    #[test]
+    fn a_root_that_cannot_be_placed_after_its_archive_loses_nothing_and_a_rerun_converges() {
+        for earlier_archive in EARLIER_ARCHIVES {
+            let tree = tree(earlier_archive);
+            let failing_the_root = Placing {
+                rename: &|fresh, to| {
+                    if is_named(to, "big.md") {
+                        return Err(PersistError {
+                            error: refused(),
+                            file: fresh,
+                        });
+                    }
+                    (Placing::REAL.rename)(fresh, to)
+                },
+                sync_directory: Placing::REAL.sync_directory,
+            };
+
+            let interrupted = fix(&tree, &failing_the_root);
+
+            assert_nothing_was_lost_and_a_rerun_converges(
+                &tree,
+                earlier_archive,
+                interrupted,
+                "big.md",
+            );
+        }
+    }
+
+    #[test]
+    fn an_archive_directory_that_cannot_be_synced_loses_nothing_and_a_rerun_converges() {
+        for earlier_archive in EARLIER_ARCHIVES {
+            let tree = tree(earlier_archive);
+            let synced = Cell::new(0);
+            let failing_the_first_sync = Placing {
+                rename: Placing::REAL.rename,
+                sync_directory: &|dir| {
+                    synced.set(synced.get() + 1);
+                    if synced.get() == 1 {
+                        return Err(refused());
+                    }
+                    (Placing::REAL.sync_directory)(dir)
+                },
+            };
+
+            let interrupted = fix(&tree, &failing_the_first_sync);
+
+            assert_eq!(synced.get(), 1);
+            assert_nothing_was_lost_and_a_rerun_converges(
+                &tree,
+                earlier_archive,
+                interrupted,
+                "big.archive.md",
+            );
+        }
+    }
+
+    #[test]
+    fn a_prepared_root_that_cannot_be_withdrawn_is_named_when_the_archive_is_refused() {
+        let tree = tree(None);
+        let stranded = Cell::new(None);
+        let refusing_the_archive = Placing {
+            rename: &|fresh, _to| {
+                let prepared_root = std::fs::read_dir(tree.dir.path())
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .find(|entry| entry != fresh.path() && !entry.ends_with("big.md"))
+                    .unwrap();
+                std::fs::remove_file(&prepared_root).unwrap();
+                std::fs::create_dir(&prepared_root).unwrap();
+                std::fs::write(prepared_root.join("held"), "").unwrap();
+                stranded.set(Some(prepared_root));
+                Err(PersistError {
+                    error: refused(),
+                    file: fresh,
+                })
+            },
+            sync_directory: Placing::REAL.sync_directory,
+        };
+
+        let refused = fix(&tree, &refusing_the_archive);
+
+        let stranded = stranded.take().unwrap();
+        assert!(
+            matches!(
+                &refused,
+                Err(BudgetError::TempFileLeftBehind { path, temp, .. })
+                    if path == &tree.archive && temp == &stranded
+            ),
+            "{refused:?}"
+        );
+        assert!(refused
+            .unwrap_err()
+            .to_string()
+            .contains(&stranded.display().to_string()));
+        assert_eq!(
+            std::fs::read_to_string(&tree.root).unwrap(),
+            oversized_body()
+        );
+    }
 
     #[test]
     fn a_closure_without_its_root_is_an_error_and_not_an_empty_body() {

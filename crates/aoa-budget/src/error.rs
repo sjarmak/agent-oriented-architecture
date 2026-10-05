@@ -25,6 +25,18 @@ pub enum BudgetError {
     #[error("context file {path} is reached through {archive}, the name its archive would take")]
     RootThroughArchive { path: PathBuf, archive: PathBuf },
 
+    #[error(
+        "failed to replace {path}, and its temporary file {temp} could not be removed \
+         ({removal}) and is left behind"
+    )]
+    TempFileLeftBehind {
+        path: PathBuf,
+        temp: PathBuf,
+        #[source]
+        source: std::io::Error,
+        removal: std::io::Error,
+    },
+
     #[error("context closure of {path} came back without the file it was resolved from")]
     RootNotRead { path: PathBuf },
 
