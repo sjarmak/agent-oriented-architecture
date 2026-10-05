@@ -11,6 +11,9 @@ const ACTION: &str = "likec4/actions@";
 const ACTION_VERSION_INPUT: &str = "likec4-version";
 const VALIDATE: &str = "validate architecture";
 const DISABLING_KEYS: [&str; 4] = ["if", "continue-on-error", "needs", "shell"];
+const DEFAULT_SHELL: [&str; 3] = ["defaults", "run", "shell"];
+const WORKFLOW_DEFAULT_SHELL: &str = "defaults.run.shell on the workflow";
+const JOB_DEFAULT_SHELL: &str = "defaults.run.shell on the job";
 
 struct Step {
     job: String,
@@ -39,8 +42,19 @@ fn disabling_keys(node: &Value) -> Vec<&'static str> {
         .collect()
 }
 
+fn default_shell(node: &Value, label: &'static str) -> Option<&'static str> {
+    DEFAULT_SHELL
+        .iter()
+        .try_fold(node, |node, key| node.get(key))
+        .map(|_| label)
+}
+
 fn steps(workflow: &str) -> Vec<Step> {
-    let document = parse(workflow);
+    steps_of(workflow, &parse(workflow))
+}
+
+fn steps_of(workflow: &str, document: &Value) -> Vec<Step> {
+    let workflow_shell = default_shell(document, WORKFLOW_DEFAULT_SHELL);
     let jobs = document
         .get("jobs")
         .and_then(Value::as_mapping)
@@ -57,8 +71,10 @@ fn steps(workflow: &str) -> Vec<Step> {
                 .into_iter()
                 .map(|step| Step {
                     job: name.clone(),
-                    disabled_by: disabling_keys(job)
+                    disabled_by: workflow_shell
                         .into_iter()
+                        .chain(default_shell(job, JOB_DEFAULT_SHELL))
+                        .chain(disabling_keys(job))
                         .chain(disabling_keys(&step))
                         .collect(),
                     run: text(&step, "run"),
@@ -226,6 +242,39 @@ fn shell_quotes_around_the_package_do_not_hide_it() {
         ["1.60.0"]
     );
     assert!(package_specs("npx -y '@likec4/cli'").is_empty());
+}
+
+#[test]
+fn a_default_shell_on_the_job_or_the_workflow_disables_its_steps() {
+    let document: Value = serde_norway::from_str(
+        "defaults:\n  run:\n    shell: bash {0}\njobs:\n  likec4:\n    defaults:\n      \
+         run:\n        shell: sh {0}\n    steps:\n      - run: npx -y likec4@1.59.2 validate \
+         architecture\n  plain:\n    steps:\n      - run: true\n",
+    )
+    .unwrap();
+    let by_job: Vec<(String, Vec<&str>)> = steps_of("inline", &document)
+        .into_iter()
+        .map(|step| (step.job, step.disabled_by))
+        .collect();
+    assert_eq!(
+        by_job,
+        [
+            (
+                "likec4".to_string(),
+                vec![WORKFLOW_DEFAULT_SHELL, JOB_DEFAULT_SHELL]
+            ),
+            ("plain".to_string(), vec![WORKFLOW_DEFAULT_SHELL]),
+        ]
+    );
+
+    let document: Value = serde_norway::from_str(
+        "defaults:\n  run:\n    working-directory: architecture\njobs:\n  likec4:\n    \
+         defaults:\n      run:\n        working-directory: .\n    steps:\n      - run: true\n",
+    )
+    .unwrap();
+    assert!(steps_of("inline", &document)
+        .iter()
+        .all(|step| step.disabled_by.is_empty()));
 }
 
 #[test]
