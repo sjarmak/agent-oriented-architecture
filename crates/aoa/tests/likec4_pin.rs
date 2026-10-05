@@ -84,8 +84,15 @@ fn package_spec(token: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+fn unquoted(token: &str) -> String {
+    token.chars().filter(|c| !matches!(c, '\'' | '"')).collect()
+}
+
 fn package_specs(run: &str) -> Vec<String> {
-    run.split_whitespace().filter_map(package_spec).collect()
+    run.split_whitespace()
+        .map(unquoted)
+        .filter_map(|token| package_spec(&token))
+        .collect()
 }
 
 fn likec4_versions(workflow: &str) -> Vec<String> {
@@ -207,6 +214,21 @@ fn a_run_step_names_likec4_with_or_without_a_version() {
 }
 
 #[test]
+fn shell_quotes_around_the_package_do_not_hide_it() {
+    assert_eq!(
+        package_specs("npx -y \"likec4@1.59.2\" validate architecture"),
+        ["1.59.2"]
+    );
+    assert_eq!(package_specs("npx -y 'likec4' export json"), [""]);
+    assert_eq!(package_specs("npx -y likec4@\"latest\" build"), ["latest"]);
+    assert_eq!(
+        package_specs("npx -y '\"likec4@1.60.0\"' build"),
+        ["1.60.0"]
+    );
+    assert!(package_specs("npx -y '@likec4/cli'").is_empty());
+}
+
+#[test]
 fn the_validating_step_is_exactly_the_pinned_invocation() {
     assert_eq!(
         validating_invocation("npx -y likec4@1.59.2 validate architecture"),
@@ -223,6 +245,8 @@ fn the_validating_step_is_exactly_the_pinned_invocation() {
         "npx -y likec4 validate architecture",
         "npx -y likec4@1.59.2 validate architecture --strict",
         "npx -y likec4@1.59.2  validate architecture",
+        "npx -y \"likec4@1.59.2\" validate architecture",
+        "npx -y 'likec4@1.59.2' validate architecture",
     ] {
         assert_eq!(
             validating_invocation(wrapped),
