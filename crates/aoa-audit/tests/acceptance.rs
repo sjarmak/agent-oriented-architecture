@@ -1391,15 +1391,30 @@ fn an_oversized_back_pointer_is_refused() {
 #[cfg(unix)]
 #[test]
 fn a_back_pointer_that_is_a_dangling_link_is_not_read_as_absent() {
-    let git_dirs = tempfile::tempdir().expect("git dir parent");
-    let git_dir = git_dirs.path().join("module");
-    let repo = separate_git_dir_repo(&git_dir);
-    write_hook(&git_dir.join("hooks/pre-commit"));
-    assert!(!pre_commit_plane_missing(repo.path()));
+    let (git_dirs, repo, git_dir) = separate_git_dir_repo_with_hook();
 
     std::os::unix::fs::symlink(git_dirs.path().join("absent"), git_dir.join("gitdir"))
         .expect("link the back-pointer");
     assert!(pre_commit_plane_missing(repo.path()));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_back_pointer_that_is_a_link_is_refused_even_when_it_leads_to_the_checkout_s_own_marker() {
+    let (git_dirs, repo, git_dir) = separate_git_dir_repo_with_hook();
+    let elsewhere = git_dirs.path().join("back-pointer");
+    std::fs::write(
+        &elsewhere,
+        format!("{}\n", repo.path().join(".git").display()),
+    )
+    .expect("write a back-pointer naming the checkout");
+
+    std::os::unix::fs::symlink(&elsewhere, git_dir.join("gitdir")).expect("link the back-pointer");
+    assert!(pre_commit_plane_missing(repo.path()));
+
+    std::fs::remove_file(git_dir.join("gitdir")).expect("remove the link");
+    std::fs::rename(&elsewhere, git_dir.join("gitdir")).expect("put the file in its place");
+    assert!(!pre_commit_plane_missing(repo.path()));
 }
 
 #[test]
