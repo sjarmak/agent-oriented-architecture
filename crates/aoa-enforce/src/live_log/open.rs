@@ -54,12 +54,13 @@ pub(super) fn open_log(log: &Path, access: LogAccess) -> Result<File> {
 #[cfg(unix)]
 mod unix_log {
     use super::*;
-    use rustix::fs::{self, AtFlags, FileType, Mode, OFlags};
-    use rustix::io::Errno;
-    use std::ffi::OsStr;
-    use std::os::fd::{AsFd, OwnedFd};
+    use aoa_path_trust::dirfd::{
+        map_nofollow_error, open_dir_at, open_or_create_dir_at, open_trust_root,
+    };
+    use aoa_path_trust::PathTrustError;
+    use rustix::fs::{self, Mode, OFlags};
+    use std::os::fd::OwnedFd;
 
-    const DIR_MODE: Mode = Mode::RWXU;
     const FILE_MODE: Mode = Mode::RUSR
         .union(Mode::WUSR)
         .union(Mode::RGRP)
@@ -67,56 +68,20 @@ mod unix_log {
         .union(Mode::ROTH)
         .union(Mode::WOTH);
 
-    fn io_error(path: &Path, action: IoAction, source: Errno) -> LiveLogError {
-        LiveLogError::io(path, action, source.into())
-    }
-
-    fn is_symlink_at(parent: impl AsFd, name: &OsStr) -> bool {
-        fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)
-            .map(|stat| FileType::from_raw_mode(stat.st_mode) == FileType::Symlink)
-            .unwrap_or(false)
-    }
-
-    fn map_nofollow_error(
-        parent: impl AsFd,
-        name: &OsStr,
-        path: &Path,
-        source: Errno,
-    ) -> LiveLogError {
-        if source == Errno::LOOP || is_symlink_at(parent, name) {
-            LiveLogError::SymlinkRefused {
-                path: path.to_path_buf(),
-            }
-        } else {
-            io_error(path, IoAction::Open, source)
+    fn trust_error(source: PathTrustError) -> LiveLogError {
+        match source {
+            PathTrustError::Io { path, source } => LiveLogError::Io {
+                action: IoAction::Open,
+                path,
+                source,
+            },
+            refusal => LiveLogError::SymlinkRefused {
+                path: refusal.path().to_path_buf(),
+            },
         }
     }
 
-    fn open_dir_at(parent: impl AsFd, name: &OsStr, path: &Path) -> Result<OwnedFd> {
-        fs::openat(
-            parent.as_fd(),
-            name,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW,
-            Mode::empty(),
-        )
-        .map_err(|source| map_nofollow_error(parent, name, path, source))
-    }
-
-    fn open_or_create_dir_at(parent: impl AsFd, name: &OsStr, path: &Path) -> Result<OwnedFd> {
-        match open_dir_at(&parent, name, path) {
-            Ok(fd) => Ok(fd),
-            Err(err) if err.is_not_found() => {
-                match fs::mkdirat(parent.as_fd(), name, DIR_MODE) {
-                    Ok(()) | Err(Errno::EXIST) => {}
-                    Err(source) => return Err(io_error(path, IoAction::Create, source)),
-                }
-                open_dir_at(parent, name, path)
-            }
-            Err(err) => Err(err),
-        }
-    }
-
-    fn log_parts(log: &Path) -> Result<(&Path, &Path, &Path, &OsStr)> {
+    fn log_parts(log: &Path) -> Result<(&Path, &Path, &Path, &std::ffi::OsStr)> {
         let traces_dir = log.parent().ok_or_else(|| LiveLogError::MalformedLogPath {
             component: LogPathComponent::TracesDir,
             path: log.to_path_buf(),
@@ -148,22 +113,16 @@ mod unix_log {
         traces_dir: &Path,
         access: LogAccess,
     ) -> Result<OwnedFd> {
-        // The caller-selected repository is the trust root. Every component
-        // below it is acquired relative to a stable descriptor.
-        let repo_fd = fs::open(repo, OFlags::RDONLY | OFlags::DIRECTORY, Mode::empty())
-            .map_err(|source| io_error(repo, IoAction::Open, source))?;
-        let aoa_fd = match access {
-            LogAccess::Read => open_dir_at(&repo_fd, OsStr::new(".aoa"), aoa_dir)?,
-            LogAccess::AppendCreate => {
-                open_or_create_dir_at(&repo_fd, OsStr::new(".aoa"), aoa_dir)?
+        let acquire = |parent: &OwnedFd, name: &str, path: &Path| {
+            match access {
+                LogAccess::Read => open_dir_at(parent, name, path),
+                LogAccess::AppendCreate => open_or_create_dir_at(parent, name, path),
             }
+            .map_err(trust_error)
         };
-        match access {
-            LogAccess::Read => open_dir_at(&aoa_fd, OsStr::new("traces"), traces_dir),
-            LogAccess::AppendCreate => {
-                open_or_create_dir_at(&aoa_fd, OsStr::new("traces"), traces_dir)
-            }
-        }
+        let repo_fd = open_trust_root(repo).map_err(trust_error)?;
+        let aoa_fd = acquire(&repo_fd, ".aoa", aoa_dir)?;
+        acquire(&aoa_fd, "traces", traces_dir)
     }
 
     pub(super) fn open(log: &Path, access: LogAccess) -> Result<File> {
@@ -174,8 +133,9 @@ mod unix_log {
             | OFlags::NONBLOCK;
         let (repo, aoa_dir, traces_dir, name) = log_parts(log)?;
         let traces_fd = open_traces_dir(repo, aoa_dir, traces_dir, access)?;
-        let fd = fs::openat(&traces_fd, name, flags, FILE_MODE)
-            .map_err(|source| map_nofollow_error(&traces_fd, name, log, source))?;
+        let fd = fs::openat(&traces_fd, name, flags, FILE_MODE).map_err(|source| {
+            trust_error(map_nofollow_error(&traces_fd, name, log, source.into()))
+        })?;
         let file = File::from(fd);
         let file_type = file
             .metadata()
@@ -228,6 +188,7 @@ pub(super) fn create_traces_dir(path: &Path) -> Result<()> {
 // they are then unused and fail the crate's `-D warnings` build.
 #[cfg(all(test, unix))]
 mod tests {
+    use super::super::error::IoAction;
     use super::super::{append_span, read_spans, LiveLogError};
     use aoa_trace::SpanType;
     use serde_json::Map;
@@ -302,6 +263,65 @@ mod tests {
         assert!(
             matches!(err, LiveLogError::NotRegularFile { ref path, .. } if *path == log),
             "must refuse the FIFO as a non-regular file, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_trace_directory_that_cannot_be_created_reports_a_failed_open() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        std::fs::set_permissions(&repo, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let sealed = std::fs::create_dir(repo.join("probe")).is_err();
+        let log = repo.join(".aoa/traces/live-sealed.jsonl");
+
+        let outcome = append_span(&log, SpanType::TestRun, Map::new());
+
+        std::fs::set_permissions(&repo, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if sealed {
+            let err = outcome.expect_err("a read-only repository cannot hold a new .aoa");
+            assert!(
+                matches!(
+                    err,
+                    LiveLogError::Io { action: IoAction::Open, ref path, ref source }
+                        if *path == repo.join(".aoa")
+                            && source.kind() == std::io::ErrorKind::PermissionDenied
+                ),
+                "the mkdir refusal must surface as a failed open of .aoa, got: {err:?}"
+            );
+            assert_eq!(
+                std::fs::read_dir(&repo).unwrap().count(),
+                0,
+                "nothing may be created beneath the sealed repository"
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_planted_symlink_with_a_non_utf8_name_is_refused() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim.txt");
+        std::fs::write(&victim, "").unwrap();
+        let traces = dir.path().join(".aoa/traces");
+        std::fs::create_dir_all(&traces).unwrap();
+        let log = traces.join(OsStr::from_bytes(b"live-\xff.jsonl"));
+        std::os::unix::fs::symlink(&victim, &log).unwrap();
+
+        let err = append_span(&log, SpanType::TestRun, Map::new()).unwrap_err();
+        assert!(
+            matches!(err, LiveLogError::SymlinkRefused { ref path } if *path == log),
+            "the refusal must name the plant it refused, got: {err:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&victim).unwrap(),
+            "",
+            "the span must not have been appended through the symlink"
         );
     }
 }

@@ -65,6 +65,13 @@ functions take and return `std::os::fd` types. `rustix` is an implementation
 detail of this crate, and a consumer that also uses `rustix` picks its own
 version.
 
+The `dirfd` functions take the entry name as `impl AsRef<OsStr>`, not `&str`
+(aoa-7g14y.2, 2026-10-05). `aoa-enforce` classifies a refused open of the live
+log file through `map_nofollow_error`, and that file name reaches it as the
+last component of a `Path`, which need not be UTF-8. Widening the parameter
+here kept one classification for every consumer; a `&str` caller compiles
+unchanged.
+
 ## Consequences
 
 `aoa-trace` has no `rustix` dependency and its manifest lists only what the
@@ -85,6 +92,11 @@ Left as it was:
 - `aoa-audit`, `aoa-enforce` and `aoa-budget` still depend on `rustix`
   themselves, for descriptor-relative file operations of their own. This
   record removes the forced version coupling, not those uses.
+- `aoa-enforce` kept private copies of the directory acquisition in
+  `crates/aoa-enforce/src/live_log/open.rs` until aoa-7g14y.2 deleted them.
+  It now acquires `.aoa` and `.aoa/traces` through `dirfd` and keeps only the
+  final `openat` of the log file, which is a file open and not a directory
+  acquisition.
 - `aoa-budget` has its own descriptor walk in
   `crates/aoa-budget/src/boundary.rs`. It predates this record and was not
   folded in here.

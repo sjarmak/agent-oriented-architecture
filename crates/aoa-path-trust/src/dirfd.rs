@@ -6,6 +6,7 @@
 //! returned descriptor, so a path substituted after the check cannot redirect
 //! the write.
 
+use std::ffi::OsStr;
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::Path;
 
@@ -19,8 +20,8 @@ const DIR_MODE: Mode = Mode::RWXU;
 
 /// Is `name` inside the directory `parent` refers to a symlink? Used to explain
 /// an `openat` refusal, never as an authorization check in its own right.
-pub fn is_symlink_at(parent: impl AsFd, name: &str) -> bool {
-    fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)
+pub fn is_symlink_at(parent: impl AsFd, name: impl AsRef<OsStr>) -> bool {
+    fs::statat(parent, name.as_ref(), AtFlags::SYMLINK_NOFOLLOW)
         .map(|stat| FileType::from_raw_mode(stat.st_mode) == FileType::Symlink)
         .unwrap_or(false)
 }
@@ -29,7 +30,7 @@ pub fn is_symlink_at(parent: impl AsFd, name: &str) -> bool {
 /// anything else is a plain IO failure.
 pub fn map_nofollow_error(
     parent: impl AsFd,
-    name: &str,
+    name: impl AsRef<OsStr>,
     path: &Path,
     source: std::io::Error,
 ) -> PathTrustError {
@@ -51,7 +52,12 @@ pub fn open_trust_root(root: &Path) -> Result<OwnedFd, PathTrustError> {
 }
 
 /// Acquire an existing subdirectory `name` of `parent`, refusing a symlink.
-pub fn open_dir_at(parent: impl AsFd, name: &str, path: &Path) -> Result<OwnedFd, PathTrustError> {
+pub fn open_dir_at(
+    parent: impl AsFd,
+    name: impl AsRef<OsStr>,
+    path: &Path,
+) -> Result<OwnedFd, PathTrustError> {
+    let name = name.as_ref();
     fs::openat(
         parent.as_fd(),
         name,
@@ -65,9 +71,10 @@ pub fn open_dir_at(parent: impl AsFd, name: &str, path: &Path) -> Result<OwnedFd
 /// creator is tolerated (`EEXIST`), a symlink in the way is not.
 pub fn open_or_create_dir_at(
     parent: impl AsFd,
-    name: &str,
+    name: impl AsRef<OsStr>,
     path: &Path,
 ) -> Result<OwnedFd, PathTrustError> {
+    let name = name.as_ref();
     match fs::openat(
         parent.as_fd(),
         name,
@@ -113,6 +120,34 @@ mod tests {
         for result in [
             open_dir_at(&root_fd, "linked", &path),
             open_or_create_dir_at(&root_fd, "linked", &path),
+        ] {
+            assert!(matches!(result, Err(PathTrustError::UnsafePath { .. })));
+        }
+        assert_eq!(
+            std::fs::read_dir(outside.path())
+                .expect("read outside")
+                .count(),
+            0,
+            "the planted link's target must not have been touched"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn classifies_a_link_whose_name_is_not_utf8() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let root = tempfile::tempdir().expect("create root");
+        let outside = tempfile::tempdir().expect("create outside");
+        let name = OsStr::from_bytes(b"link-\xff");
+        let path = root.path().join(name);
+        symlink(outside.path(), &path).expect("plant link");
+        let root_fd = open_trust_root(root.path()).expect("open trust root");
+
+        assert!(is_symlink_at(&root_fd, name));
+        for result in [
+            open_dir_at(&root_fd, name, &path),
+            open_or_create_dir_at(&root_fd, name, &path),
         ] {
             assert!(matches!(result, Err(PathTrustError::UnsafePath { .. })));
         }
