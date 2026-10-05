@@ -99,6 +99,11 @@ const CLASSIFIED: &[Classified] = &[
         ignored: 0,
     },
     Classified {
+        path: "crates/aoa-enforce/src/live_log/open.rs",
+        notices: 1,
+        ignored: 0,
+    },
+    Classified {
         path: "crates/aoa-lint/tests/lint.rs",
         notices: 1,
         ignored: 0,
@@ -111,6 +116,11 @@ const CLASSIFIED: &[Classified] = &[
     Classified {
         path: "crates/aoa-migrate/tests/imports_typescript.rs",
         notices: 2,
+        ignored: 0,
+    },
+    Classified {
+        path: "crates/aoa-path-trust/src/nofollow.rs",
+        notices: 1,
         ignored: 0,
     },
     Classified {

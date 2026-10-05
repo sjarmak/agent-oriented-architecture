@@ -109,18 +109,21 @@ mod tests {
             .expect("seal dir");
 
         let result = safe_join_nofollow(root.path(), Path::new("sealed/inner/file"));
-        // Running as root defeats the permission bits entirely; only assert the
-        // fail-closed contract when the seal actually took.
         let sealed_took = std::fs::symlink_metadata(sealed.join("inner")).is_err();
 
         std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o700))
             .expect("restore dir");
 
-        if sealed_took {
-            assert!(
-                matches!(result, Err(PathTrustError::Io { .. })),
-                "an inconclusive lstat must not read as absent: {result:?}"
+        if !sealed_took {
+            eprintln!(
+                "SKIP (docs/adr/0004-environment-dependent-test-skips.md): this process searches \
+                 a mode-000 directory, so it cannot be denied the lstat"
             );
+            return;
         }
+        assert!(
+            matches!(result, Err(PathTrustError::Io { .. })),
+            "an inconclusive lstat must not read as absent: {result:?}"
+        );
     }
 }

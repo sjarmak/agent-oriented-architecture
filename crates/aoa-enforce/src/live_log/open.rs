@@ -280,23 +280,28 @@ mod tests {
         let outcome = append_span(&log, SpanType::TestRun, Map::new());
 
         std::fs::set_permissions(&repo, std::fs::Permissions::from_mode(0o755)).unwrap();
-        if sealed {
-            let err = outcome.expect_err("a read-only repository cannot hold a new .aoa");
-            assert!(
-                matches!(
-                    err,
-                    LiveLogError::Io { action: IoAction::Open, ref path, ref source }
-                        if *path == repo.join(".aoa")
-                            && source.kind() == std::io::ErrorKind::PermissionDenied
-                ),
-                "the mkdir refusal must surface as a failed open of .aoa, got: {err:?}"
+        if !sealed {
+            eprintln!(
+                "SKIP (docs/adr/0004-environment-dependent-test-skips.md): this process creates \
+                 an entry in a mode-555 directory, so it cannot be denied the mkdir"
             );
-            assert_eq!(
-                std::fs::read_dir(&repo).unwrap().count(),
-                0,
-                "nothing may be created beneath the sealed repository"
-            );
+            return;
         }
+        let err = outcome.expect_err("a read-only repository cannot hold a new .aoa");
+        assert!(
+            matches!(
+                err,
+                LiveLogError::Io { action: IoAction::Open, ref path, ref source }
+                    if *path == repo.join(".aoa")
+                        && source.kind() == std::io::ErrorKind::PermissionDenied
+            ),
+            "the mkdir refusal must surface as a failed open of .aoa, got: {err:?}"
+        );
+        assert_eq!(
+            std::fs::read_dir(&repo).unwrap().count(),
+            0,
+            "nothing may be created beneath the sealed repository"
+        );
     }
 
     #[cfg(target_os = "linux")]
