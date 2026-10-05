@@ -43,7 +43,11 @@ file is placed:
   when the archive is in place and the sync of its directory then fails.
 - Running `fix_oversized` again reaches the result an uninterrupted run would
   have reached. The archive is written whole each time and never appended to,
-  so the second run cannot duplicate its content.
+  so the second run cannot duplicate its content. Convergence here means the
+  content of the context file and its archive, not a byte-identical directory
+  listing: a run that was killed may leave a temporary file beside them, and
+  the rerun converges around it (ruled 2026-10-05 in aoa-40h8p, amending the
+  round-2 ruling that read as the listing).
 - An archive that stood before the run is replaced by the first rename. An
   uninterrupted run replaces it as well, so the window loses nothing a complete
   run would have kept.
@@ -59,10 +63,16 @@ too, names both, in the order they were left.
 
 What this record does not cover:
 
-- A process killed inside the window cannot remove the context file's temporary
-  file. It stays in that file's directory under a `.aoa-budget-` prefix. It is
-  not linked from any context file, so it does not enter a closure, and nothing
-  removes it on the next run.
+- A process killed between the two renames leaves the killed run's prepared
+  temporary file for the context file behind. This is accepted as a residual
+  and not fixed: the content converges with no duplication, the temporary
+  names are unique so the leftover never changes a later result, and deleting
+  files by pattern could remove a concurrent run's temporary file. Nothing
+  removes it on the next run. An operator finds it in the context file's
+  directory as `.aoa-budget-` followed by six random letters and digits, so
+  the pattern `.aoa-budget-??????` matches it (the `tempfile` crate's default
+  name length behind the prefix `replace.rs` sets). It is not linked from any
+  context file, so it does not enter a closure.
 - A run that fails after both files are placed (the sync of the context file's
   directory, or the recount that follows the write) returns an error with the
   summary already in place. Running `fix_oversized` on a context file that is
