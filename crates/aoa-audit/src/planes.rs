@@ -341,7 +341,18 @@ pub(crate) fn names_enforcement_without_installing_it(settings: &Value) -> bool 
 }
 
 fn names_enforcement(command: &str) -> bool {
-    command.contains(ENFORCE_WRAPPER_REL) || command.contains("aoa enforce ")
+    let words: Vec<&str> = command
+        .split_whitespace()
+        .map(|word| word.trim_matches(|c| matches!(c, '"' | '\'' | ';')))
+        .collect();
+    let runs_wrapper = words.iter().any(|word| {
+        word.strip_suffix(ENFORCE_WRAPPER_REL)
+            .is_some_and(|parent| parent.is_empty() || parent.ends_with('/'))
+    });
+    runs_wrapper
+        || words
+            .windows(2)
+            .any(|pair| pair[0].rsplit('/').next() == Some("aoa") && pair[1] == "enforce")
 }
 
 pub(crate) fn carries_aoa_install(settings: &Value) -> bool {

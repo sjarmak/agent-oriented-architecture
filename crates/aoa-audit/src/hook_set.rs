@@ -477,6 +477,52 @@ mod tests {
     }
 
     #[test]
+    fn a_spelling_the_token_matcher_accepted_still_draws_the_reinstall_warning() {
+        let repo = tempfile::tempdir().unwrap();
+        let mut unwarned = Vec::new();
+        for spell in [
+            |verb: &str| format!("aoa  enforce {verb}"),
+            |verb: &str| format!("aoa\tenforce {verb}"),
+            |verb: &str| format!("'aoa' enforce {verb}"),
+        ] {
+            let mut hooks = serde_json::Map::new();
+            for (event, verb) in crate::hook_set::ENFORCE_HOOK_SET {
+                hooks
+                    .entry(event)
+                    .or_insert_with(|| serde_json::json!([]))
+                    .as_array_mut()
+                    .unwrap()
+                    .push(serde_json::json!({"hooks": [{"command": spell(verb)}]}));
+            }
+            let settings = serde_json::json!({"hooks": hooks});
+            write_settings(repo.path(), &settings.to_string());
+            if hook_set_defect(repo.path()) != Some(HookSetDefect::CommandNotInstallerWritten) {
+                unwarned.push(spell("check"));
+            }
+        }
+        assert_eq!(unwarned, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_command_that_only_resembles_enforcement_draws_no_reinstall_warning() {
+        let repo = tempfile::tempdir().unwrap();
+        let mut warned = Vec::new();
+        for command in [
+            "/usr/local/bin/notaoa enforce check".to_string(),
+            format!("./{ENFORCE_WRAPPER_REL}ment check"),
+        ] {
+            let settings = serde_json::json!({
+                "hooks": {"PreToolUse": [{"hooks": [{"command": command}]}]}
+            });
+            write_settings(repo.path(), &settings.to_string());
+            if let Some(defect) = hook_set_defect(repo.path()) {
+                warned.push((command, defect));
+            }
+        }
+        assert_eq!(warned, Vec::new());
+    }
+
+    #[test]
     fn a_complete_install_is_not_faulted_for_an_extra_hand_spelled_command() {
         let repo = tempfile::tempdir().unwrap();
         write_wrapper(repo.path(), 0o755);
