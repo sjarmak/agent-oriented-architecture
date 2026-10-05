@@ -332,10 +332,14 @@ fn governing_roots(base: &Path, candidate: Option<&Path>) -> Result<Vec<PathBuf>
     }
 
     let mut roots = Vec::new();
-    let mut enclosing = enclosing_repository(target_directory(candidate)?.as_deref())?;
-    while let Some(root) = enclosing.filter(|root| !session.contains(root)) {
-        enclosing = enclosing_repository(root.parent())?;
-        roots.push(root);
+    for directory in [target_directory(candidate)?, spelled_directory(candidate)?] {
+        let mut enclosing = enclosing_repository(directory.as_deref())?;
+        while let Some(root) =
+            enclosing.filter(|root| !session.contains(root) && !roots.contains(root))
+        {
+            enclosing = enclosing_repository(root.parent())?;
+            roots.push(root);
+        }
     }
     roots.extend(session);
     Ok(roots)
@@ -367,6 +371,33 @@ fn target_directory(candidate: &Path) -> Result<Option<PathBuf>> {
         }
     }
     Ok(None)
+}
+
+fn spelled_directory(candidate: &Path) -> Result<Option<PathBuf>> {
+    let spelled = match normalize_lexically(candidate) {
+        Ok(spelled) => spelled,
+        Err(PathTrustError::EscapesRoot { .. }) => return Ok(None),
+        Err(other) => return Err(anyhow!(other)),
+    };
+    let mut directory = None;
+    for ancestor in spelled
+        .ancestors()
+        .skip(1)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(metadata) if metadata.is_dir() => directory = Some(ancestor.to_path_buf()),
+            Ok(_) => break,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
+            Err(err) => {
+                return Err(anyhow!(err))
+                    .with_context(|| format!("failed to inspect {}", ancestor.display()))
+            }
+        }
+    }
+    Ok(directory)
 }
 
 fn path_refusal(policy: &Policy, targets: &[String]) -> Result<Option<BlockReason>> {
@@ -902,6 +933,27 @@ mod tests {
             scope(&base, "escape/planted.rs"),
             WriteScope::Inside(vec!["escape/planted.rs".to_string()])
         );
+    }
+
+    #[test]
+    fn governing_roots_list_a_repository_the_spelling_and_the_destination_share_once() {
+        let fixture = tempfile::tempdir().unwrap();
+        let parent = fixture.path().canonicalize().unwrap().join("parent");
+        let nested = parent.join("nested");
+        init_git_repo(&parent);
+        init_git_repo(&nested);
+        std::fs::create_dir_all(nested.join("real/src")).unwrap();
+        let expected = vec![nested.clone(), parent.clone()];
+
+        let plain = governing_roots(&parent, Some(&nested.join("real/src/lib.rs"))).unwrap();
+        assert_eq!(plain, expected);
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(nested.join("real"), nested.join("alias")).unwrap();
+            let aliased = governing_roots(&parent, Some(&nested.join("alias/src/lib.rs"))).unwrap();
+            assert_eq!(aliased, expected);
+        }
     }
 
     /// Containment is the only thing that stopped being an error. A target that

@@ -662,6 +662,42 @@ fn enforce_check_holds_a_write_through_a_link_to_the_policy_of_the_repository_it
 }
 
 #[cfg(unix)]
+#[test]
+fn enforce_check_holds_a_session_in_an_enclosing_repository_to_the_alias_refusal_of_the_repository_spelling_the_link(
+) {
+    let fixture = TempDir::new().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    let outer = root.join("outer");
+    let inner = outer.join("inner");
+    let destination = root.join("destination");
+    init_git_repo(&outer);
+    init_git_repo(&inner);
+    init_git_repo(&destination);
+    std::fs::write(outer.join("aoa-policy.yaml"), PERMISSIVE_POLICY).unwrap();
+    std::fs::write(
+        inner.join("aoa-policy.yaml"),
+        "protected_paths: [\"linked/**\"]\nreproduction_required: false\n",
+    )
+    .unwrap();
+    std::fs::write(destination.join("aoa-policy.yaml"), PERMISSIVE_POLICY).unwrap();
+    let target = destination.join("src.rs");
+    plant(&target);
+    std::os::unix::fs::symlink(&destination, inner.join("linked")).unwrap();
+    let absolute = inner.join("linked/src.rs");
+
+    let refusal = "protected path: policy forbids writing 'linked/src.rs'";
+    for spelling in ["inner/linked/src.rs", absolute.to_str().unwrap()] {
+        assert_check_is_refused_by_the_policy_of(&inner, write_to(spelling, &outer), refusal);
+    }
+    assert!(
+        !inner.join(".aoa").exists() && !destination.join(".aoa").exists(),
+        "the refusal is recorded in the session's own repository only"
+    );
+    assert_check_is_refused_by_the_policy_of(&inner, write_to("linked/src.rs", &inner), refusal);
+    assert_planted_target_is_untouched(&target);
+}
+
+#[cfg(unix)]
 fn assert_check_refuses_the_linked_policy_of(root: &Path, payload: String) {
     aoa_stdin()
         .args(["enforce", "check"])
