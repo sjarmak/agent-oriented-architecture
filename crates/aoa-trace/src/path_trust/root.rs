@@ -116,7 +116,7 @@ pub fn resolve_repository_root(candidate: &Path) -> Result<PathBuf, RepositoryRo
         return Err(RepositoryRootError::NotADirectory { path: canonical });
     }
 
-    let mut nearest_rejection = None;
+    let mut nearest_mismatch = None;
     for ancestor in canonical.ancestors() {
         let marker = ancestor.join(".git");
         match std::fs::symlink_metadata(&marker) {
@@ -124,26 +124,30 @@ pub fn resolve_repository_root(candidate: &Path) -> Result<PathBuf, RepositoryRo
                 return Err(RepositoryRootError::SymlinkedMarker { marker });
             }
             Ok(metadata) => match git_candidate_is_root(ancestor, metadata.is_dir())? {
-                None => return Ok(ancestor.to_path_buf()),
-                Some(mismatch @ GitCandidateRejection::RootMismatch { .. }) => {
-                    nearest_rejection.get_or_insert((marker, mismatch));
+                None => {
+                    return match nearest_mismatch {
+                        Some((marker, selected, reason)) if selected != ancestor => {
+                            Err(RepositoryRootError::NotAGitRoot { marker, reason })
+                        }
+                        _ => Ok(ancestor.to_path_buf()),
+                    };
                 }
-                Some(refusal) => {
-                    return Err(RepositoryRootError::NotAGitRoot {
-                        marker,
-                        reason: refusal.to_string(),
-                    });
+                Some(rejection) => {
+                    let reason = rejection.to_string();
+                    match rejection {
+                        GitCandidateRejection::RootMismatch { reported, .. } => {
+                            nearest_mismatch.get_or_insert((marker, reported, reason));
+                        }
+                        _ => return Err(RepositoryRootError::NotAGitRoot { marker, reason }),
+                    }
                 }
             },
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(source) => return Err(RepositoryRootError::Inspect { marker, source }),
         }
     }
-    if let Some((marker, rejection)) = nearest_rejection {
-        return Err(RepositoryRootError::NotAGitRoot {
-            marker,
-            reason: rejection.to_string(),
-        });
+    if let Some((marker, _, reason)) = nearest_mismatch {
+        return Err(RepositoryRootError::NotAGitRoot { marker, reason });
     }
     Err(RepositoryRootError::NotInRepository { path: canonical })
 }

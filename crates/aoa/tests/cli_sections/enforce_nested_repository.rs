@@ -139,3 +139,32 @@ fn enforce_check_refuses_a_nested_worktree_with_a_mismatched_backlink_instead_of
 
     assert_nested_write_is_refused_without_the_parent_policy(&parent, &nested, "backlink");
 }
+
+#[test]
+fn enforce_check_refuses_a_marker_whose_repository_is_rooted_above_the_parent_instead_of_applying_the_parent_policy(
+) {
+    let fixture = TempDir::new().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    let elsewhere = root.join("elsewhere");
+    let outer = root.join("outer");
+    let parent = outer.join("parent");
+    let nested = parent.join("nested");
+    init_git_repo(&elsewhere);
+    git(
+        &elsewhere,
+        &["config", "core.worktree", outer.to_str().unwrap()],
+    );
+    init_git_repo(&parent);
+    std::fs::create_dir(&nested).unwrap();
+    std::fs::write(
+        nested.join(".git"),
+        format!("gitdir: {}\n", elsewhere.join(".git").display()),
+    )
+    .unwrap();
+
+    assert_nested_write_is_refused_without_the_parent_policy(
+        &parent,
+        &nested,
+        "instead of candidate",
+    );
+}

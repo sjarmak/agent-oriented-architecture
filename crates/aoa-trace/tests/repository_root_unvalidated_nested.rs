@@ -163,3 +163,42 @@ fn resolves_past_a_marker_git_itself_skips_to_the_repository_git_selects() {
 
     assert_eq!(resolve_repository_root(&nested).unwrap(), parent);
 }
+
+#[test]
+fn refuses_a_marker_whose_repository_names_a_worktree_above_the_validated_ancestor() {
+    let (_fixture, root) = fixture_root();
+    let elsewhere = root.join("elsewhere");
+    let outer = root.join("outer");
+    let parent = outer.join("parent");
+    let nested = parent.join("nested");
+    let below_nested = nested.join("src");
+    init_git_repo(&elsewhere);
+    git(
+        &elsewhere,
+        &["config", "core.worktree", outer.to_str().unwrap()],
+    );
+    init_git_repo(&parent);
+    std::fs::create_dir_all(&below_nested).unwrap();
+    std::fs::write(
+        nested.join(".git"),
+        format!("gitdir: {}\n", elsewhere.join(".git").display()),
+    )
+    .unwrap();
+    assert_eq!(
+        git_toplevel(&below_nested),
+        outer,
+        "git must select the repository the marker names, rooted above the parent"
+    );
+
+    assert_eq!(resolve_repository_root(&parent).unwrap(), parent);
+    assert_refused_at(
+        resolve_repository_root(&nested),
+        &nested,
+        "instead of candidate",
+    );
+    assert_refused_at(
+        resolve_repository_root(&below_nested),
+        &nested,
+        "instead of candidate",
+    );
+}
