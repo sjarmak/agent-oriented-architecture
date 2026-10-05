@@ -87,6 +87,25 @@ The split moved code and tests without changing behaviour. The seven
 integration tests that exercise the resolver and the git environment moved
 with the module, and the module's unit tests moved inside it.
 
+aoa-7g14y.2 later deleted `aoa-enforce`'s private copies of the directory
+acquisition (see below), and that did change which `LiveLogError` two cases
+report. Both still refuse, and neither reaches a planted target:
+
+- A `mkdirat` failure while creating `.aoa` or `.aoa/traces` reports
+  `LiveLogError::Io` with `IoAction::Open` where it reported
+  `IoAction::Create`. `PathTrustError::Io` carries no verb, so the mapping
+  cannot tell the mkdir from the open that preceded it. The path and the errno
+  are unchanged.
+- Under one race the variant itself moves. The first `openat` of a directory
+  finds nothing, a symlink is planted at that name, `mkdirat` returns `EEXIST`,
+  and the link is removed before the reopen. The private helper ran an lstat
+  between the failed open and the mkdir, so it could observe the link and
+  report `SymlinkRefused`. `dirfd::open_or_create_dir_at` goes from the failed
+  open straight to `mkdirat`, and the reopen finds nothing, so the case reports
+  `Io` with `IoAction::Open` and `ENOENT`. The project lead accepted the
+  reclassification on 2026-10-05 (aoa-n7va7). A link still in place at the
+  reopen is `SymlinkRefused` as before.
+
 Left as it was:
 
 - `aoa-audit`, `aoa-enforce` and `aoa-budget` still depend on `rustix`
