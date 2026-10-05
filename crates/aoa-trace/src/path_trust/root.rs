@@ -77,6 +77,9 @@ pub enum RepositoryRootError {
     #[error("git returned a non-UTF-8 path for {field}")]
     NonUtf8GitPath { field: &'static str },
 
+    #[error("git returned a path without its line terminator for {field}")]
+    UnterminatedGitPath { field: &'static str },
+
     /// A linked worktree's backlink could not be read.
     #[error("failed to read linked-worktree backlink at {path}: {source}")]
     Backlink {
@@ -129,7 +132,7 @@ pub fn resolve_repository_root(candidate: &Path) -> Result<PathBuf, RepositoryRo
                         Some((marker, selected, reason)) if selected != ancestor => {
                             Err(RepositoryRootError::NotAGitRoot { marker, reason })
                         }
-                        _ => Ok(ancestor.to_path_buf()),
+                        _ => git_selects_root_from(&canonical, ancestor),
                     };
                 }
                 Some(rejection) => {
@@ -150,6 +153,24 @@ pub fn resolve_repository_root(candidate: &Path) -> Result<PathBuf, RepositoryRo
         return Err(RepositoryRootError::NotAGitRoot { marker, reason });
     }
     Err(RepositoryRootError::NotInRepository { path: canonical })
+}
+
+fn git_selects_root_from(candidate: &Path, root: &Path) -> Result<PathBuf, RepositoryRootError> {
+    if candidate == root {
+        return Ok(root.to_path_buf());
+    }
+    let rejection = match git_resolved_path(candidate, "--show-toplevel")? {
+        Ok(reported) if reported == root => return Ok(reported),
+        Ok(reported) => GitCandidateRejection::RootMismatch {
+            expected: root.to_path_buf(),
+            reported,
+        },
+        Err(rejection) => GitCandidateRejection::Command(rejection),
+    };
+    Err(RepositoryRootError::NotAGitRoot {
+        marker: candidate.to_path_buf(),
+        reason: rejection.to_string(),
+    })
 }
 
 /// Ask Git to validate the marker and require it to identify this exact
@@ -303,9 +324,7 @@ fn git_resolved_path(
         }));
     }
 
-    let reported = std::str::from_utf8(&output.stdout)
-        .map_err(|_| RepositoryRootError::NonUtf8GitPath { field })?
-        .trim_end();
+    let reported = git_reported_path(&output.stdout, field)?;
     let reported =
         Path::new(reported)
             .canonicalize()
@@ -314,6 +333,16 @@ fn git_resolved_path(
                 source,
             })?;
     Ok(Ok(reported))
+}
+
+fn git_reported_path<'a>(
+    stdout: &'a [u8],
+    field: &'static str,
+) -> Result<&'a str, RepositoryRootError> {
+    let path = stdout
+        .strip_suffix(b"\n")
+        .ok_or(RepositoryRootError::UnterminatedGitPath { field })?;
+    std::str::from_utf8(path).map_err(|_| RepositoryRootError::NonUtf8GitPath { field })
 }
 
 pub fn linked_worktree_points_back(
@@ -699,6 +728,38 @@ mod tests {
 
         assert!(linked_worktree_points_back(&other, &git_dir).unwrap());
         assert!(!linked_worktree_points_back(&candidate, &git_dir).unwrap());
+    }
+
+    #[test]
+    fn git_reported_path_strips_only_the_line_terminator() {
+        assert_eq!(
+            git_reported_path(b"/repo/ \n", "--show-toplevel").unwrap(),
+            "/repo/ "
+        );
+        assert_eq!(
+            git_reported_path(b"/repo/\n\n", "--git-dir").unwrap(),
+            "/repo/\n"
+        );
+        assert_eq!(
+            git_reported_path(b"/repo\r\n", "--git-common-dir").unwrap(),
+            "/repo\r"
+        );
+    }
+
+    #[test]
+    fn git_reported_path_refuses_output_without_the_line_terminator() {
+        for stdout in [&b"/repo"[..], b"/repo ", b""] {
+            let refusal = git_reported_path(stdout, "--show-toplevel").unwrap_err();
+            assert!(
+                matches!(
+                    refusal,
+                    RepositoryRootError::UnterminatedGitPath {
+                        field: "--show-toplevel"
+                    }
+                ),
+                "{refusal}"
+            );
+        }
     }
 
     /// A `.git` that Git itself disowns is not a trust root, and asking must not

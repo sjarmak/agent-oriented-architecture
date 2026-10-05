@@ -168,3 +168,74 @@ fn enforce_check_refuses_a_marker_whose_repository_is_rooted_above_the_parent_in
         "instead of candidate",
     );
 }
+
+fn assert_enforce_check_refuses_cwd_without_the_parent_policy(parent: &Path, cwd: &Path) {
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(write_to_src_from(cwd))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--show-toplevel"))
+        .stderr(predicate::str::contains(format!(
+            "validation failed for {}:",
+            cwd.display()
+        )));
+    assert!(
+        !parent.join(".aoa").exists(),
+        "a directory git does not root at the parent must not be enforced as the parent"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn enforce_check_applies_the_policy_of_a_nested_repository_named_one_space_not_its_parent() {
+    let fixture = TempDir::new().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    let parent = root.join("parent");
+    let nested = parent.join(" ");
+    init_git_repo(&parent);
+    init_git_repo(&nested);
+    std::fs::write(parent.join("aoa-policy.yaml"), PERMISSIVE_POLICY).unwrap();
+    std::fs::write(nested.join("aoa-policy.yaml"), PROTECTIVE_POLICY).unwrap();
+
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(write_to_src_from(&nested))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("protected path"));
+    assert!(
+        !parent.join(".aoa").exists(),
+        "a nested repository must not be enforced as its parent"
+    );
+}
+
+#[test]
+fn enforce_check_refuses_a_nested_bare_repository_instead_of_applying_its_parent_policy() {
+    let fixture = TempDir::new().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    let parent = root.join("parent");
+    let bare = parent.join("nested.git");
+    init_git_repo(&parent);
+    std::fs::create_dir(&bare).unwrap();
+    git(&bare, &["init", "--quiet", "--bare", "--template="]);
+    std::fs::write(parent.join("aoa-policy.yaml"), PERMISSIVE_POLICY).unwrap();
+
+    assert_enforce_check_refuses_cwd_without_the_parent_policy(&parent, &bare);
+    assert_enforce_check_refuses_cwd_without_the_parent_policy(&parent, &bare.join("objects"));
+}
+
+#[test]
+fn enforce_check_refuses_a_cwd_inside_the_git_directory_of_the_root_itself() {
+    let fixture = TempDir::new().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    let parent = root.join("parent");
+    init_git_repo(&parent);
+    std::fs::write(parent.join("aoa-policy.yaml"), PERMISSIVE_POLICY).unwrap();
+
+    assert_enforce_check_refuses_cwd_without_the_parent_policy(&parent, &parent.join(".git"));
+    assert_enforce_check_refuses_cwd_without_the_parent_policy(
+        &parent,
+        &parent.join(".git/objects"),
+    );
+}
