@@ -1,7 +1,10 @@
 use std::ffi::OsStr;
 use std::os::unix::fs::PermissionsExt;
 
-use super::cli_git_environment::{inferred_owners, repository_owned_by, ALICE};
+use super::cli_git_environment::{
+    inferred_owners, mined_clones, mined_corpus_report, repository_owned_by,
+    revert_rate_correlations, ALICE,
+};
 use super::*;
 
 fn ownership_distrusted() -> (&'static str, &'static OsStr) {
@@ -97,6 +100,42 @@ fn infer_owners_answers_the_same_when_operator_config_ignores_revisions_from_a_m
 reports: {changed_the_answer:?}"
     );
     assert!(!missing.exists());
+}
+
+fn plain_git_logs_reverts(repo: &Path, config: &OperatorConfig) -> bool {
+    let mut git = Command::new("git");
+    git.arg("-C")
+        .arg(repo)
+        .args(["log", "--all", "--grep=This reverts commit", "--format=%b"])
+        .env("GIT_CONFIG_GLOBAL", &config.file);
+    git.output().expect("run git").status.success()
+}
+
+#[test]
+fn mine_corpus_answers_the_same_when_operator_config_sets_a_date_format_git_log_rejects() {
+    let clones = mined_clones(true, false);
+    let config = operator_config(clones.dir.path(), "[log]\n\tdate = no-such-format\n");
+    assert!(
+        !plain_git_logs_reverts(&clones.dir.path().join("clones/one"), &config),
+        "plain git log succeeds under the operator config, so it breaks nothing"
+    );
+    let uninfluenced = mined_corpus_report(&clones, None).expect("mine-corpus succeeds");
+    assert!(
+        revert_rate_correlations(&uninfluenced) > 0,
+        "the fixture's reverts do not reach the report: {uninfluenced}"
+    );
+
+    let changed_the_answer: Vec<&str> = routes_to(&config)
+        .into_iter()
+        .filter(|route| mined_corpus_report(&clones, Some(*route)).as_ref() != Some(&uninfluenced))
+        .map(|(variable, _)| variable)
+        .collect();
+
+    assert!(
+        changed_the_answer.is_empty(),
+        "operator git config reached through these variables changed what mine-corpus \
+reports: {changed_the_answer:?}"
+    );
 }
 
 #[test]

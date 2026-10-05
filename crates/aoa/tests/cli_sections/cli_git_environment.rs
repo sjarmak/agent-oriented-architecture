@@ -136,8 +136,8 @@ fn infer_owners_answers_the_same_when_the_caller_traces_git_to_standard_output()
     );
 }
 
-struct MinedClones {
-    dir: TempDir,
+pub(super) struct MinedClones {
+    pub(super) dir: TempDir,
     ambient: PathBuf,
 }
 
@@ -159,7 +159,10 @@ fn head_commit(repo: &Path) -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 
-fn mined_clones(revert_the_unlocked: bool, ambient_holds_the_mined_commits: bool) -> MinedClones {
+pub(super) fn mined_clones(
+    revert_the_unlocked: bool,
+    ambient_holds_the_mined_commits: bool,
+) -> MinedClones {
     let dir = TempDir::new().expect("tempdir");
     let ambient = dir.path().join("ambient");
     std::fs::create_dir_all(&ambient).unwrap();
@@ -215,7 +218,7 @@ fn mined_clones(revert_the_unlocked: bool, ambient_holds_the_mined_commits: bool
     MinedClones { dir, ambient }
 }
 
-fn mined_corpus_report(clones: &MinedClones, inherited: Inherited<'_>) -> Option<Value> {
+pub(super) fn mined_corpus_report(clones: &MinedClones, inherited: Inherited<'_>) -> Option<Value> {
     let root = clones.dir.path();
     let mut mine = aoa();
     mine.args(["gap", "mine-corpus", "--json", "--tasks"])
@@ -227,7 +230,7 @@ fn mined_corpus_report(clones: &MinedClones, inherited: Inherited<'_>) -> Option
     json_answer(mine, inherited)
 }
 
-fn revert_rate_correlations(report: &Value) -> usize {
+pub(super) fn revert_rate_correlations(report: &Value) -> usize {
     report["construct"]["metrics"]
         .as_array()
         .expect("metrics")
