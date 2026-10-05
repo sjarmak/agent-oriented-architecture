@@ -27,6 +27,9 @@ pub enum PathTrustError {
     #[error("{path} traverses above its trust root")]
     EscapesRoot { path: PathBuf },
 
+    #[error("refusing {path}: it exists but is not a regular file")]
+    NotRegularFile { path: PathBuf },
+
     /// The filesystem could not answer whether the node is safe. Never treated
     /// as absent: a check that fails open is not a check.
     #[error("filesystem operation failed at {path}: {source}")]
@@ -41,7 +44,10 @@ impl PathTrustError {
     /// The path the refusal or failure is about.
     pub fn path(&self) -> &std::path::Path {
         match self {
-            Self::UnsafePath { path } | Self::EscapesRoot { path } | Self::Io { path, .. } => path,
+            Self::UnsafePath { path }
+            | Self::EscapesRoot { path }
+            | Self::NotRegularFile { path }
+            | Self::Io { path, .. } => path,
         }
     }
 

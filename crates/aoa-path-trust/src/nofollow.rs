@@ -56,9 +56,139 @@ pub fn safe_join_nofollow(root: &Path, relative: &Path) -> Result<PathBuf, PathT
     Ok(resolved)
 }
 
+pub fn read_regular_file_nofollow(
+    directory: &Path,
+    name: &str,
+) -> Result<Option<String>, PathTrustError> {
+    use std::io::Read;
+
+    let path = directory.join(name);
+    let Some(mut file) = open_regular_file_nofollow(directory, name, &path)? else {
+        return Ok(None);
+    };
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)
+        .map_err(|source| PathTrustError::io(&path, source))?;
+    Ok(Some(contents))
+}
+
+#[cfg(unix)]
+fn open_regular_file_nofollow(
+    directory: &Path,
+    name: &str,
+    path: &Path,
+) -> Result<Option<std::fs::File>, PathTrustError> {
+    let parent = super::dirfd::open_trust_root(directory)?;
+    super::dirfd::open_regular_file_at(&parent, name, path)
+}
+
+#[cfg(not(unix))]
+fn open_regular_file_nofollow(
+    _directory: &Path,
+    _name: &str,
+    path: &Path,
+) -> Result<Option<std::fs::File>, PathTrustError> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(PathTrustError::io(path, source)),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(PathTrustError::unsafe_path(path));
+    }
+    if !metadata.is_file() {
+        return Err(PathTrustError::NotRegularFile {
+            path: path.to_path_buf(),
+        });
+    }
+    std::fs::File::open(path)
+        .map(Some)
+        .map_err(|source| PathTrustError::io(path, source))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_a_regular_file_and_reports_an_absent_one_as_none() {
+        let root = tempfile::tempdir().expect("create root");
+        assert!(read_regular_file_nofollow(root.path(), "policy.yaml")
+            .expect("an absent entry is not a failure")
+            .is_none());
+
+        std::fs::write(root.path().join("policy.yaml"), "contents\n").expect("write file");
+        assert_eq!(
+            read_regular_file_nofollow(root.path(), "policy.yaml")
+                .expect("read regular file")
+                .as_deref(),
+            Some("contents\n")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_a_symlinked_file_whether_or_not_its_target_exists() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("create root");
+        let outside = tempfile::tempdir().expect("create outside");
+        let real = outside.path().join("real.yaml");
+        std::fs::write(&real, "contents\n").expect("write link target");
+        symlink(&real, root.path().join("live.yaml")).expect("plant live link");
+        symlink(
+            outside.path().join("absent.yaml"),
+            root.path().join("dangling.yaml"),
+        )
+        .expect("plant dangling link");
+
+        for name in ["live.yaml", "dangling.yaml"] {
+            let result = read_regular_file_nofollow(root.path(), name);
+            assert!(
+                matches!(
+                    &result,
+                    Err(PathTrustError::UnsafePath { path }) if path == &root.path().join(name)
+                ),
+                "{name} must be refused, not followed or read as absent: {result:?}"
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(&real).expect("read link target"),
+            "contents\n"
+        );
+    }
+
+    #[test]
+    fn refuses_an_entry_that_is_not_a_regular_file() {
+        let root = tempfile::tempdir().expect("create root");
+        std::fs::create_dir(root.path().join("policy.yaml")).expect("create dir");
+
+        let result = read_regular_file_nofollow(root.path(), "policy.yaml");
+        assert!(
+            matches!(result, Err(PathTrustError::NotRegularFile { .. })),
+            "a directory squatting the name must not read as absent: {result:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_file_fails_closed_rather_than_reading_as_absent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().expect("create root");
+        let sealed = root.path().join("policy.yaml");
+        std::fs::write(&sealed, "contents\n").expect("write file");
+        std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o000))
+            .expect("seal file");
+
+        if std::fs::File::open(&sealed).is_err() {
+            let result = read_regular_file_nofollow(root.path(), "policy.yaml");
+            assert!(
+                matches!(result, Err(PathTrustError::Io { .. })),
+                "an unreadable file must not read as absent: {result:?}"
+            );
+        }
+    }
 
     #[test]
     fn joins_only_relative_normal_components() {

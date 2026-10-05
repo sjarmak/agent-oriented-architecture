@@ -7,6 +7,7 @@
 //! the write.
 
 use std::ffi::OsStr;
+use std::fs::File;
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::Path;
 
@@ -91,6 +92,30 @@ pub fn open_or_create_dir_at(
         }
         Err(source) => Err(map_nofollow_error(parent, name, path, source.into())),
     }
+}
+
+pub fn open_regular_file_at(
+    parent: impl AsFd,
+    name: &str,
+    path: &Path,
+) -> Result<Option<File>, PathTrustError> {
+    let fd = match fs::openat(
+        parent.as_fd(),
+        name,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(fd) => fd,
+        Err(Errno::NOENT) => return Ok(None),
+        Err(source) => return Err(map_nofollow_error(parent, name, path, source.into())),
+    };
+    let stat = fs::fstat(&fd).map_err(|source| PathTrustError::io(path, source.into()))?;
+    if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
+        return Err(PathTrustError::NotRegularFile {
+            path: path.to_path_buf(),
+        });
+    }
+    Ok(Some(File::from(fd)))
 }
 
 #[cfg(test)]

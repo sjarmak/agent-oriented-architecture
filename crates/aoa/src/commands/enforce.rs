@@ -77,8 +77,8 @@ use aoa_enforce::{
     TornTailRepair,
 };
 use aoa_path_trust::{
-    normalize_lexically, resolve_canonicalizing, resolve_repository_root, PathTrustError,
-    RepositoryRootError,
+    normalize_lexically, read_regular_file_nofollow, resolve_canonicalizing,
+    resolve_repository_root, PathTrustError, RepositoryRootError,
 };
 use aoa_policy::Policy;
 use aoa_trace::SpanType;
@@ -92,6 +92,7 @@ use crate::output::eprint_human;
 const ENFORCE_WRAPPER_SCRIPT: &str = include_str!("enforce_hook.sh");
 
 const POLICY_ROOT_ATTRIBUTE: &str = "policy_root";
+const POLICY_FILE: &str = "aoa-policy.yaml";
 
 /// The subset of a Claude Code hook payload this gate needs. Unknown fields are
 /// ignored by serde, so the host may add more without breaking the parse.
@@ -281,8 +282,8 @@ fn run_check(event: &HookEvent) -> Result<i32> {
         .transpose()?;
     let mut inside_base = false;
     let mut reproduction_root = None;
-    for root in governing_roots(&base)? {
-        let innermost = root == base;
+    for root in governing_roots(&base, candidate.as_deref())? {
+        let sessions_own = root == base;
         let targets = match candidate
             .as_deref()
             .map(|candidate| scope_under(&root, candidate))
@@ -292,7 +293,7 @@ fn run_check(event: &HookEvent) -> Result<i32> {
             Some(WriteScope::Inside(targets)) => Some(targets),
             None => None,
         };
-        inside_base |= innermost;
+        inside_base |= sessions_own;
         let policy = load_policy(&root)?;
         if let (Some(policy), Some(targets)) = (&policy, targets.as_deref()) {
             if let Some(reason) = path_refusal(policy, targets)? {
@@ -301,7 +302,7 @@ fn run_check(event: &HookEvent) -> Result<i32> {
         }
         let reproduction_required = match &policy {
             Some(policy) => policy.reproduction_required,
-            None => innermost,
+            None => sessions_own,
         };
         if reproduction_required && reproduction_root.is_none() {
             reproduction_root = Some(root);
@@ -318,16 +319,54 @@ fn run_check(event: &HookEvent) -> Result<i32> {
     }
 }
 
-fn governing_roots(innermost: &Path) -> Result<Vec<PathBuf>> {
-    let mut roots = vec![innermost.to_path_buf()];
-    while let Some(parent) = roots.last().and_then(|root| root.parent()) {
-        match resolve_repository_root(parent) {
-            Ok(root) => roots.push(root),
-            Err(RepositoryRootError::NotInRepository { .. }) => break,
-            Err(refusal) => return Err(refusal.into()),
+fn governing_roots(base: &Path, candidate: Option<&Path>) -> Result<Vec<PathBuf>> {
+    let mut session = vec![base.to_path_buf()];
+    while let Some(root) = enclosing_repository(session.last().and_then(|root| root.parent()))? {
+        session.push(root);
+    }
+    let (Some(candidate), Some(outermost)) = (candidate, session.last()) else {
+        return Ok(session);
+    };
+    if scope_under(outermost, candidate)? == WriteScope::Outside {
+        return Ok(Vec::new());
+    }
+
+    let mut roots = Vec::new();
+    let mut enclosing = enclosing_repository(target_directory(candidate)?.as_deref())?;
+    while let Some(root) = enclosing.filter(|root| !session.contains(root)) {
+        enclosing = enclosing_repository(root.parent())?;
+        roots.push(root);
+    }
+    roots.extend(session);
+    Ok(roots)
+}
+
+fn enclosing_repository(directory: Option<&Path>) -> Result<Option<PathBuf>> {
+    match directory.map(resolve_repository_root) {
+        None | Some(Err(RepositoryRootError::NotInRepository { .. })) => Ok(None),
+        Some(Ok(root)) => Ok(Some(root)),
+        Some(Err(refusal)) => Err(refusal.into()),
+    }
+}
+
+fn target_directory(candidate: &Path) -> Result<Option<PathBuf>> {
+    let resolved = match resolve_canonicalizing(candidate) {
+        Ok(resolved) => resolved,
+        Err(PathTrustError::EscapesRoot { .. }) => return Ok(None),
+        Err(other) => return Err(anyhow!(other)),
+    };
+    for ancestor in resolved.ancestors().skip(1) {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(metadata) if metadata.is_dir() => return Ok(Some(ancestor.to_path_buf())),
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(anyhow!(err))
+                    .with_context(|| format!("failed to inspect {}", ancestor.display()))
+            }
         }
     }
-    Ok(roots)
+    Ok(None)
 }
 
 fn path_refusal(policy: &Policy, targets: &[String]) -> Result<Option<BlockReason>> {
@@ -486,19 +525,14 @@ fn hook_candidate(base: &Path, raw: &Path) -> PathBuf {
     }
 }
 
-/// Load `<base>/aoa-policy.yaml` if it exists, failing loud on a malformed file
-/// — a broken policy must not silently disable enforcement.
 fn load_policy(base: &Path) -> Result<Option<Policy>> {
-    let path = base.join("aoa-policy.yaml");
-    match std::fs::read_to_string(&path) {
-        Ok(raw) => {
-            Ok(Some(Policy::from_yaml(&raw).with_context(|| {
-                format!("invalid policy at {}", path.display())
-            })?))
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(anyhow!(err)).with_context(|| format!("failed to read {}", path.display())),
-    }
+    let path = base.join(POLICY_FILE);
+    read_regular_file_nofollow(base, POLICY_FILE)
+        .with_context(|| format!("cannot read policy at {}", path.display()))?
+        .map(|raw| {
+            Policy::from_yaml(&raw).with_context(|| format!("invalid policy at {}", path.display()))
+        })
+        .transpose()
 }
 
 /// Which span (if any) a recorded tool event maps to. Today only the
