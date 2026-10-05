@@ -85,18 +85,42 @@ a refusal that was not loud, and a wrong finding. The audit's own builder in
 shared builder's, because the resolver needs the opposite.
 
 **4. The CLI's data readers run without the operator's machine config, and are
-handed its `safe.directory` values.** `policy infer-owners` and
-`gap mine-corpus` parse blame, tree and log output, which machine config can
-reshape or break. They build their commands with
+handed its `safe.directory` values in a config file of their own.**
+`policy infer-owners` and `gap mine-corpus` parse blame, tree and log output,
+which machine config can reshape or break. They build their commands with
 `commands::git::reading_repository_data`, which starts from the shared strip,
-sets `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL` to the null device, and
-passes each `safe.directory` value the operator's system and global config
-hold as `-c safe.directory=<value>`, in the order git read them. The values are
-read once per process, by a git that still sees the operator's config, with
-`git config --includes --null --show-scope --get-all safe.directory`; only
-`system` and `global` scope entries are kept. Command scope is one of git's
-protected scopes, so the ownership decision these readers get is the one the
-operator's own git would make.
+sets `GIT_CONFIG_NOSYSTEM=1`, and points `GIT_CONFIG_GLOBAL` at a private
+temporary file that holds the operator's `safe.directory` values and nothing
+else, in the order git read them. Global scope is one of git's protected
+scopes, so git consults that file when it decides whether to trust the
+repository.
+
+The values are read once per process with
+`git config --includes --null --show-scope --get-all safe.directory`, by a git
+that still sees the operator's config (`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`,
+`GIT_CONFIG_NOSYSTEM` and `HOME` are inherited); only `system` and `global`
+scope entries are kept. That read runs in a fresh empty temporary directory
+with `GIT_CEILING_DIRECTORIES` set to the directory's parent, so it discovers
+no repository, whatever directory AOA was started in. This is the context git
+itself has when it checks ownership: the check runs before a repository is
+set up, so an `includeIf "gitdir:..."` or `includeIf "onbranch:..."` block
+cannot match there, and a `safe.directory` granted inside one does not make
+git trust anything. Measured on git 2.43.0 under
+`GIT_TEST_ASSUME_DIFFERENT_OWNER=1`: with `safe.directory = *` reachable only
+through `includeIf "gitdir:<A>/.git"`, `git -C <A> rev-parse HEAD` and
+`git -C <B> rev-parse HEAD` both fail with the dubious-ownership message,
+from a working directory inside A, inside B or outside both. Reading the list
+with no repository in view therefore yields exactly the set git's own check
+uses, for the repository AOA was started in and for every other one.
+
+The file is created with the `tempfile` crate (mode 0600 on Unix), written
+once per git call and removed when that call returns. Each value is written as
+a double-quoted config string with backslash, double quote, newline and tab
+escaped, and is carried as bytes, so a value round-trips exactly whether it is
+`*`, contains spaces, quotes or backslashes, or is not UTF-8. An empty value is
+written as `""`: git treats an empty `safe.directory` as withdrawing every
+value before it, and the file keeps both the entry and its position so that
+still happens.
 
 Repository-local config (`.git/config`) stays in force everywhere. It belongs
 to the repository being measured, travels with it, and is the same for every
@@ -116,9 +140,13 @@ operator who measures that checkout.
   setting. An operator who relied on a global `blame.ignoreRevsFile` to keep a
   formatting commit out of `infer-owners` gets raw attribution; the setting
   works again when it is put in the repository's own config.
-- `infer-owners` and `mine-corpus` run one extra `git config` per process. If
-  that read fails for a reason other than the key being unset, the command
-  fails with git's message instead of guessing an empty list.
+- `infer-owners` and `mine-corpus` run one extra `git config` per process, and
+  write one small file per data-reading git call. If the read fails for a
+  reason other than the key being unset, or the file cannot be created,
+  written or removed, the command fails with that error instead of guessing an
+  empty list.
+- The length of the operator's trust list is not bounded by the operating
+  system's argument limit. Nothing rides on the command line.
 
 ### What this deliberately does not cover
 
@@ -128,16 +156,24 @@ operator who measures that checkout.
   `crates/aoa-trace/tests/git_environment_inherited_redirects.rs` asserts that
   the constructed command removes them and no test observes a Windows git
   being unaffected (aoa-b3oj3 item 2).
-- **Every `safe.directory` value rides on the command line.** A machine whose
-  config holds a very large list makes every data-reading git call carry all
-  of it. The operating system's argument limit is the bound; past it the spawn
-  fails with the system's error, naming the git call. Nothing filters the list
-  to the repository being read, because that would reimplement git's matching.
-- **The `safe.directory` read happens in the directory AOA was started from,
-  once.** An `includeIf "gitdir:..."` block in machine config is evaluated
-  against that directory's repository, not against each repository later named
-  with `--repo` or `--clones`. A starting directory whose `.git` file is
-  corrupt makes the read, and so the command, fail with git's message.
+- **The trust file is rewritten for every git call.** `infer-owners` blames
+  each file with its own git process, so a machine with a very long trust list
+  pays one write of that list per blamed file. The list is rendered once per
+  process; only the write repeats. Nothing filters the list to the repository
+  being read, because that would reimplement git's matching.
+- **A relative `GIT_CONFIG_GLOBAL` or `GIT_CONFIG_SYSTEM` names nothing.** Git
+  resolves a relative path in those variables against its working directory.
+  The trust read runs in an empty directory, so a relative path finds no file
+  there and contributes no values, where plain `git -C <repo>` would have
+  looked for it inside the repository. An absolute path, and the default files
+  under `HOME`, are read as git reads them.
+- **A conditional include that needs no repository is evaluated once.** An
+  `includeIf "hasconfig:remote.*.url:..."` block is matched against the
+  operator's machine config alone. Whether git's ownership check matches it
+  the same way was not measured, and no test pins that form.
+- **A process killed mid-call leaves its trust file behind.** The file is
+  removed when the git call returns. It holds a list of directory names and is
+  readable only by its owner.
 - **Repository-local config can still reshape output.** A `.git/config` that
   sets `blame.ignoreRevsFile` changes `infer-owners` for everyone who measures
   that checkout. That is the repository's statement about itself and is treated
@@ -151,7 +187,9 @@ operator who measures that checkout.
   resolver, which inherits machine config and the ownership variable.
 - `crates/aoa-audit/src/planes.rs`, `fn git`: the audit's builder.
 - `crates/aoa/src/commands/git.rs`, `fn reading_repository_data`: the data
-  readers' builder and the one read of the operator's `safe.directory`.
+  readers' builder; `fn operator_trust_config`: the one read of the operator's
+  `safe.directory`, outside any repository; `fn trust_config`: the file's
+  contents.
 - `crates/aoa-trace/tests/git_environment_repository_variables.rs` and
   `git_environment_inherited_redirects.rs`: every stripped name pinned on the
   built command.
@@ -161,4 +199,9 @@ operator who measures that checkout.
 - `crates/aoa/tests/cli_sections/cli_operator_git_config.rs`: `infer-owners`
   answers the same under a global, a system and a home-directory config that
   breaks `git blame`; a distrusted repository the operator's config marks safe
-  is still read; one it does not mark safe is refused with git's message.
+  is still read; one it does not mark safe is refused with git's message;
+  started inside a trusted repository, it trusts that repository and another
+  one exactly as plain git does, with the trust named outright, withdrawn by
+  an empty value, and widened by a conditional include; a repository listed
+  after fifty thousand others is read; a corrupt `.git` in the starting
+  directory does not stop `--repo`; nothing is left in the temporary directory.
