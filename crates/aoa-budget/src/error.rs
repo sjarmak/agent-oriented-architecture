@@ -25,16 +25,12 @@ pub enum BudgetError {
     #[error("context file {path} is reached through {archive}, the name its archive would take")]
     RootThroughArchive { path: PathBuf, archive: PathBuf },
 
-    #[error(
-        "failed to replace {path}, and its temporary file {temp} could not be removed \
-         ({removal}) and is left behind"
-    )]
+    #[error("failed to replace {path}, and {}", left_behind(.left))]
     TempFileLeftBehind {
         path: PathBuf,
-        temp: PathBuf,
+        left: Vec<LeftBehindTemp>,
         #[source]
         source: std::io::Error,
-        removal: std::io::Error,
     },
 
     #[error("context closure of {path} came back without the file it was resolved from")]
@@ -54,4 +50,24 @@ pub enum BudgetError {
         target_tokens: usize,
         ceiling: usize,
     },
+}
+
+#[derive(Debug)]
+pub struct LeftBehindTemp {
+    pub temp: PathBuf,
+    pub removal: std::io::Error,
+}
+
+fn left_behind(left: &[LeftBehindTemp]) -> String {
+    let named: Vec<String> = left
+        .iter()
+        .map(|file| format!("{} ({})", file.temp.display(), file.removal))
+        .collect();
+    match named.as_slice() {
+        [one] => format!("its temporary file {one} could not be removed and is left behind"),
+        many => format!(
+            "its temporary files {} could not be removed and are left behind",
+            many.join(" and ")
+        ),
+    }
 }

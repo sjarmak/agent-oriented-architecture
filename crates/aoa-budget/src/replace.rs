@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use tempfile::{NamedTempFile, PersistError};
 
-use crate::error::BudgetError;
+use crate::error::{BudgetError, LeftBehindTemp};
 
 pub(crate) struct Standing {
     permissions: Permissions,
@@ -70,9 +70,8 @@ impl Standing {
 pub(crate) enum Unplaced {
     Refused(io::Error),
     LeftBehind {
-        temp: PathBuf,
         source: io::Error,
-        removal: io::Error,
+        left: Vec<LeftBehindTemp>,
     },
 }
 
@@ -81,37 +80,40 @@ impl Unplaced {
         let path = path.to_path_buf();
         match self {
             Unplaced::Refused(source) => BudgetError::Io { path, source },
-            Unplaced::LeftBehind {
-                temp,
-                source,
-                removal,
-            } => BudgetError::TempFileLeftBehind {
-                path,
-                temp,
-                source,
-                removal,
-            },
+            Unplaced::LeftBehind { source, left } => {
+                BudgetError::TempFileLeftBehind { path, left, source }
+            }
         }
     }
 
     pub(crate) fn withdrawing(self, prepared: Replacement) -> Self {
-        match self {
-            Unplaced::Refused(source) => withdrawn(prepared.fresh, source),
-            left_behind @ Unplaced::LeftBehind { .. } => left_behind,
+        let (source, mut left) = match self {
+            Unplaced::Refused(source) => (source, Vec::new()),
+            Unplaced::LeftBehind { source, left } => (source, left),
+        };
+        left.extend(withdraw(prepared.fresh));
+        Self::leaving(source, left)
+    }
+
+    fn leaving(source: io::Error, left: Vec<LeftBehindTemp>) -> Self {
+        if left.is_empty() {
+            Unplaced::Refused(source)
+        } else {
+            Unplaced::LeftBehind { source, left }
         }
     }
 }
 
 fn withdrawn(fresh: NamedTempFile, source: io::Error) -> Unplaced {
+    Unplaced::leaving(source, withdraw(fresh).into_iter().collect())
+}
+
+fn withdraw(fresh: NamedTempFile) -> Option<LeftBehindTemp> {
     let temp = fresh.path().to_path_buf();
-    match fresh.close() {
-        Ok(()) => Unplaced::Refused(source),
-        Err(removal) => Unplaced::LeftBehind {
-            temp,
-            source,
-            removal,
-        },
-    }
+    fresh
+        .close()
+        .err()
+        .map(|removal| LeftBehindTemp { temp, removal })
 }
 
 pub(crate) struct Placing<'a> {
@@ -255,13 +257,46 @@ mod tests {
         let refused = replacement.put(&Placing::REAL);
 
         assert!(
-            matches!(&refused, Err(Unplaced::LeftBehind { temp: named, .. }) if named == &temp),
+            matches!(
+                &refused,
+                Err(Unplaced::LeftBehind { left, .. })
+                    if matches!(left.as_slice(), [named] if named.temp == temp)
+            ),
             "{refused:?}"
         );
         let reported = refused.unwrap_err().at(&path).to_string();
         assert!(reported.contains(&temp.display().to_string()), "{reported}");
         assert!(temp.exists());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "standing");
+    }
+
+    #[test]
+    fn withdrawing_a_second_unremovable_file_names_both_in_the_order_they_were_left() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.md");
+        std::fs::write(&path, "standing").unwrap();
+        let standing = Standing::of_writable(&path).unwrap().unwrap();
+        let mut temps = Vec::new();
+        let mut stranded = || {
+            let replacement = Replacement::prepare(&path, "fresh", &standing).unwrap();
+            let temp = replacement.fresh.path().to_path_buf();
+            std::fs::remove_file(&temp).unwrap();
+            std::fs::create_dir(&temp).unwrap();
+            std::fs::write(temp.join("held"), "").unwrap();
+            temps.push(temp);
+            replacement
+        };
+        let first = stranded();
+        let second = stranded();
+
+        let refused = first.put(&Placing::REAL).unwrap_err().withdrawing(second);
+
+        let Unplaced::LeftBehind { left, .. } = &refused else {
+            panic!("{refused:?}");
+        };
+        let named: Vec<_> = left.iter().map(|file| file.temp.clone()).collect();
+        assert_eq!(named, temps);
+        assert!(temps.iter().all(|temp| temp.join("held").exists()));
     }
 
     #[test]

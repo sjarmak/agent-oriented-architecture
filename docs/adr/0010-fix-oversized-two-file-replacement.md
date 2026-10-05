@@ -50,7 +50,12 @@ file is placed:
 
 A temporary file is removed when its replacement is refused. When it can be
 neither placed nor removed, the returned error is
-`BudgetError::TempFileLeftBehind` and names the file.
+`BudgetError::TempFileLeftBehind` and names the file. Both temporary files exist
+from the moment the second is prepared until the archive is placed, so a
+failure in that span withdraws the one not yet placed as well, and the error
+names every file that could not be removed: a run whose archive is refused with
+its temporary file stuck, and whose prepared context-file replacement is stuck
+too, names both, in the order they were left.
 
 What this record does not cover:
 
@@ -63,9 +68,6 @@ What this record does not cover:
   summary already in place. Running `fix_oversized` on a context file that is
   already a summary archives the summary over the original. That is a defect
   outside this decision and is tracked as aoa-rqnb8.
-- Two files with more than one error. When the archive is refused and its own
-  temporary file is left behind, a failure to remove the context file's
-  temporary file as well is not reported; the error names the first.
 
 ## Where this lives
 
@@ -76,4 +78,6 @@ What this record does not cover:
   at a time; `fix_oversized` always passes the real pair.
 - The unit tests in `crates/aoa-budget/src/fix.rs` fail the second rename and
   the first directory sync, check that both files hold the original body, and
-  compare a rerun against a tree fixed in one run.
+  compare a rerun against a tree fixed in one run. The same file strands both
+  temporary files and checks the error names both; `replace.rs` checks the
+  order they are named in.

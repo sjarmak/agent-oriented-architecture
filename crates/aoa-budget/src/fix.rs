@@ -413,8 +413,9 @@ mod tests {
         assert!(
             matches!(
                 &refused,
-                Err(BudgetError::TempFileLeftBehind { path, temp, .. })
-                    if path == &tree.archive && temp == &stranded
+                Err(BudgetError::TempFileLeftBehind { path, left, .. })
+                    if path == &tree.archive
+                        && matches!(left.as_slice(), [one] if one.temp == stranded)
             ),
             "{refused:?}"
         );
@@ -422,6 +423,55 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains(&stranded.display().to_string()));
+        assert_eq!(
+            std::fs::read_to_string(&tree.root).unwrap(),
+            oversized_body()
+        );
+    }
+
+    fn strand(temp: &Path) {
+        std::fs::remove_file(temp).unwrap();
+        std::fs::create_dir(temp).unwrap();
+        std::fs::write(temp.join("held"), "").unwrap();
+    }
+
+    #[test]
+    fn two_temporary_files_that_cannot_be_withdrawn_are_both_named_when_the_archive_is_refused() {
+        let tree = tree(None);
+        let stranded = Cell::new(None);
+        let stranding_both = Placing {
+            rename: &|fresh, _to| {
+                let prepared_root = std::fs::read_dir(tree.dir.path())
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .find(|entry| entry != fresh.path() && !entry.ends_with("big.md"))
+                    .unwrap();
+                strand(&prepared_root);
+                strand(fresh.path());
+                stranded.set(Some((fresh.path().to_path_buf(), prepared_root)));
+                Err(PersistError {
+                    error: refused(),
+                    file: fresh,
+                })
+            },
+            sync_directory: Placing::REAL.sync_directory,
+        };
+
+        let refused = fix(&tree, &stranding_both);
+
+        let (archive_temp, root_temp) = stranded.take().unwrap();
+        assert!(
+            matches!(&refused, Err(BudgetError::TempFileLeftBehind { path, .. }) if path == &tree.archive),
+            "{refused:?}"
+        );
+        let reported = refused.unwrap_err().to_string();
+        for temp in [&archive_temp, &root_temp] {
+            assert!(
+                reported.contains(&temp.display().to_string()),
+                "{temp:?} is left behind but not named in: {reported}"
+            );
+            assert!(temp.join("held").exists());
+        }
         assert_eq!(
             std::fs::read_to_string(&tree.root).unwrap(),
             oversized_body()
