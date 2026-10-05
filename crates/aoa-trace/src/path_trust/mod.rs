@@ -27,6 +27,7 @@ mod git_environment;
 mod nofollow;
 mod resolve;
 mod root;
+mod submodule;
 
 pub use component::validate_single_component;
 pub use error::{PathTrustError, UnsafePathComponent};

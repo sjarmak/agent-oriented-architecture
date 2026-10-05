@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 
 use super::git_environment::git_free_of_inherited_state;
+use super::submodule::{submodule_rejection, SubmoduleRejection};
 
 /// Why a candidate directory yielded no repository trust root.
 ///
@@ -215,6 +216,10 @@ fn git_candidate_is_root_with(
             return Ok(Some(GitCandidateRejection::Command(rejection)));
         }
     };
+    if git_dir == common_dir {
+        return Ok(submodule_rejection(candidate, &git_dir, resolve)?
+            .map(GitCandidateRejection::Submodule));
+    }
     if git_dir.parent() != Some(common_dir.join("worktrees").as_path()) {
         return Ok(Some(GitCandidateRejection::LinkedWorktreeLayout {
             git_dir,
@@ -231,10 +236,10 @@ fn git_candidate_is_root_with(
     }
 }
 
-type GitPathResolution = std::result::Result<PathBuf, GitCommandRejection>;
+pub(super) type GitPathResolution = std::result::Result<PathBuf, GitCommandRejection>;
 
 #[derive(Debug)]
-struct GitCommandRejection {
+pub(super) struct GitCommandRejection {
     field: &'static str,
     status: ExitStatus,
     stderr: String,
@@ -255,12 +260,14 @@ enum GitCandidateRejection {
         candidate: PathBuf,
         git_dir: PathBuf,
     },
+    Submodule(SubmoduleRejection),
 }
 
 impl fmt::Display for GitCandidateRejection {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Command(rejection) => rejection.fmt(formatter),
+            Self::Submodule(rejection) => rejection.fmt(formatter),
             Self::RootMismatch { expected, reported } => write!(
                 formatter,
                 "Git check --show-toplevel reported {} instead of candidate {}",
@@ -335,7 +342,7 @@ fn git_resolved_path(
     Ok(Ok(reported))
 }
 
-fn git_reported_path<'a>(
+pub(super) fn git_reported_path<'a>(
     stdout: &'a [u8],
     field: &'static str,
 ) -> Result<&'a str, RepositoryRootError> {
@@ -844,7 +851,7 @@ mod tests {
         match resolve_repository_root(&nested) {
             Err(RepositoryRootError::NotAGitRoot { marker, reason }) => {
                 assert_eq!(marker, nested.join(".git"));
-                assert!(reason.contains("linked-worktree layout"), "{reason}");
+                assert!(reason.contains("submodule layout"), "{reason}");
             }
             other => panic!("expected a refusal naming the nested marker, got {other:?}"),
         }

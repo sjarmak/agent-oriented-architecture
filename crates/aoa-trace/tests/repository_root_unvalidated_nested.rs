@@ -72,45 +72,6 @@ fn fixture_root() -> (tempfile::TempDir, PathBuf) {
 }
 
 #[test]
-fn refuses_a_nested_submodule_instead_of_resolving_to_its_superproject() {
-    let (_fixture, root) = fixture_root();
-    let upstream = root.join("upstream");
-    let parent = root.join("parent");
-    let nested = parent.join("nested");
-    let below_nested = nested.join("src");
-    repo_with_a_commit(&upstream);
-    init_git_repo(&parent);
-    git(
-        &parent,
-        &[
-            "submodule",
-            "add",
-            "--quiet",
-            upstream.to_str().unwrap(),
-            "nested",
-        ],
-    );
-    std::fs::create_dir(&below_nested).unwrap();
-    assert_eq!(
-        git_toplevel(&below_nested),
-        nested,
-        "git must select the submodule, not the superproject"
-    );
-
-    assert_eq!(resolve_repository_root(&parent).unwrap(), parent);
-    assert_refused_at(
-        resolve_repository_root(&nested),
-        &nested,
-        "linked-worktree layout",
-    );
-    assert_refused_at(
-        resolve_repository_root(&below_nested),
-        &nested,
-        "linked-worktree layout",
-    );
-}
-
-#[test]
 fn refuses_a_nested_linked_worktree_with_a_mismatched_backlink_instead_of_its_parent() {
     let (_fixture, root) = fixture_root();
     let owner = root.join("owner");

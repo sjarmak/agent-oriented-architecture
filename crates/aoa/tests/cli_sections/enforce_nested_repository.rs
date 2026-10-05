@@ -84,8 +84,51 @@ fn assert_nested_write_is_refused_without_the_parent_policy(
     );
 }
 
+fn add_submodule(superproject: &Path, upstream: &Path, name: &str) {
+    git(
+        superproject,
+        &[
+            "submodule",
+            "add",
+            "--quiet",
+            upstream.to_str().unwrap(),
+            name,
+        ],
+    );
+}
+
+fn set_core_worktree(git_dir: &Path, worktree: &Path) {
+    git(
+        git_dir,
+        &[
+            "config",
+            "--file",
+            git_dir.join("config").to_str().unwrap(),
+            "core.worktree",
+            worktree.to_str().unwrap(),
+        ],
+    );
+}
+
+fn assert_write_to_src_is_blocked_by_the_policy_of(governing: &Path, bystanders: &[&Path]) {
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(write_to_src_from(governing))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("protected path"));
+    for bystander in bystanders {
+        assert!(
+            !bystander.join(".aoa").exists(),
+            "{} must not be enforced in place of {}",
+            bystander.display(),
+            governing.display()
+        );
+    }
+}
+
 #[test]
-fn enforce_check_refuses_a_nested_submodule_instead_of_applying_its_superproject_policy() {
+fn enforce_check_applies_a_submodules_own_policy_not_its_superprojects() {
     let fixture = TempDir::new().unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let upstream = root.join("upstream");
@@ -93,21 +136,113 @@ fn enforce_check_refuses_a_nested_submodule_instead_of_applying_its_superproject
     let nested = parent.join("nested");
     repo_with_a_commit(&upstream);
     init_git_repo(&parent);
+    add_submodule(&parent, &upstream, "nested");
+    std::fs::write(parent.join("aoa-policy.yaml"), PERMISSIVE_POLICY).unwrap();
+    std::fs::write(nested.join("aoa-policy.yaml"), PROTECTIVE_POLICY).unwrap();
+
+    assert_write_to_src_is_blocked_by_the_policy_of(&nested, &[&parent]);
+
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(write_to_src_from(&parent))
+        .assert()
+        .success();
+}
+
+#[test]
+fn enforce_check_applies_the_superprojects_policy_to_the_superproject_not_its_submodules() {
+    let fixture = TempDir::new().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    let upstream = root.join("upstream");
+    let parent = root.join("parent");
+    let nested = parent.join("nested");
+    repo_with_a_commit(&upstream);
+    init_git_repo(&parent);
+    add_submodule(&parent, &upstream, "nested");
+    std::fs::write(parent.join("aoa-policy.yaml"), PROTECTIVE_POLICY).unwrap();
+    std::fs::write(nested.join("aoa-policy.yaml"), PERMISSIVE_POLICY).unwrap();
+
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(write_to_src_from(&nested))
+        .assert()
+        .success();
+    assert!(
+        !parent.join(".aoa").exists(),
+        "a submodule must not be enforced as its superproject"
+    );
+    assert_write_to_src_is_blocked_by_the_policy_of(&parent, &[]);
+}
+
+#[test]
+fn enforce_check_applies_the_policy_of_a_submodule_of_a_submodule_not_either_superproject() {
+    let fixture = TempDir::new().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    let innermost_upstream = root.join("innermost-upstream");
+    let upstream = root.join("upstream");
+    let parent = root.join("parent");
+    let nested = parent.join("nested");
+    let innermost = nested.join("innermost");
+    repo_with_a_commit(&innermost_upstream);
+    init_git_repo(&upstream);
+    add_submodule(&upstream, &innermost_upstream, "innermost");
+    git(&upstream, &["commit", "--quiet", "-m", "add the submodule"]);
+    init_git_repo(&parent);
+    add_submodule(&parent, &upstream, "nested");
     git(
         &parent,
-        &[
-            "submodule",
-            "add",
-            "--quiet",
-            upstream.to_str().unwrap(),
-            "nested",
-        ],
+        &["submodule", "update", "--quiet", "--init", "--recursive"],
     );
+    std::fs::write(parent.join("aoa-policy.yaml"), PERMISSIVE_POLICY).unwrap();
+    std::fs::write(nested.join("aoa-policy.yaml"), PERMISSIVE_POLICY).unwrap();
+    std::fs::write(innermost.join("aoa-policy.yaml"), PROTECTIVE_POLICY).unwrap();
+
+    assert_write_to_src_is_blocked_by_the_policy_of(&innermost, &[&parent, &nested]);
+}
+
+#[test]
+fn enforce_check_refuses_a_marker_file_naming_a_planted_gitdir_instead_of_applying_any_policy() {
+    let fixture = TempDir::new().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    let planted = root.join("planted");
+    let parent = root.join("parent");
+    let nested = parent.join("nested");
+    init_git_repo(&planted);
+    set_core_worktree(&planted.join(".git"), &nested);
+    init_git_repo(&parent);
+    std::fs::create_dir(&nested).unwrap();
+    std::fs::write(
+        nested.join(".git"),
+        format!("gitdir: {}\n", planted.join(".git").display()),
+    )
+    .unwrap();
+
+    assert_nested_write_is_refused_without_the_parent_policy(&parent, &nested, "submodule layout");
+}
+
+#[test]
+fn enforce_check_refuses_a_submodule_whose_core_worktree_names_another_directory() {
+    let fixture = TempDir::new().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    let upstream = root.join("upstream");
+    let parent = root.join("parent");
+    let nested = parent.join("nested");
+    let other = root.join("other");
+    repo_with_a_commit(&upstream);
+    init_git_repo(&parent);
+    add_submodule(&parent, &upstream, "nested");
+    init_git_repo(&other);
+    std::fs::write(other.join("aoa-policy.yaml"), PERMISSIVE_POLICY).unwrap();
+    set_core_worktree(&parent.join(".git/modules/nested"), &other);
 
     assert_nested_write_is_refused_without_the_parent_policy(
         &parent,
         &nested,
-        "linked-worktree layout",
+        "instead of candidate",
+    );
+    assert!(
+        !other.join(".aoa").exists(),
+        "the directory core.worktree names must not be enforced in place of the submodule"
     );
 }
 
