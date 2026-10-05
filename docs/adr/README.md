@@ -17,6 +17,7 @@ duplicates one is already built.
 | [0004](0004-environment-dependent-test-skips.md) | A test skips on a precondition CI can satisfy; it is ignored on one CI can never satisfy | Accepted |
 | [0005](0005-enforcement-liveness-in-a-checkout.md) | A checkout with no telemetry is unobserved, not silent: the audit gates only on measurements it holds | Accepted |
 | [0006](0006-architecture-model-conformance.md) | `architecture/model.c4` is a maintained contract: every arrow is a real dependency, and every dependency between library crates is an arrow | Accepted |
+| [0007](0007-git-environment-and-config-for-subprocesses.md) | A git subprocess inherits only what can make git refuse, loudly: the shared strip, why the resolver inherits machine config, and why the data readers do not | Accepted |
 
 ## What belongs here
 
