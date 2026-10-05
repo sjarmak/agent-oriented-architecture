@@ -89,8 +89,8 @@ than an accident:
 
 - `crates/aoa-budget/tests/fix_replace.rs` holds two notices. The first is the
   same root-user case as the group above: the tests that expect a mode-444 file
-  to refuse a rewrite probe whether this process can open one for writing, and
-  share one notice through a helper. The second belongs to the test that an
+  or a mode-555 directory to refuse a rewrite probe whether this process can
+  write past that mode, and share one notice through a helper. The second belongs to the test that an
   archive keeps its extended attributes, which needs a temporary directory on a
   filesystem that stores `user.*` attributes; the test prints the notice when
   setting one answers "not supported". CI is expected to satisfy both without

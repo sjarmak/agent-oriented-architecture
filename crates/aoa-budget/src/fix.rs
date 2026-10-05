@@ -5,7 +5,7 @@ use crate::budget::{count_budget, Config, Verdict};
 use crate::closure::{resolve_closure_within, resolve_contained_closure, Closure};
 use crate::error::BudgetError;
 use crate::path::normalize_path;
-use crate::replace::{replace, Standing};
+use crate::replace::{Replacement, Standing};
 use crate::tokenizer::{count_tokens, target_encoder};
 
 /// The outcome of a [`fix_oversized`] operation.
@@ -82,11 +82,15 @@ pub fn fix_oversized(
         .map_err(archive_trouble)?
         .flatten()
         .unwrap_or_else(|| root_standing.of_a_new_file());
-    replace(&archive_path, &original, &archive_standing).map_err(archive_trouble)?;
-    replace(&read_from, &summary, &root_standing).map_err(|source| BudgetError::Io {
+    let root_trouble = |source| BudgetError::Io {
         path: read_from.clone(),
         source,
-    })?;
+    };
+    let archive = Replacement::prepare(&archive_path, &original, &archive_standing)
+        .map_err(archive_trouble)?;
+    let root = Replacement::prepare(&read_from, &summary, &root_standing).map_err(root_trouble)?;
+    archive.put().map_err(archive_trouble)?;
+    root.put().map_err(root_trouble)?;
 
     let closure = resolve_closure_within(path, boundary)?;
     let report = count_budget(&closure, target, &Config::blocking(ceiling))?;

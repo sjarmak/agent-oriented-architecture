@@ -218,7 +218,12 @@ fn answer_within_deadline(command: &mut Command, repo: &Path) -> Result<GitAnswe
     };
     let started = Instant::now();
     loop {
-        let waited = answering.take_written().and_then(|()| child.try_wait());
+        let waited = match answering.take_written() {
+            Ok(()) => child
+                .try_wait()
+                .map_err(|source| unasked("git could not be waited for", &source)),
+            Err(source) => Err(unread(source)),
+        };
         match waited {
             Ok(Some(status)) => {
                 let remaining = GIT_DEADLINE.saturating_sub(started.elapsed());
@@ -229,13 +234,10 @@ fn answer_within_deadline(command: &mut Command, repo: &Path) -> Result<GitAnswe
                 };
             }
             Ok(None) if started.elapsed() < GIT_DEADLINE => std::thread::sleep(POLL_INTERVAL),
-            waited => {
+            stopped => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(match waited {
-                    Ok(_) => unresponsive(),
-                    Err(source) => unasked("git could not be waited for", &source),
-                });
+                return Err(stopped.err().unwrap_or_else(unresponsive));
             }
         }
     }

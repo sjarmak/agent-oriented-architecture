@@ -1,6 +1,6 @@
 use std::fs::{File, OpenOptions, Permissions};
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(crate) struct Standing {
     permissions: Permissions,
@@ -62,19 +62,38 @@ impl Standing {
     }
 }
 
-pub(crate) fn replace(path: &Path, body: &str, standing: &Standing) -> io::Result<()> {
-    let dir = match path.parent() {
+pub(crate) struct Replacement {
+    fresh: tempfile::NamedTempFile,
+    path: PathBuf,
+}
+
+impl Replacement {
+    pub(crate) fn prepare(path: &Path, body: &str, standing: &Standing) -> io::Result<Self> {
+        let mut fresh = tempfile::Builder::new()
+            .prefix(".aoa-budget-")
+            .tempfile_in(directory_of(path))?;
+        fresh.write_all(body.as_bytes())?;
+        standing.dress(fresh.as_file())?;
+        fresh.as_file().sync_all()?;
+        Ok(Self {
+            fresh,
+            path: path.to_path_buf(),
+        })
+    }
+
+    pub(crate) fn put(self) -> io::Result<()> {
+        self.fresh
+            .persist(&self.path)
+            .map_err(|refused| refused.error)?;
+        sync_directory(directory_of(&self.path))
+    }
+}
+
+fn directory_of(path: &Path) -> &Path {
+    match path.parent() {
         Some(dir) if !dir.as_os_str().is_empty() => dir,
         _ => Path::new("."),
-    };
-    let mut fresh = tempfile::Builder::new()
-        .prefix(".aoa-budget-")
-        .tempfile_in(dir)?;
-    fresh.write_all(body.as_bytes())?;
-    standing.dress(fresh.as_file())?;
-    fresh.as_file().sync_all()?;
-    fresh.persist(path).map_err(|refused| refused.error)?;
-    sync_directory(dir)
+    }
 }
 
 #[cfg(unix)]

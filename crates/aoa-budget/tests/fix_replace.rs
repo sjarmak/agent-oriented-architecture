@@ -23,15 +23,24 @@ fn mode(path: &Path) -> u32 {
 }
 
 fn seal_against_writing(path: &Path) -> bool {
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o444)).unwrap();
-    if std::fs::OpenOptions::new().write(true).open(path).is_ok() {
+    let (mode, probe) = match path.is_dir() {
+        true => (0o555, path.join("probe")),
+        false => (0o444, path.to_path_buf()),
+    };
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&probe)
+        .is_ok();
+    if written {
         eprintln!(
-            "SKIP (docs/adr/0004-environment-dependent-test-skips.md): this process opens a \
-             mode-444 file for writing, so it cannot be denied a write"
+            "SKIP (docs/adr/0004-environment-dependent-test-skips.md): this process writes \
+             past a mode that denies it, so it cannot be denied a write"
         );
-        return false;
     }
-    true
+    !written
 }
 
 #[test]
@@ -105,6 +114,41 @@ fn fix_refuses_an_archive_the_process_may_not_write_before_it_touches_the_root()
         "an earlier archive\n"
     );
     assert_eq!(names_in(dir.path()), ["big.archive.md", "big.md"]);
+}
+
+#[test]
+fn fix_changes_nothing_when_the_file_behind_a_linked_root_cannot_be_replaced() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = oversized_body();
+    let held = dir.path().join("held");
+    std::fs::create_dir(&held).unwrap();
+    std::fs::write(held.join("real.md"), &body).unwrap();
+    let root = dir.path().join("big.md");
+    symlink("held/real.md", &root).unwrap();
+    let archive = dir.path().join("big.archive.md");
+    std::fs::write(&archive, "an earlier archive\n").unwrap();
+    if !seal_against_writing(&held) {
+        return;
+    }
+
+    let refused = fix_oversized(&root, dir.path(), 200, "gpt-4o");
+    std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(
+        matches!(
+            &refused,
+            Err(BudgetError::Io { source, .. })
+                if source.kind() == std::io::ErrorKind::PermissionDenied
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(std::fs::read_to_string(held.join("real.md")).unwrap(), body);
+    assert_eq!(
+        std::fs::read_to_string(&archive).unwrap(),
+        "an earlier archive\n"
+    );
+    assert_eq!(names_in(dir.path()), ["big.archive.md", "big.md", "held"]);
+    assert_eq!(names_in(&held), ["real.md"]);
 }
 
 #[cfg(target_os = "linux")]
