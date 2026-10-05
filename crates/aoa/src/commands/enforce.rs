@@ -279,7 +279,6 @@ fn run_check(event: &HookEvent) -> Result<i32> {
     let candidate = write_target(event)
         .map(|raw| target_candidate(&base, raw))
         .transpose()?;
-    let mut governed = false;
     let mut inside_base = false;
     let mut reproduction_root = None;
     for root in governing_roots(&base)? {
@@ -293,7 +292,6 @@ fn run_check(event: &HookEvent) -> Result<i32> {
             Some(WriteScope::Inside(targets)) => Some(targets),
             None => None,
         };
-        governed = true;
         inside_base |= innermost;
         let policy = load_policy(&root)?;
         if let (Some(policy), Some(targets)) = (&policy, targets.as_deref()) {
@@ -308,9 +306,6 @@ fn run_check(event: &HookEvent) -> Result<i32> {
         if reproduction_required && reproduction_root.is_none() {
             reproduction_root = Some(root);
         }
-    }
-    if !governed {
-        return Ok(0);
     }
 
     let Some(root) = reproduction_root else {
