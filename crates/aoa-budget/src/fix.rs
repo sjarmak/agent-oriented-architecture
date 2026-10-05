@@ -41,7 +41,7 @@ pub fn fix_oversized(
     let original = root_text(resolve_contained_closure(path, boundary)?, path)?;
     let encoder = target_encoder(target)?;
 
-    let (archive_name, archive_path, archive_entry) = contained_archive(path, boundary)?;
+    let (archive_name, archive_path, archive_found) = contained_archive(path, boundary)?;
 
     let summary = summarize_under(&original, ceiling, &archive_name, |t| {
         count_tokens(&encoder, t)
@@ -54,7 +54,14 @@ pub fn fix_oversized(
         })?
         .permissions();
     let read_from = file_behind(path, boundary)?;
-    if archive_entry == read_from {
+    let aliased = archive_found
+        .map(|found| is_the_file_at(&found, &read_from))
+        .transpose()
+        .map_err(|source| BudgetError::Io {
+            path: archive_path.clone(),
+            source,
+        })?;
+    if aliased == Some(true) {
         return Err(BudgetError::ArchiveIsRoot {
             path: path.to_path_buf(),
             archive: archive_path,
@@ -112,6 +119,20 @@ fn file_behind(path: &Path, boundary: &Path) -> Result<PathBuf, BudgetError> {
     }
 }
 
+#[cfg(unix)]
+fn is_the_file_at(entry: &Path, file: &Path) -> std::io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+
+    let identity =
+        |path: &Path| std::fs::symlink_metadata(path).map(|found| (found.dev(), found.ino()));
+    Ok(identity(entry)? == identity(file)?)
+}
+
+#[cfg(not(unix))]
+fn is_the_file_at(entry: &Path, file: &Path) -> std::io::Result<bool> {
+    Ok(entry == file)
+}
+
 fn replace(path: &Path, body: &str, permissions: std::fs::Permissions) -> Result<(), BudgetError> {
     let failed = |source| BudgetError::Io {
         path: path.to_path_buf(),
@@ -139,7 +160,7 @@ fn replace(path: &Path, body: &str, permissions: std::fs::Permissions) -> Result
 fn contained_archive(
     path: &Path,
     boundary: &Path,
-) -> Result<(String, PathBuf, PathBuf), BudgetError> {
+) -> Result<(String, PathBuf, Option<PathBuf>), BudgetError> {
     let stem = path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -162,9 +183,8 @@ fn contained_archive(
             path: archive_path,
             boundary: boundary.to_path_buf(),
         }),
-        Reached::Absent { entry } | Reached::Looping { entry } | Reached::Member { entry, .. } => {
-            Ok((archive_name, archive_path, entry))
-        }
+        Reached::Absent { .. } | Reached::Looping { .. } => Ok((archive_name, archive_path, None)),
+        Reached::Member { entry, .. } => Ok((archive_name, archive_path, Some(entry))),
     }
 }
 

@@ -673,3 +673,34 @@ fn fix_refuses_a_root_that_is_a_link_to_its_own_archive_name_and_keeps_the_origi
         "{refused:?}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn fix_refuses_a_root_that_is_the_same_file_as_its_archive_under_another_spelling() {
+    use std::os::unix::fs::MetadataExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let body = oversized_body();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let archive = repo.join("big.archive.md");
+    std::fs::write(&archive, &body).unwrap();
+    let root = repo.join("big.md");
+    std::fs::hard_link(&archive, &root).unwrap();
+    let file = |path: &Path| {
+        let found = std::fs::symlink_metadata(path).unwrap();
+        (found.dev(), found.ino())
+    };
+    let planted = file(&archive);
+
+    let refused = fix_oversized(&root, &repo, 200, "gpt-4o");
+
+    assert!(
+        matches!(&refused, Err(BudgetError::ArchiveIsRoot { path, .. }) if path == &root),
+        "{refused:?}"
+    );
+    assert_eq!(file(&archive), planted);
+    assert_eq!(file(&root), planted);
+    assert!(is_its_own_file_holding(&archive, &body));
+    assert_eq!(names_in(&repo), ["big.archive.md", "big.md"]);
+}
