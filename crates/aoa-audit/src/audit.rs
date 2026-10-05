@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AuditError;
 use crate::liveness::{enforcement_liveness, EnforcementLiveness};
-use crate::planes::missing_planes;
+use crate::planes::{missing_planes, MissingPlane};
 use crate::punch::{rank, FindingKind, MeasuredCost, PunchItem};
 use crate::report::AuditReport;
 use crate::structure::{structure_items, PackageRoots};
@@ -366,10 +366,13 @@ fn mutation_surface_item(metrics: &[&MetricRecord]) -> Option<PunchItem> {
 fn plane_items(repo: &Path, liveness: &EnforcementLiveness) -> Result<Vec<PunchItem>, AuditError> {
     let mut items: Vec<PunchItem> = missing_planes(repo)?
         .into_iter()
-        .map(|plane| PunchItem {
-            title: match liveness.missing_plane_note() {
-                Some(note) if plane == EnforcementPlane::RuntimeHook => {
+        .map(|MissingPlane { plane, reason }| PunchItem {
+            title: match (liveness.missing_plane_note(), reason) {
+                (Some(note), _) if plane == EnforcementPlane::RuntimeHook => {
                     format!("missing enforcement plane: {} ({note})", plane.label())
+                }
+                (_, Some(reason)) => {
+                    format!("missing enforcement plane: {} ({reason})", plane.label())
                 }
                 _ => format!("missing enforcement plane: {}", plane.label()),
             },

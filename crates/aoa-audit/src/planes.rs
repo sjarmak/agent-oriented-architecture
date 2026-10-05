@@ -42,7 +42,19 @@ const DEFAULT_PRE_COMMIT_HOOK: &str = "hooks/pre-commit";
 const GIT_DEADLINE: Duration = Duration::from_secs(10);
 const GIT_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
-fn present(repo: &Path, plane: EnforcementPlane) -> Result<bool, AuditError> {
+#[derive(Debug)]
+enum GitTrouble {
+    Unresponsive(AuditError),
+    Unasked(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MissingPlane {
+    pub(crate) plane: EnforcementPlane,
+    pub(crate) reason: Option<String>,
+}
+
+fn present(repo: &Path, plane: EnforcementPlane) -> Result<bool, GitTrouble> {
     Ok(match plane {
         EnforcementPlane::RuntimeHook => runtime_hooks(repo) == RuntimeHooks::Installed,
         EnforcementPlane::PreCommit => {
@@ -56,7 +68,7 @@ fn any_exists(repo: &Path, markers: &[&str]) -> bool {
     markers.iter().any(|rel| repo.join(rel).exists())
 }
 
-fn installed_pre_commit_hook(repo: &Path) -> Result<bool, AuditError> {
+fn installed_pre_commit_hook(repo: &Path) -> Result<bool, GitTrouble> {
     let Ok(repo) = repo.canonicalize() else {
         return Ok(false);
     };
@@ -89,7 +101,7 @@ fn installed_pre_commit_hook(repo: &Path) -> Result<bool, AuditError> {
         && std::fs::metadata(&hook).is_ok_and(|meta| meta.is_file() && is_executable(&meta)))
 }
 
-fn names_worktree(git_dir: &Path, common_dir: &Path, repo: &Path) -> Result<bool, AuditError> {
+fn names_worktree(git_dir: &Path, common_dir: &Path, repo: &Path) -> Result<bool, GitTrouble> {
     let Ok(resolved) = git_dir.canonicalize() else {
         return Ok(false);
     };
@@ -135,7 +147,7 @@ fn same_directory(named: &Path, expected: &Path) -> bool {
     })
 }
 
-fn names_no_worktree(git_dir: &Path, repo: &Path) -> Result<bool, AuditError> {
+fn names_no_worktree(git_dir: &Path, repo: &Path) -> Result<bool, GitTrouble> {
     let inside_another_checkout = git_dir.canonicalize().map_or(true, |git_dir| {
         git_dir.file_name().is_some_and(|name| name == ".git")
     });
@@ -159,18 +171,15 @@ enum ConfigValue {
 
 const GIT_CONFIG_KEY_UNSET: i32 = 1;
 
-fn config_value(repo: &Path, git_dir: &Path, query: &[&str]) -> Result<ConfigValue, AuditError> {
-    let Some(answer) = answer_within_deadline(
+fn config_value(repo: &Path, git_dir: &Path, query: &[&str]) -> Result<ConfigValue, GitTrouble> {
+    let answer = answer_within_deadline(
         git(repo)
             .arg("--git-dir")
             .arg(git_dir)
             .arg("config")
             .args(query),
         repo,
-    )?
-    else {
-        return Ok(ConfigValue::Unreadable);
-    };
+    )?;
     Ok(
         match (answer.status.code(), std::str::from_utf8(&answer.stdout)) {
             (Some(0), Ok(value)) => {
@@ -187,20 +196,17 @@ struct GitAnswer {
     stdout: Vec<u8>,
 }
 
-fn answer_within_deadline(
-    command: &mut Command,
-    repo: &Path,
-) -> Result<Option<GitAnswer>, AuditError> {
-    let Ok(mut child) = command
+fn answer_within_deadline(command: &mut Command, repo: &Path) -> Result<GitAnswer, GitTrouble> {
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-    else {
-        return Ok(None);
-    };
+        .map_err(|source| GitTrouble::Unasked(format!("git could not be started: {source}")))?;
     let Some(mut pipe) = child.stdout.take() else {
-        return Ok(None);
+        return Err(GitTrouble::Unasked(
+            "git was started without a pipe to answer on".to_string(),
+        ));
     };
     let (read, stdout_read) = mpsc::channel();
     std::thread::spawn(move || {
@@ -208,28 +214,37 @@ fn answer_within_deadline(
         let _ = read.send(pipe.read_to_end(&mut stdout).map(|_| stdout));
     });
     let started = Instant::now();
-    let unresponsive = || AuditError::GitUnresponsive {
-        repo: repo.to_path_buf(),
-        seconds: GIT_DEADLINE.as_secs(),
+    let unresponsive = || {
+        GitTrouble::Unresponsive(AuditError::GitUnresponsive {
+            repo: repo.to_path_buf(),
+            seconds: GIT_DEADLINE.as_secs(),
+        })
     };
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
                 let remaining = GIT_DEADLINE.saturating_sub(started.elapsed());
                 return match stdout_read.recv_timeout(remaining) {
-                    Ok(stdout) => Ok(stdout.ok().map(|stdout| GitAnswer { status, stdout })),
+                    Ok(Ok(stdout)) => Ok(GitAnswer { status, stdout }),
+                    Ok(Err(source)) => Err(GitTrouble::Unasked(format!(
+                        "git's answer could not be read: {source}"
+                    ))),
                     Err(RecvTimeoutError::Timeout) => Err(unresponsive()),
-                    Err(RecvTimeoutError::Disconnected) => Ok(None),
+                    Err(RecvTimeoutError::Disconnected) => Err(GitTrouble::Unasked(
+                        "the read of git's answer stopped before it finished".to_string(),
+                    )),
                 };
             }
             Ok(None) if started.elapsed() < GIT_DEADLINE => std::thread::sleep(GIT_POLL_INTERVAL),
             waited => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return match waited {
-                    Ok(_) => Err(unresponsive()),
-                    Err(_) => Ok(None),
-                };
+                return Err(match waited {
+                    Ok(_) => unresponsive(),
+                    Err(source) => {
+                        GitTrouble::Unasked(format!("git could not be waited for: {source}"))
+                    }
+                });
             }
         }
     }
@@ -257,7 +272,7 @@ struct HookLocation {
     git_dir: PathBuf,
 }
 
-fn git_hook_location(repo: &Path) -> Result<Option<HookLocation>, AuditError> {
+fn git_hook_location(repo: &Path) -> Result<Option<HookLocation>, GitTrouble> {
     let answer = answer_within_deadline(
         git(repo).args([
             "rev-parse",
@@ -269,7 +284,7 @@ fn git_hook_location(repo: &Path) -> Result<Option<HookLocation>, AuditError> {
         ]),
         repo,
     )?;
-    Ok(answer.and_then(|answer| reported_hook_location(repo, &answer)))
+    Ok(reported_hook_location(repo, &answer))
 }
 
 fn reported_hook_location(repo: &Path, answer: &GitAnswer) -> Option<HookLocation> {
@@ -425,7 +440,7 @@ fn is_enforce_command(command: &str, verb: &str) -> bool {
 
 /// Return the enforcement planes that are structurally absent from `repo`, in
 /// declaration order. Each absent plane becomes a punch-list item.
-pub fn missing_planes(repo: &Path) -> Result<Vec<EnforcementPlane>, AuditError> {
+pub fn missing_planes(repo: &Path) -> Result<Vec<MissingPlane>, AuditError> {
     [
         EnforcementPlane::RuntimeHook,
         EnforcementPlane::PreCommit,
@@ -434,8 +449,15 @@ pub fn missing_planes(repo: &Path) -> Result<Vec<EnforcementPlane>, AuditError> 
     .into_iter()
     .filter_map(|plane| match present(repo, plane) {
         Ok(true) => None,
-        Ok(false) => Some(Ok(plane)),
-        Err(unanswered) => Some(Err(unanswered)),
+        Ok(false) => Some(Ok(MissingPlane {
+            plane,
+            reason: None,
+        })),
+        Err(GitTrouble::Unasked(reason)) => Some(Ok(MissingPlane {
+            plane,
+            reason: Some(reason),
+        })),
+        Err(GitTrouble::Unresponsive(unanswered)) => Some(Err(unanswered)),
     })
     .collect()
 }
@@ -445,6 +467,13 @@ mod tests {
     use super::*;
     use crate::hook_set::fixtures::{contract_matcher, hook_groups};
     use crate::hook_set::{MAX_SETTINGS_BYTES, SETTINGS_REL};
+
+    fn runtime_hook_missing(repo: &Path) -> bool {
+        missing_planes(repo).unwrap().contains(&MissingPlane {
+            plane: EnforcementPlane::RuntimeHook,
+            reason: None,
+        })
+    }
 
     fn settings(repo: &Path, body: &str) {
         let path = repo.join(SETTINGS_REL);
@@ -586,9 +615,7 @@ mod tests {
                     RuntimeHooks::Missing,
                     "{misplaced} under matcher {wrong} cannot forge the plane"
                 );
-                assert!(missing_planes(repo.path())
-                    .unwrap()
-                    .contains(&EnforcementPlane::RuntimeHook));
+                assert!(runtime_hook_missing(repo.path()));
             }
         }
     }
@@ -741,9 +768,7 @@ mod tests {
         );
 
         assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::ForeignOnly);
-        assert!(missing_planes(repo.path())
-            .unwrap()
-            .contains(&EnforcementPlane::RuntimeHook));
+        assert!(runtime_hook_missing(repo.path()));
     }
 
     #[test]
@@ -819,9 +844,7 @@ mod tests {
         settings(repo.path(), FOREIGN_SETTINGS);
 
         assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::ForeignOnly);
-        assert!(missing_planes(repo.path())
-            .unwrap()
-            .contains(&EnforcementPlane::RuntimeHook));
+        assert!(runtime_hook_missing(repo.path()));
 
         settings(
             repo.path(),
@@ -857,9 +880,7 @@ mod tests {
             settings(repo.path(), body);
             assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::Missing, "{body}");
         }
-        assert!(missing_planes(repo.path())
-            .unwrap()
-            .contains(&EnforcementPlane::RuntimeHook));
+        assert!(runtime_hook_missing(repo.path()));
     }
 
     #[test]

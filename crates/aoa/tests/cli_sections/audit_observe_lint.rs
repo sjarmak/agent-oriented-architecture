@@ -109,6 +109,37 @@ fn audit_fails_within_the_git_deadline_when_a_git_descendant_holds_stdout_open()
     assert!(waited < LONGEST_ACCEPTED_WAIT, "audit took {waited:?}");
 }
 
+#[cfg(unix)]
+#[test]
+fn audit_says_why_git_could_not_be_asked_about_the_pre_commit_plane() {
+    let repo = TempDir::new().expect("tempdir");
+    init_git_repo(repo.path());
+    let no_git_here = TempDir::new().expect("empty PATH directory");
+
+    let output = aoa()
+        .args(["audit", "--json", "--repo"])
+        .arg(repo.path())
+        .env("PATH", no_git_here.path())
+        .output()
+        .expect("run");
+
+    assert!(output.status.success(), "audit must not abort: {output:?}");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    let titles: Vec<&str> = parsed["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter(|item| item["kind"] == "missing_plane")
+        .map(|item| item["title"].as_str().expect("title"))
+        .collect();
+    assert_eq!(titles.len(), 3, "{titles:?}");
+    assert!(
+        titles.iter().any(|title| title
+            .starts_with("missing enforcement plane: pre-commit hook (git could not be started: ")),
+        "{titles:?}"
+    );
+}
+
 // aoa-d6t.31 review follow-up: a repo whose workspace manifest is malformed
 // must still get its full punch-list — the CLI degrades to repo-wide findings
 // with the discovery failure surfaced, never an abort with no report.
