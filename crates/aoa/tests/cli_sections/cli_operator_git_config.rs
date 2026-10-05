@@ -1,4 +1,5 @@
 use std::ffi::OsStr;
+use std::os::unix::fs::PermissionsExt;
 
 use super::cli_git_environment::{inferred_owners, repository_owned_by, ALICE};
 use super::*;
@@ -260,8 +261,7 @@ fn infer_owners_leaves_nothing_behind_in_the_temporary_directory() {
         dir.path(),
         &format!("[safe]\n\tdirectory = {}\n", repo.display()),
     );
-    let temporary = dir.path().join("temporary");
-    std::fs::create_dir_all(&temporary).unwrap();
+    let temporary = temporary_directory_with_mode(dir.path(), "temporary", 0o700);
     let mut environment = only_this_global_config(&config).to_vec();
     environment.push(("TMPDIR", temporary.as_os_str()));
 
@@ -280,4 +280,136 @@ fn infer_owners_leaves_nothing_behind_in_the_temporary_directory() {
         left_behind.is_empty(),
         "infer-owners left these in the temporary directory: {left_behind:?}"
     );
+}
+
+fn refused_naming(output: &std::process::Output, named: &str) -> bool {
+    !output.status.success()
+        && output.stdout.is_empty()
+        && String::from_utf8_lossy(&output.stderr).contains(named)
+}
+
+#[test]
+fn infer_owners_refuses_a_relative_global_config_that_withdraws_trust_inside_the_repository() {
+    let dir = TempDir::new().expect("tempdir");
+    let root = dir.path().canonicalize().unwrap();
+    let repo = root.join("repo");
+    repository_owned_by(ALICE, &repo);
+    let everything_is_safe = root.join("system.gitconfig");
+    std::fs::write(&everything_is_safe, "[safe]\n\tdirectory = *\n").unwrap();
+    let withdrawal = "[safe]\n\tdirectory = \"\"\n";
+    std::fs::write(repo.join("operator.gitconfig"), withdrawal).unwrap();
+    let environment = [
+        ownership_distrusted(),
+        ("GIT_CONFIG_SYSTEM", everything_is_safe.as_os_str()),
+        ("GIT_CONFIG_GLOBAL", OsStr::new("operator.gitconfig")),
+    ];
+    assert!(
+        !plain_git_reads(&repo, &root, &environment),
+        "plain git reads the repository, so the relative config did not withdraw trust"
+    );
+
+    let output = infer_owners_under(&repo, &environment);
+
+    assert!(
+        refused_naming(&output, "GIT_CONFIG_GLOBAL"),
+        "infer-owners did not refuse naming GIT_CONFIG_GLOBAL: status {:?}, stdout {:?}, \
+stderr {:?}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.join("operator.gitconfig")).unwrap(),
+        withdrawal
+    );
+}
+
+#[test]
+fn infer_owners_refuses_each_config_locating_variable_set_to_a_relative_path() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo = dir.path().join("repo");
+    repository_owned_by(ALICE, &repo);
+
+    let not_refused: Vec<&str> = [
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_SYSTEM",
+        "HOME",
+        "XDG_CONFIG_HOME",
+    ]
+    .into_iter()
+    .filter(|variable| {
+        let output = infer_owners_under(&repo, &[(variable, OsStr::new("relative/place"))]);
+        !refused_naming(&output, variable)
+    })
+    .collect();
+
+    assert!(
+        not_refused.is_empty(),
+        "infer-owners ran with these variables set to a relative path: {not_refused:?}"
+    );
+}
+
+#[test]
+fn infer_owners_reads_when_a_config_locating_variable_is_set_but_empty() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo = dir.path().join("repo");
+    repository_owned_by(ALICE, &repo);
+
+    let output = infer_owners_under(&repo, &[("XDG_CONFIG_HOME", OsStr::new(""))]);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn temporary_directory_with_mode(parent: &Path, name: &str, mode: u32) -> PathBuf {
+    let directory = parent.join(name);
+    std::fs::create_dir(&directory).unwrap();
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(mode)).unwrap();
+    directory
+}
+
+#[test]
+fn infer_owners_refuses_a_temporary_directory_others_can_replace_files_in() {
+    let dir = TempDir::new().expect("tempdir");
+    let root = dir.path().canonicalize().unwrap();
+    let repo = root.join("repo");
+    repository_owned_by(ALICE, &repo);
+    let expected = inferred_owners(&repo, None).expect("infer-owners succeeds by default");
+
+    for (name, mode) in [("sticky", 0o1777), ("private", 0o700)] {
+        let temporary = temporary_directory_with_mode(&root, name, mode);
+        let output = infer_owners_under(&repo, &[("TMPDIR", temporary.as_os_str())]);
+        assert!(
+            output.status.success(),
+            "a temporary directory with mode {mode:o} was refused: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let answer: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+        assert_eq!(answer, expected, "mode {mode:o}");
+    }
+
+    for (name, mode) in [
+        ("world-writable", 0o777),
+        ("group-writable", 0o770),
+        ("other-writable", 0o702),
+    ] {
+        let temporary = temporary_directory_with_mode(&root, name, mode);
+        let output = infer_owners_under(&repo, &[("TMPDIR", temporary.as_os_str())]);
+        assert!(
+            refused_naming(&output, &temporary.display().to_string()),
+            "a temporary directory with mode {mode:o} was not refused by name: status {:?}, \
+stdout {:?}, stderr {:?}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            std::fs::read_dir(&temporary).unwrap().count(),
+            0,
+            "something was created in the refused directory (mode {mode:o})"
+        );
+    }
 }

@@ -22,6 +22,7 @@
 //! verbatim; the `anyhow` callers map it at their boundary.
 
 use std::io::Write;
+use std::path::Path;
 use std::process::{Command, Output};
 use std::sync::OnceLock;
 
@@ -31,6 +32,19 @@ use tempfile::NamedTempFile;
 const MACHINE_CONFIG_SCOPES: [&[u8]; 2] = [b"system", b"global"];
 
 const KEY_NOT_SET_EXIT: i32 = 1;
+
+const CONFIG_LOCATING_VARIABLES: [&str; 4] = [
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_SYSTEM",
+    "HOME",
+    "XDG_CONFIG_HOME",
+];
+
+#[cfg(unix)]
+const WRITABLE_BY_GROUP_OR_OTHER: u32 = 0o022;
+
+#[cfg(unix)]
+const STICKY: u32 = 0o1000;
 
 static OPERATOR_TRUST_CONFIG: OnceLock<Result<Vec<u8>, String>> = OnceLock::new();
 
@@ -58,13 +72,15 @@ impl RepositoryDataGit {
 }
 
 pub(crate) fn reading_repository_data() -> Result<RepositoryDataGit, String> {
+    let temporary_directory = std::env::temp_dir();
+    refuse_replaceable_directory(&temporary_directory)?;
     let trust_config = OPERATOR_TRUST_CONFIG
-        .get_or_init(operator_trust_config)
+        .get_or_init(|| operator_trust_config(&temporary_directory))
         .as_ref()
         .map_err(Clone::clone)?;
     let mut operator_trust = tempfile::Builder::new()
         .prefix("aoa-git-trust-")
-        .tempfile()
+        .tempfile_in(&temporary_directory)
         .map_err(|e| format!("failed to create the git trust config: {e}"))?;
     operator_trust
         .write_all(trust_config)
@@ -80,9 +96,56 @@ pub(crate) fn reading_repository_data() -> Result<RepositoryDataGit, String> {
     })
 }
 
-fn operator_trust_config() -> Result<Vec<u8>, String> {
+fn refuse_relative_config_locations() -> Result<(), String> {
+    for variable in CONFIG_LOCATING_VARIABLES {
+        let Some(location) = std::env::var_os(variable) else {
+            continue;
+        };
+        if !location.is_empty() && !Path::new(&location).is_absolute() {
+            return Err(format!(
+                "{variable} is set to the relative path {location:?}: git resolves it against \
+the repository it reads, so the git configuration that decides which repositories are trusted \
+cannot be read ahead of time; set {variable} to an absolute path or unset it"
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn refuse_replaceable_directory(directory: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = std::fs::metadata(directory)
+        .map_err(|e| {
+            format!(
+                "failed to inspect the temporary directory {}: {e}",
+                directory.display()
+            )
+        })?
+        .permissions()
+        .mode();
+    if mode & WRITABLE_BY_GROUP_OR_OTHER != 0 && mode & STICKY == 0 {
+        return Err(format!(
+            "the temporary directory {} is writable by group or other and has no sticky bit \
+(mode {:o}): another user could replace the git trust config written there before git reads \
+it; point TMPDIR at a directory only you can write",
+            directory.display(),
+            mode & 0o7777
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn refuse_replaceable_directory(_directory: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+fn operator_trust_config(temporary_directory: &Path) -> Result<Vec<u8>, String> {
+    refuse_relative_config_locations()?;
     let label = "git config --get-all safe.directory";
-    let removed_on_drop = tempfile::tempdir()
+    let removed_on_drop = tempfile::tempdir_in(temporary_directory)
         .map_err(|e| format!("failed to create an empty directory for `{label}`: {e}"))?;
     let empty_directory = removed_on_drop
         .path()

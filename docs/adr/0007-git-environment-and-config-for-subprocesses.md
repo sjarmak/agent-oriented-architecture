@@ -109,12 +109,40 @@ git trust anything. Measured on git 2.43.0 under
 `GIT_TEST_ASSUME_DIFFERENT_OWNER=1`: with `safe.directory = *` reachable only
 through `includeIf "gitdir:<A>/.git"`, `git -C <A> rev-parse HEAD` and
 `git -C <B> rev-parse HEAD` both fail with the dubious-ownership message,
-from a working directory inside A, inside B or outside both. Reading the list
-with no repository in view therefore yields exactly the set git's own check
-uses, for the repository AOA was started in and for every other one.
+from a working directory inside A, inside B or outside both.
+
+The one thing the empty directory changes is what a relative path means. Git
+resolves a relative `GIT_CONFIG_GLOBAL` or `GIT_CONFIG_SYSTEM`, and the config
+files it finds under a relative `HOME` or `XDG_CONFIG_HOME`, against its
+working directory: the repository for plain `git -C <repo>`, the empty
+directory for the trust read. A file inside the repository that withdraws
+trust with an empty `safe.directory` would be read by plain git and missed by
+the trust read, and AOA would read a repository git refuses. AOA does not
+emulate that resolution. Before the trust read, `reading_repository_data`
+refuses to run when any of those four variables is set to a non-empty relative
+path, with an error that names the variable. An unset or empty variable is
+left to git.
+
+With every config location absolute, reading the list with no repository in
+view yields the set git's own check uses, for the repository AOA was started
+in and for every other one, for every form of config this record measured.
+The conditional include listed under "does not cover" below is the form it
+did not measure.
 
 The file is created with the `tempfile` crate (mode 0600 on Unix), written
-once per git call and removed when that call returns. Each value is written as
+once per git call and removed when that call returns. Git is handed the file
+by path, so whoever can rename or unlink entries in the directory that holds
+it can put a different file at that path before git opens it, and a global
+config can name a program for git to run (`core.fsmonitor`). On Unix,
+`reading_repository_data` therefore refuses to run when the temporary
+directory (`TMPDIR`, or `/tmp`) is writable by group or other and does not
+have the sticky bit, with an error that names the directory. The check runs
+before the trust read and before every file is created; the trust read's
+empty directory and the file are both created in the directory that was
+checked. A sticky directory such as the usual `/tmp`, and a directory only
+its owner can write, are accepted. On Windows there is no check: the mode
+bits do not exist there, and AOA does not inspect the directory's access
+control list. Each value is written as
 a double-quoted config string with backslash, double quote, newline and tab
 escaped, and is carried as bytes, so a value round-trips exactly whether it is
 `*`, contains spaces, quotes or backslashes, or is not UTF-8. An empty value is
@@ -145,6 +173,18 @@ operator who measures that checkout.
   reason other than the key being unset, or the file cannot be created,
   written or removed, the command fails with that error instead of guessing an
   empty list.
+- `infer-owners` and `mine-corpus` fail before running git when
+  `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `HOME` or `XDG_CONFIG_HOME` is a
+  relative path, and on Unix when the temporary directory is writable by group
+  or other without the sticky bit. An operator in either position sets the
+  variable to an absolute path, or points `TMPDIR` at a directory of their
+  own. A directory made under a umask of 002 is mode 0775 and is refused,
+  including where the group holds only its owner: AOA reads the mode and does
+  not look up who is in the group. The refusal applies even where the variable
+  could not have mattered (a relative `GIT_CONFIG_SYSTEM` under
+  `GIT_CONFIG_NOSYSTEM=1`, a relative `HOME` beside an absolute
+  `GIT_CONFIG_GLOBAL`), because deciding that would be the emulation the
+  refusal exists to avoid.
 - The length of the operator's trust list is not bounded by the operating
   system's argument limit. Nothing rides on the command line.
 
@@ -161,12 +201,17 @@ operator who measures that checkout.
   pays one write of that list per blamed file. The list is rendered once per
   process; only the write repeats. Nothing filters the list to the repository
   being read, because that would reimplement git's matching.
-- **A relative `GIT_CONFIG_GLOBAL` or `GIT_CONFIG_SYSTEM` names nothing.** Git
-  resolves a relative path in those variables against its working directory.
-  The trust read runs in an empty directory, so a relative path finds no file
-  there and contributes no values, where plain `git -C <repo>` would have
-  looked for it inside the repository. An absolute path, and the default files
-  under `HOME`, are read as git reads them.
+- **A replaceable ancestor of the temporary directory is not detected.** The
+  check reads the mode of the temporary directory itself. If a directory above
+  it is writable by another user without the sticky bit, that user can rename
+  the whole temporary directory aside and put their own in its place, and the
+  file git opens is theirs. Nothing walks the ancestors.
+- **The temporary-directory check is a check, then a use.** The mode is read
+  before the file is created, and a directory whose owner loosens it in
+  between is not caught. Ownership of the directory is not examined either: a
+  directory owned by another user who keeps it mode 0755 or sticky passes,
+  and that owner can replace entries in it.
+- **Windows has no temporary-directory check.** See the decision above.
 - **A conditional include that needs no repository is evaluated once.** An
   `includeIf "hasconfig:remote.*.url:..."` block is matched against the
   operator's machine config alone. Whether git's ownership check matches it
@@ -189,7 +234,8 @@ operator who measures that checkout.
 - `crates/aoa/src/commands/git.rs`, `fn reading_repository_data`: the data
   readers' builder; `fn operator_trust_config`: the one read of the operator's
   `safe.directory`, outside any repository; `fn trust_config`: the file's
-  contents.
+  contents; `fn refuse_relative_config_locations` and
+  `fn refuse_replaceable_directory`: the two refusals.
 - `crates/aoa-trace/tests/git_environment_repository_variables.rs` and
   `git_environment_inherited_redirects.rs`: every stripped name pinned on the
   built command.
@@ -204,4 +250,10 @@ operator who measures that checkout.
   one exactly as plain git does, with the trust named outright, withdrawn by
   an empty value, and widened by a conditional include; a repository listed
   after fifty thousand others is read; a corrupt `.git` in the starting
-  directory does not stop `--repo`; nothing is left in the temporary directory.
+  directory does not stop `--repo`; nothing is left in the temporary directory;
+  a relative `GIT_CONFIG_GLOBAL` naming a file in the repository that withdraws
+  trust is refused with the variable named and no owners printed; each of the
+  four config-locating variables set relative is refused, and one set empty is
+  not; a temporary directory writable by group or other without the sticky bit
+  is refused by name with nothing created in it, while a sticky one and an
+  owner-only one are accepted.
