@@ -151,7 +151,17 @@ empty directory and the file are both created in the directory that was
 checked. A sticky directory such as the usual `/tmp`, and a directory only
 its owner can write, are accepted. On Windows there is no check: the mode
 bits do not exist there, and AOA does not inspect the directory's access
-control list. Each value is written as
+control list.
+
+A relative `TMPDIR` is accepted. `std::env::temp_dir` returns it as given, and
+the `tempfile` crate joins a relative directory onto AOA's working directory
+before it creates anything, so the path git is handed is absolute and names
+the file AOA wrote, whichever directory `git -C <repo>` resolves paths
+against. AOA does not make the path absolute itself and relies on the crate
+for it (measured on `tempfile` 3.27.0); a CLI test fails if a relative
+`TMPDIR` ever stops a trusted repository being read.
+
+Each value is written as
 a double-quoted config string with backslash, double quote, newline and tab
 escaped, and is carried as bytes, so a value round-trips exactly whether it is
 `*`, contains spaces, quotes or backslashes, or is not UTF-8. An empty value is
@@ -285,6 +295,8 @@ operator who measures that checkout.
   four config-locating variables set relative is refused, and one set empty is
   not; a temporary directory writable by group or other without the sticky bit
   is refused by name with nothing created in it, while a sticky one and an
-  owner-only one are accepted. `mine-corpus` answers the same under a global,
-  a system and a home-directory config whose `log.date` makes plain `git log`
-  exit 128.
+  owner-only one are accepted; started with a relative `TMPDIR`, a distrusted
+  repository the operator's config marks safe is still read, with nothing left
+  in that directory and nothing created in the repository. `mine-corpus`
+  answers the same under a global, a system and a home-directory config whose
+  `log.date` makes plain `git log` exit 128.

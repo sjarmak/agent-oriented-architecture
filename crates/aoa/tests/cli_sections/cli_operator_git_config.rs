@@ -311,14 +311,57 @@ fn infer_owners_leaves_nothing_behind_in_the_temporary_directory() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let left_behind: Vec<PathBuf> = std::fs::read_dir(&temporary)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect();
+    let left_behind = entries_of(&temporary);
     assert!(
         left_behind.is_empty(),
         "infer-owners left these in the temporary directory: {left_behind:?}"
     );
+}
+
+fn entries_of(directory: &Path) -> Vec<PathBuf> {
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    entries.sort();
+    entries
+}
+
+#[test]
+fn infer_owners_reads_a_trusted_repository_when_the_temporary_directory_is_a_relative_path() {
+    let dir = TempDir::new().expect("tempdir");
+    let root = dir.path().canonicalize().unwrap();
+    let repo = root.join("repo");
+    repository_owned_by(ALICE, &repo);
+    let config = operator_config(
+        &root,
+        &format!("[safe]\n\tdirectory = {}\n", repo.display()),
+    );
+    let trusted = inferred_owners(&repo, None).expect("infer-owners succeeds when git trusts");
+    let started_in = root.join("started-in");
+    std::fs::create_dir(&started_in).unwrap();
+    let temporary = temporary_directory_with_mode(&started_in, "temporary", 0o700);
+    let in_the_repository_before = entries_of(&repo);
+
+    let mut infer = aoa();
+    infer
+        .args(["policy", "infer-owners", "--json", "--repo"])
+        .arg(&repo)
+        .current_dir(&started_in)
+        .env_remove("XDG_CONFIG_HOME")
+        .envs(only_this_global_config(&config))
+        .env("TMPDIR", "temporary");
+    let output = infer.output().expect("run");
+
+    assert!(
+        output.status.success(),
+        "a relative TMPDIR stopped infer-owners reading a repository the operator trusts: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let answer: Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    assert_eq!(answer, trusted);
+    assert_eq!(entries_of(&temporary), Vec::<PathBuf>::new());
+    assert_eq!(entries_of(&repo), in_the_repository_before);
 }
 
 fn refused_naming(output: &std::process::Output, named: &str) -> bool {
