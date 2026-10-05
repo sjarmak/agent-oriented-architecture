@@ -1,24 +1,62 @@
 #![cfg(unix)]
 
-use std::ffi::OsString;
-use std::path::Path;
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use aoa_trace::resolve_repository_root;
+
+const RESOLVING_CHILD_REPOSITORY: &str = "AOA_TEST_RESOLVES_THE_ROOT_OF";
+
+const RESOLVING_CHILD_VARIABLE: &str = "AOA_TEST_RESOLVES_THE_ROOT_UNDER";
+
+const THIS_TEST: &str = "resolves_the_same_root_however_the_caller_traces_git";
 
 const STANDARD_OUTPUT: &str = "/dev/stdout";
 
 const TRACE2_TO_STANDARD_OUTPUT_CONFIG: &str = "[trace2]\n\tnormalTarget = /dev/stdout\n\teventTarget = /dev/stdout\n\tperfTarget = /dev/stdout\n";
 
-fn resolves_to(repo: &Path, variable: &str, value: &OsString) -> bool {
-    std::env::set_var(variable, value);
-    let resolved = resolve_repository_root(repo);
-    std::env::remove_var(variable);
-    resolved.ok().as_deref() == Some(repo)
+fn resolve_as_the_child(repo: &Path) {
+    let variable = std::env::var_os(RESOLVING_CHILD_VARIABLE)
+        .expect("the parent names the variable the child inherits");
+    assert!(
+        std::env::var_os(&variable).is_some(),
+        "the child did not inherit {variable:?}"
+    );
+    assert_eq!(resolve_repository_root(repo).unwrap(), repo);
+}
+
+fn child_report_when_the_root_changes(
+    repo: &Path,
+    variable: &str,
+    value: &OsStr,
+) -> Option<String> {
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", THIS_TEST, "--nocapture"])
+        .env(RESOLVING_CHILD_REPOSITORY, repo)
+        .env(RESOLVING_CHILD_VARIABLE, variable)
+        .env(variable, value)
+        .output()
+        .unwrap();
+    let report = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    if output.status.success() && report.contains("1 passed") {
+        None
+    } else {
+        Some(report)
+    }
 }
 
 #[test]
 fn resolves_the_same_root_however_the_caller_traces_git() {
+    if let Some(repo) = std::env::var_os(RESOLVING_CHILD_REPOSITORY) {
+        resolve_as_the_child(&PathBuf::from(repo));
+        return;
+    }
+
     let fixture = tempfile::tempdir().unwrap();
     let repo = fixture.path().canonicalize().unwrap().join("repo");
     let initialized = Command::new("git")
@@ -42,14 +80,16 @@ fn resolves_the_same_root_however_the_caller_traces_git() {
         ("GIT_CONFIG_GLOBAL", &tracing_config),
         ("GIT_CONFIG_SYSTEM", &tracing_config),
     ];
-    let changed_the_answer: Vec<&str> = cases
+    let changed_the_answer: Vec<(&str, String)> = cases
         .into_iter()
-        .filter(|(variable, value)| !resolves_to(&repo, variable, value))
-        .map(|(variable, _)| variable)
+        .filter_map(|(variable, value)| {
+            child_report_when_the_root_changes(&repo, variable, value)
+                .map(|report| (variable, report))
+        })
         .collect();
 
     assert!(
         changed_the_answer.is_empty(),
-        "the caller's git tracing changed the resolved root: {changed_the_answer:?}"
+        "the caller's git tracing changed the resolved root: {changed_the_answer:#?}"
     );
 }
