@@ -47,11 +47,15 @@ pub fn fix_oversized(
         count_tokens(&encoder, t)
     });
 
-    write_without_following_a_link(&archive_path, &original)?;
-    std::fs::write(path, &summary).map_err(|source| BudgetError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let permissions = std::fs::metadata(path)
+        .map_err(|source| BudgetError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?
+        .permissions();
+    let read_from = file_behind(path, boundary)?;
+    replace(&archive_path, &original, permissions.clone())?;
+    replace(&read_from, &summary, permissions)?;
 
     let closure = resolve_closure_within(path, boundary)?;
     let report = count_budget(&closure, target, &Config::blocking(ceiling))?;
@@ -80,38 +84,50 @@ fn root_text(closure: Closure, path: &Path) -> Result<String, BudgetError> {
         })
 }
 
-fn write_without_following_a_link(path: &Path, body: &str) -> Result<(), BudgetError> {
+fn file_behind(path: &Path, boundary: &Path) -> Result<PathBuf, BudgetError> {
+    let opened = Boundary::open(boundary).map_err(|source| BudgetError::Io {
+        path: boundary.to_path_buf(),
+        source,
+    })?;
+    let reached = opened.reach(path).map_err(|source| BudgetError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    match reached {
+        Reached::Member { resolved, .. } => Ok(resolved),
+        Reached::Outside => Err(BudgetError::OutsideBoundary {
+            path: path.to_path_buf(),
+            boundary: boundary.to_path_buf(),
+        }),
+        Reached::Absent { .. } | Reached::Looping { .. } => Err(BudgetError::Io {
+            path: path.to_path_buf(),
+            source: std::io::ErrorKind::NotFound.into(),
+        }),
+    }
+}
+
+fn replace(path: &Path, body: &str, permissions: std::fs::Permissions) -> Result<(), BudgetError> {
     let failed = |source| BudgetError::Io {
         path: path.to_path_buf(),
         source,
     };
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(false);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::custom_flags(
-        &mut options,
-        rustix::fs::OFlags::NOFOLLOW.bits() as i32,
-    );
-    let mut archive = options.open(path).map_err(failed)?;
-    let links = names_of(&archive).map_err(failed)?;
-    if links > 1 {
-        return Err(BudgetError::ArchiveHardLinked {
-            path: path.to_path_buf(),
-            links,
-        });
-    }
-    archive.set_len(0).map_err(failed)?;
-    std::io::Write::write_all(&mut archive, body.as_bytes()).map_err(failed)
-}
-
-#[cfg(unix)]
-fn names_of(file: &std::fs::File) -> std::io::Result<u64> {
-    Ok(std::os::unix::fs::MetadataExt::nlink(&file.metadata()?))
-}
-
-#[cfg(not(unix))]
-fn names_of(_file: &std::fs::File) -> std::io::Result<u64> {
-    Ok(1)
+    let dir = match path.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir,
+        _ => Path::new("."),
+    };
+    let mut fresh = tempfile::Builder::new()
+        .prefix(".aoa-budget-")
+        .tempfile_in(dir)
+        .map_err(failed)?;
+    std::io::Write::write_all(&mut fresh, body.as_bytes()).map_err(failed)?;
+    fresh
+        .as_file()
+        .set_permissions(permissions)
+        .map_err(failed)?;
+    fresh
+        .persist(path)
+        .map(drop)
+        .map_err(|refused| failed(refused.error))
 }
 
 fn contained_archive(path: &Path, boundary: &Path) -> Result<(String, PathBuf), BudgetError> {

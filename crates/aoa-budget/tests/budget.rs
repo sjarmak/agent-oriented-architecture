@@ -310,6 +310,27 @@ fn oversized_body() -> String {
     "A paragraph of guidance that every package must follow.\n\n".repeat(200)
 }
 
+fn names_in(dir: &Path) -> Vec<std::ffi::OsString> {
+    let mut names: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    names.sort();
+    names
+}
+
+fn is_a_summary(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).unwrap().is_file()
+        && std::fs::read_to_string(path)
+            .unwrap()
+            .starts_with("> Summarized to fit budget.")
+}
+
+fn is_its_own_file_holding(path: &Path, body: &str) -> bool {
+    std::fs::symlink_metadata(path).unwrap().is_file()
+        && std::fs::read_to_string(path).unwrap() == body
+}
+
 #[test]
 fn fix_refuses_a_root_outside_the_boundary_and_leaves_it_untouched() {
     let dir = tempfile::tempdir().unwrap();
@@ -391,7 +412,7 @@ fn fix_refuses_an_archive_linked_out_of_the_boundary_and_back_in_whatever_it_ste
 
 #[cfg(unix)]
 #[test]
-fn fix_refuses_an_archive_that_is_a_link_inside_the_boundary_and_writes_nothing() {
+fn fix_replaces_an_archive_that_is_a_link_inside_the_boundary_and_leaves_its_target_alone() {
     let dir = tempfile::tempdir().unwrap();
     let body = oversized_body();
     let repo = dir.path().join("repo");
@@ -407,18 +428,19 @@ fn fix_refuses_an_archive_that_is_a_link_inside_the_boundary_and_writes_nothing(
     let linked = fix_oversized(&root, &repo, 200, "gpt-4o");
     let dangling = fix_oversized(&other, &repo, 200, "gpt-4o");
 
-    assert!(matches!(linked, Err(BudgetError::Io { .. })), "{linked:?}");
-    assert!(
-        matches!(dangling, Err(BudgetError::Io { .. })),
-        "{dangling:?}"
-    );
     assert_eq!(
         std::fs::read_to_string(repo.join("kept.md")).unwrap(),
         "kept\n"
     );
     assert!(!repo.join("hooks/created").exists());
-    assert_eq!(std::fs::read_to_string(&root).unwrap(), body);
-    assert_eq!(std::fs::read_to_string(&other).unwrap(), body);
+    assert!(linked.is_ok(), "{linked:?}");
+    assert!(dangling.is_ok(), "{dangling:?}");
+    assert!(is_its_own_file_holding(&repo.join("big.archive.md"), &body));
+    assert!(is_its_own_file_holding(
+        &repo.join("other.archive.md"),
+        &body
+    ));
+    assert!(is_a_summary(&root) && is_a_summary(&other));
 }
 
 #[cfg(unix)]
@@ -484,9 +506,8 @@ fn fix_leaves_a_file_outside_untouched_when_the_root_steps_back_onto_a_link_to_i
     assert_eq!(fixed.unwrap().root, repo.join("doc.md"));
 }
 
-#[cfg(unix)]
 #[test]
-fn fix_refuses_an_archive_that_is_a_hard_link_to_a_file_outside_the_boundary() {
+fn fix_replaces_an_archive_that_is_a_hard_link_to_a_file_outside_the_boundary() {
     let dir = tempfile::tempdir().unwrap();
     let body = oversized_body();
     let repo = dir.path().join("repo");
@@ -497,22 +518,56 @@ fn fix_refuses_an_archive_that_is_a_hard_link_to_a_file_outside_the_boundary() {
     std::fs::write(&planted, "planted\n").unwrap();
     std::fs::hard_link(&planted, repo.join("big.archive.md")).unwrap();
 
-    let refused = fix_oversized(&root, &repo, 200, "gpt-4o");
+    let fixed = fix_oversized(&root, &repo, 200, "gpt-4o");
 
     assert_eq!(std::fs::read_to_string(&planted).unwrap(), "planted\n");
-    assert!(
-        matches!(
-            refused,
-            Err(BudgetError::ArchiveHardLinked { links: 2, .. })
-        ),
-        "{refused:?}"
-    );
-    assert_eq!(std::fs::read_to_string(&root).unwrap(), body);
+    assert!(fixed.is_ok(), "{fixed:?}");
+    assert!(is_its_own_file_holding(&repo.join("big.archive.md"), &body));
+    assert!(is_a_summary(&root));
+}
+
+#[test]
+fn fix_replaces_a_root_that_is_a_hard_link_to_a_file_outside_the_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = oversized_body();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let planted = dir.path().join("planted.md");
+    std::fs::write(&planted, &body).unwrap();
+    let root = repo.join("big.md");
+    std::fs::hard_link(&planted, &root).unwrap();
+
+    let fixed = fix_oversized(&root, &repo, 200, "gpt-4o");
+
+    assert_eq!(std::fs::read_to_string(&planted).unwrap(), body);
+    assert!(fixed.is_ok(), "{fixed:?}");
+    assert!(is_a_summary(&root));
+    assert!(is_its_own_file_holding(&repo.join("big.archive.md"), &body));
 }
 
 #[cfg(unix)]
 #[test]
-fn fix_refuses_an_archive_name_caught_in_a_link_loop_and_writes_nothing() {
+fn fix_summarizes_the_file_a_linked_root_names_and_keeps_the_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = oversized_body();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(repo.join("real.md"), &body).unwrap();
+    let root = repo.join("big.md");
+    std::os::unix::fs::symlink("real.md", &root).unwrap();
+
+    let fixed = fix_oversized(&root, &repo, 200, "gpt-4o");
+
+    assert!(fixed.is_ok(), "{fixed:?}");
+    assert_eq!(std::fs::read_link(&root).unwrap(), Path::new("real.md"));
+    assert!(is_a_summary(&repo.join("real.md")));
+    assert!(is_its_own_file_holding(&repo.join("big.archive.md"), &body));
+    assert_eq!(names_in(&repo), ["big.archive.md", "big.md", "real.md"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn fix_replaces_an_archive_name_caught_in_a_link_loop_and_leaves_nothing_else_behind() {
     let dir = tempfile::tempdir().unwrap();
     let body = oversized_body();
     let repo = dir.path().join("repo");
@@ -522,6 +577,24 @@ fn fix_refuses_an_archive_name_caught_in_a_link_loop_and_writes_nothing() {
     let archive = repo.join("big.archive.md");
     std::os::unix::fs::symlink("big.archive.md", &archive).unwrap();
 
+    let fixed = fix_oversized(&root, &repo, 200, "gpt-4o");
+
+    assert!(fixed.is_ok(), "{fixed:?}");
+    assert!(is_its_own_file_holding(&archive, &body));
+    assert!(is_a_summary(&root));
+    assert_eq!(names_in(&repo), ["big.archive.md", "big.md"]);
+}
+
+#[test]
+fn fix_that_cannot_place_the_archive_changes_nothing_and_leaves_no_file_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = oversized_body();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(repo.join("big.archive.md")).unwrap();
+    std::fs::write(repo.join("big.archive.md/kept.md"), "kept\n").unwrap();
+    let root = repo.join("big.md");
+    std::fs::write(&root, &body).unwrap();
+
     let refused = fix_oversized(&root, &repo, 200, "gpt-4o");
 
     assert!(
@@ -529,16 +602,30 @@ fn fix_refuses_an_archive_name_caught_in_a_link_loop_and_writes_nothing() {
         "{refused:?}"
     );
     assert_eq!(std::fs::read_to_string(&root).unwrap(), body);
+    assert_eq!(names_in(&repo), ["big.archive.md", "big.md"]);
     assert_eq!(
-        std::fs::read_link(&archive).unwrap(),
-        Path::new("big.archive.md")
+        std::fs::read_to_string(repo.join("big.archive.md/kept.md")).unwrap(),
+        "kept\n"
     );
-    let mut entries: Vec<_> = std::fs::read_dir(&repo)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name())
-        .collect();
-    entries.sort();
-    assert_eq!(entries, ["big.archive.md", "big.md"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn fix_keeps_the_permissions_of_the_root_on_both_files_it_writes() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let root = repo.join("big.md");
+    std::fs::write(&root, oversized_body()).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o640)).unwrap();
+    let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o7777;
+
+    let fixed = fix_oversized(&root, &repo, 200, "gpt-4o").unwrap();
+
+    assert_eq!(mode(&fixed.root), 0o640);
+    assert_eq!(mode(&fixed.archive), 0o640);
 }
 
 #[test]

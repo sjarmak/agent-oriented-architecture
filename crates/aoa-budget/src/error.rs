@@ -19,12 +19,6 @@ pub enum BudgetError {
     #[error("context file {path} resolves outside {boundary}")]
     OutsideBoundary { path: PathBuf, boundary: PathBuf },
 
-    #[error(
-        "refusing to overwrite archive {path}: the file has {links} names, \
-         and writing it would change it under every one of them"
-    )]
-    ArchiveHardLinked { path: PathBuf, links: u64 },
-
     #[error("context closure of {path} came back without the file it was resolved from")]
     RootNotRead { path: PathBuf },
 
