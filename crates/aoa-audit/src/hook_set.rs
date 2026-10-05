@@ -97,6 +97,14 @@ pub fn hook_command(verb: &str) -> String {
     )
 }
 
+#[must_use]
+pub fn superseded_hook_commands(verb: &str) -> [String; 2] {
+    [
+        format!("aoa enforce {verb}"),
+        format!("\"${{CLAUDE_PROJECT_DIR:-.}}\"/{ENFORCE_WRAPPER_REL} {verb}"),
+    ]
+}
+
 /// The exit code a hook uses when enforcement could not run at all.
 ///
 /// `check` is the only blocking hook, so unavailable enforcement must deny rather

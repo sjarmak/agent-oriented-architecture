@@ -9,7 +9,9 @@ use aoa_trace::{linked_worktree_points_back, RepositoryRootError};
 use serde_json::Value;
 
 use crate::error::AuditError;
-use crate::hook_set::{read_settings, AOA_SETTINGS_KEY, ENFORCE_HOOK_SET, ENFORCE_WRAPPER_REL};
+use crate::hook_set::{
+    hook_command, read_settings, superseded_hook_commands, AOA_SETTINGS_KEY, ENFORCE_HOOK_SET,
+};
 use crate::tier::EnforcementPlane;
 
 const CI_MARKERS: &[&str] = &[
@@ -355,14 +357,6 @@ fn command(hook: &Value) -> Option<&str> {
     hook.get("command").and_then(Value::as_str)
 }
 
-/// Does `event` carry a hook running AOA's enforcement for `verb`?
-///
-/// Matched by entrypoint and verb rather than by one exact string: the
-/// installer moved from a bare `aoa enforce <verb>` to a repo-local
-/// `.claude/hooks/aoa-enforce <verb>` wrapper, and a repository may legitimately
-/// still be on either. What the audit cares about is that the verb is wired to
-/// AOA's enforcement entrypoint under the right event, not how the operator
-/// spells the path to it.
 fn has_enforce_hook(settings: &Value, event: &str, verb: &str) -> bool {
     settings
         .get("hooks")
@@ -373,37 +367,11 @@ fn has_enforce_hook(settings: &Value, event: &str, verb: &str) -> bool {
         .any(|command| is_enforce_command(command, verb))
 }
 
-/// Whether `command` runs AOA's enforcement entrypoint for `verb`.
-///
-/// The wrapper path comes from [`ENFORCE_WRAPPER_REL`] — the same constant the
-/// installer writes into every command — and the whole path is matched, never an
-/// `aoa-enforce` suffix. A command that merely ends in those characters
-/// (`xaoa-enforce record`, `./tools/my-aoa-enforce record`) belongs to somebody
-/// else, and reporting the runtime plane present because of it is the exact
-/// failure class AOA ships to detect.
 fn is_enforce_command(command: &str, verb: &str) -> bool {
-    // Shell punctuation around a word is quoting, not part of it: the installed
-    // command wraps its script in single quotes and its paths in double quotes.
-    let words: Vec<&str> = command
-        .split_whitespace()
-        .map(|word| word.trim_matches(|c| matches!(c, '"' | '\'' | ';')))
-        .collect();
-
-    // Wrapper form: some shell shape runs the installer's own wrapper for this
-    // verb. Matching the path and the verb rather than the whole command line
-    // keeps the audit reading installations written by an older `aoa` — the v2
-    // `sh -c` guard and the plain `<root>/.claude/hooks/aoa-enforce <verb>` it
-    // replaced both satisfy it.
-    if words.iter().any(|word| word.ends_with(ENFORCE_WRAPPER_REL)) {
-        return words.contains(&verb);
-    }
-
-    // v1: `aoa enforce <verb>`, bare or by absolute path. Retired by the
-    // installer on upgrade, but a repo that has not re-run it still enforces.
-    let [entrypoint, rest @ ..] = words.as_slice() else {
-        return false;
-    };
-    entrypoint.split('/').next_back() == Some("aoa") && rest == ["enforce", verb]
+    command == hook_command(verb)
+        || superseded_hook_commands(verb)
+            .iter()
+            .any(|superseded| superseded == command)
 }
 
 /// Return the enforcement planes that are structurally absent from `repo`, in
@@ -426,7 +394,7 @@ pub fn missing_planes(repo: &Path) -> Result<Vec<EnforcementPlane>, AuditError> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hook_set::{hook_command, MAX_SETTINGS_BYTES, SETTINGS_REL};
+    use crate::hook_set::{ENFORCE_WRAPPER_REL, MAX_SETTINGS_BYTES, SETTINGS_REL};
 
     fn settings(repo: &Path, body: &str) {
         let path = repo.join(SETTINGS_REL);
@@ -522,11 +490,6 @@ mod tests {
         ));
     }
 
-    /// An unrelated command that merely mentions a verb is not the plane. The
-    /// match is on AOA's own wrapper path (or its v1 entrypoint) plus its verb,
-    /// never on a suffix: `aoa-enforce` as a *substring* of another program's
-    /// name made someone else's hook report AOA's plane as installed, which is
-    /// the failure class this crate exists to detect.
     #[test]
     fn a_lookalike_command_does_not_satisfy_the_plane() {
         assert!(!is_enforce_command("echo aoa enforce record", "record"));
@@ -541,10 +504,70 @@ mod tests {
             "./tools/my-aoa-enforce record",
             "record"
         ));
-        assert!(is_enforce_command(
-            "/usr/local/bin/aoa enforce record",
-            "record"
-        ));
+    }
+
+    #[test]
+    fn a_command_that_only_mentions_the_wrapper_and_verb_does_not_satisfy_the_plane() {
+        for decoy in [
+            "true # decoy .claude/hooks/aoa-enforce check",
+            "echo .claude/hooks/aoa-enforce check",
+            "true; : .claude/hooks/aoa-enforce check",
+            "check .claude/hooks/aoa-enforce",
+            "true || \"${CLAUDE_PROJECT_DIR:-.}\"/.claude/hooks/aoa-enforce check",
+            "true # aoa enforce check",
+            "/usr/local/bin/aoa enforce check",
+        ] {
+            assert!(!is_enforce_command(decoy, "check"), "{decoy}");
+        }
+        for trailing in [
+            format!("{} || true", hook_command("check")),
+            format!("true # {}", hook_command("check")),
+            format!("{} ", hook_command("check")),
+        ] {
+            assert!(!is_enforce_command(&trailing, "check"), "{trailing}");
+        }
+    }
+
+    #[test]
+    fn every_command_the_installer_has_written_satisfies_the_plane_for_its_own_verb_only() {
+        for (_, verb) in ENFORCE_HOOK_SET {
+            let written = std::iter::once(hook_command(verb)).chain(superseded_hook_commands(verb));
+            for command in written {
+                assert!(is_enforce_command(&command, verb), "{command}");
+                for (_, other) in ENFORCE_HOOK_SET {
+                    assert_eq!(
+                        is_enforce_command(&command, other),
+                        other == verb,
+                        "{command}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_decoy_hook_set_under_the_right_events_is_not_an_installed_plane() {
+        let repo = tempfile::tempdir().unwrap();
+        let mut hooks: serde_json::Map<String, Value> = serde_json::Map::new();
+        for (event, verb) in ENFORCE_HOOK_SET {
+            hooks
+                .entry(event)
+                .or_insert_with(|| serde_json::json!([]))
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({"hooks":[{
+                    "command": format!("true # decoy {ENFORCE_WRAPPER_REL} {verb}")
+                }]}));
+        }
+        settings(
+            repo.path(),
+            &serde_json::json!({ "hooks": hooks }).to_string(),
+        );
+
+        assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::ForeignOnly);
+        assert!(missing_planes(repo.path())
+            .unwrap()
+            .contains(&EnforcementPlane::RuntimeHook));
     }
 
     #[test]

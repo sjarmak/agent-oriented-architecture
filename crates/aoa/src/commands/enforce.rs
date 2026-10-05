@@ -66,8 +66,9 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use aoa_audit::{
-    hook_command, hook_set_defect, AOA_SETTINGS_KEY, BLOCK_EXIT_CODE, ENFORCE_HOOK_SET,
-    ENFORCE_HOOK_SET_VERSION, ENFORCE_WRAPPER_REL, HOOK_VERSION_KEY, SETTINGS_REL,
+    hook_command, hook_set_defect, superseded_hook_commands, AOA_SETTINGS_KEY, BLOCK_EXIT_CODE,
+    ENFORCE_HOOK_SET, ENFORCE_HOOK_SET_VERSION, ENFORCE_WRAPPER_REL, HOOK_VERSION_KEY,
+    SETTINGS_REL,
 };
 use aoa_codeprobe_shim::bash_runs_tests;
 use aoa_enforce::{
@@ -561,23 +562,6 @@ pub(crate) fn merge_enforce_hooks(mut settings: Value) -> Result<Value> {
         json!(ENFORCE_HOOK_SET_VERSION),
     );
     Ok(settings)
-}
-
-/// Every command string this installer has written for `verb` and since
-/// superseded.
-///
-/// Hook set 1 ran a bare `aoa`, which enforced only where the binary happened to
-/// be on the host's PATH. Hook set 2 named the wrapper through a `.`-defaulted
-/// `CLAUDE_PROJECT_DIR`, which resolved by whatever cwd the host used and exited
-/// 127 — a non-blocking warning — from anywhere else. Both are kept here rather
-/// than deleted alongside the code that wrote them: a repo installed by an older
-/// `aoa` still has them registered, and they are removable only by the exact
-/// string that put them there.
-fn superseded_hook_commands(verb: &str) -> [String; 2] {
-    [
-        format!("aoa enforce {verb}"),
-        format!("\"${{CLAUDE_PROJECT_DIR:-.}}\"/{ENFORCE_WRAPPER_REL} {verb}"),
-    ]
 }
 
 /// Drop the superseded commands this installer wrote in an earlier hook set.
