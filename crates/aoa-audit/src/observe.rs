@@ -76,9 +76,6 @@ fn validate_trace_name(name: &str) -> Result<(), AuditError> {
     }
 }
 
-/// Map a path-trust refusal onto this crate's error surface. The trust
-/// boundary itself lives in `aoa_path_trust`; this crate only decides
-/// how a refusal reads to an audit caller.
 fn install_path_error(source: PathTrustError) -> AuditError {
     match source {
         PathTrustError::Io { path, source } => AuditError::Io { path, source },
@@ -128,9 +125,6 @@ pub fn reject_symlinked_trace_dir(traces_dir: &Path) -> Result<(), AuditError> {
 
 /// Join a relative path beneath `root`, rejecting illegal components and every
 /// existing symlink encountered from the root downward.
-///
-/// The audit-facing spelling of [`aoa_path_trust::safe_join_nofollow`], which owns
-/// the rule; this only translates a refusal into [`AuditError`].
 pub fn reject_symlinked_path(root: &Path, relative: &Path) -> Result<PathBuf, AuditError> {
     safe_join_nofollow(root, relative).map_err(install_path_error)
 }
