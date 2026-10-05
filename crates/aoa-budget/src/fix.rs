@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::boundary::{Boundary, Reached};
 use crate::budget::{count_budget, Config, Verdict};
-use crate::closure::{resolve_closure_within, resolve_contained_closure};
+use crate::closure::{resolve_closure_within, resolve_contained_closure, Closure};
 use crate::error::BudgetError;
 use crate::path::normalize_path;
 use crate::tokenizer::{count_tokens, target_encoder};
@@ -38,12 +38,7 @@ pub fn fix_oversized(
     target: &str,
 ) -> Result<FixOutcome, BudgetError> {
     let path = &normalize_path(path);
-    let original = resolve_contained_closure(path, boundary)?
-        .files
-        .into_iter()
-        .next()
-        .map(|root| root.text)
-        .unwrap_or_default();
+    let original = root_text(resolve_contained_closure(path, boundary)?, path)?;
     let encoder = target_encoder(target)?;
 
     let (archive_name, archive_path) = contained_archive(path, boundary)?;
@@ -52,10 +47,7 @@ pub fn fix_oversized(
         count_tokens(&encoder, t)
     });
 
-    write_without_following_a_link(&archive_path, &original).map_err(|source| BudgetError::Io {
-        path: archive_path.clone(),
-        source,
-    })?;
+    write_without_following_a_link(&archive_path, &original)?;
     std::fs::write(path, &summary).map_err(|source| BudgetError::Io {
         path: path.to_path_buf(),
         source,
@@ -77,15 +69,49 @@ pub fn fix_oversized(
     })
 }
 
-fn write_without_following_a_link(path: &Path, body: &str) -> std::io::Result<()> {
+fn root_text(closure: Closure, path: &Path) -> Result<String, BudgetError> {
+    closure
+        .files
+        .into_iter()
+        .next()
+        .map(|root| root.text)
+        .ok_or_else(|| BudgetError::RootNotRead {
+            path: path.to_path_buf(),
+        })
+}
+
+fn write_without_following_a_link(path: &Path, body: &str) -> Result<(), BudgetError> {
+    let failed = |source| BudgetError::Io {
+        path: path.to_path_buf(),
+        source,
+    };
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create(true).truncate(false);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::custom_flags(
         &mut options,
         rustix::fs::OFlags::NOFOLLOW.bits() as i32,
     );
-    std::io::Write::write_all(&mut options.open(path)?, body.as_bytes())
+    let mut archive = options.open(path).map_err(failed)?;
+    let links = names_of(&archive).map_err(failed)?;
+    if links > 1 {
+        return Err(BudgetError::ArchiveHardLinked {
+            path: path.to_path_buf(),
+            links,
+        });
+    }
+    archive.set_len(0).map_err(failed)?;
+    std::io::Write::write_all(&mut archive, body.as_bytes()).map_err(failed)
+}
+
+#[cfg(unix)]
+fn names_of(file: &std::fs::File) -> std::io::Result<u64> {
+    Ok(std::os::unix::fs::MetadataExt::nlink(&file.metadata()?))
+}
+
+#[cfg(not(unix))]
+fn names_of(_file: &std::fs::File) -> std::io::Result<u64> {
+    Ok(1)
 }
 
 fn contained_archive(path: &Path, boundary: &Path) -> Result<(String, PathBuf), BudgetError> {
@@ -150,4 +176,30 @@ fn summarize_under(
         out = candidate;
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+
+    #[test]
+    fn a_closure_without_its_root_is_an_error_and_not_an_empty_body() {
+        let path = Path::new("AGENTS.md");
+        let closure = Closure {
+            root: path.to_path_buf(),
+            files: Vec::new(),
+            outside_boundary: Vec::new(),
+            unread: Vec::new(),
+            absent: BTreeSet::new(),
+        };
+
+        let refused = root_text(closure, path);
+
+        assert!(
+            matches!(&refused, Err(BudgetError::RootNotRead { path: named }) if named == path),
+            "{refused:?}"
+        );
+    }
 }

@@ -477,11 +477,68 @@ fn fix_leaves_a_file_outside_untouched_when_the_root_steps_back_onto_a_link_to_i
     std::os::unix::fs::symlink(repo.join("real/sub"), repo.join("docs")).unwrap();
     std::os::unix::fs::symlink(&planted, repo.join("real/doc.md")).unwrap();
 
-    let fixed = fix_oversized(&repo.join("docs/../doc.md"), &repo, 200, "gpt-4o").unwrap();
+    let fixed = fix_oversized(&repo.join("docs/../doc.md"), &repo, 200, "gpt-4o");
 
-    assert_eq!(fixed.root, repo.join("doc.md"));
     assert_eq!(std::fs::read_to_string(&planted).unwrap(), "planted\n");
     assert!(!repo.join("real/doc.archive.md").exists());
+    assert_eq!(fixed.unwrap().root, repo.join("doc.md"));
+}
+
+#[cfg(unix)]
+#[test]
+fn fix_refuses_an_archive_that_is_a_hard_link_to_a_file_outside_the_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = oversized_body();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let root = repo.join("big.md");
+    std::fs::write(&root, &body).unwrap();
+    let planted = dir.path().join("planted.md");
+    std::fs::write(&planted, "planted\n").unwrap();
+    std::fs::hard_link(&planted, repo.join("big.archive.md")).unwrap();
+
+    let refused = fix_oversized(&root, &repo, 200, "gpt-4o");
+
+    assert_eq!(std::fs::read_to_string(&planted).unwrap(), "planted\n");
+    assert!(
+        matches!(
+            refused,
+            Err(BudgetError::ArchiveHardLinked { links: 2, .. })
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&root).unwrap(), body);
+}
+
+#[cfg(unix)]
+#[test]
+fn fix_refuses_an_archive_name_caught_in_a_link_loop_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = oversized_body();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let root = repo.join("big.md");
+    std::fs::write(&root, &body).unwrap();
+    let archive = repo.join("big.archive.md");
+    std::os::unix::fs::symlink("big.archive.md", &archive).unwrap();
+
+    let refused = fix_oversized(&root, &repo, 200, "gpt-4o");
+
+    assert!(
+        matches!(refused, Err(BudgetError::Io { .. })),
+        "{refused:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&root).unwrap(), body);
+    assert_eq!(
+        std::fs::read_link(&archive).unwrap(),
+        Path::new("big.archive.md")
+    );
+    let mut entries: Vec<_> = std::fs::read_dir(&repo)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    entries.sort();
+    assert_eq!(entries, ["big.archive.md", "big.md"]);
 }
 
 #[test]
