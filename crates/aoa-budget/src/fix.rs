@@ -41,7 +41,7 @@ pub fn fix_oversized(
     let original = root_text(resolve_contained_closure(path, boundary)?, path)?;
     let encoder = target_encoder(target)?;
 
-    let (archive_name, archive_path) = contained_archive(path, boundary)?;
+    let (archive_name, archive_path, archive_entry) = contained_archive(path, boundary)?;
 
     let summary = summarize_under(&original, ceiling, &archive_name, |t| {
         count_tokens(&encoder, t)
@@ -54,6 +54,12 @@ pub fn fix_oversized(
         })?
         .permissions();
     let read_from = file_behind(path, boundary)?;
+    if archive_entry == read_from {
+        return Err(BudgetError::ArchiveIsRoot {
+            path: path.to_path_buf(),
+            archive: archive_path,
+        });
+    }
     replace(&archive_path, &original, permissions.clone())?;
     replace(&read_from, &summary, permissions)?;
 
@@ -130,7 +136,10 @@ fn replace(path: &Path, body: &str, permissions: std::fs::Permissions) -> Result
         .map_err(|refused| failed(refused.error))
 }
 
-fn contained_archive(path: &Path, boundary: &Path) -> Result<(String, PathBuf), BudgetError> {
+fn contained_archive(
+    path: &Path,
+    boundary: &Path,
+) -> Result<(String, PathBuf, PathBuf), BudgetError> {
     let stem = path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -153,8 +162,8 @@ fn contained_archive(path: &Path, boundary: &Path) -> Result<(String, PathBuf), 
             path: archive_path,
             boundary: boundary.to_path_buf(),
         }),
-        Reached::Absent { .. } | Reached::Looping { .. } | Reached::Member { .. } => {
-            Ok((archive_name, archive_path))
+        Reached::Absent { entry } | Reached::Looping { entry } | Reached::Member { entry, .. } => {
+            Ok((archive_name, archive_path, entry))
         }
     }
 }

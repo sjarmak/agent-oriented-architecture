@@ -19,6 +19,9 @@ pub enum BudgetError {
     #[error("context file {path} resolves outside {boundary}")]
     OutsideBoundary { path: PathBuf, boundary: PathBuf },
 
+    #[error("context file {path} is a link to {archive}, the name its archive would take")]
+    ArchiveIsRoot { path: PathBuf, archive: PathBuf },
+
     #[error("context closure of {path} came back without the file it was resolved from")]
     RootNotRead { path: PathBuf },
 

@@ -647,3 +647,29 @@ fn fix_recheck_counts_what_the_root_links_in_a_sibling_directory() {
     assert!(matches!(err, BudgetError::FixFailed { .. }), "{err}");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[cfg(unix)]
+#[test]
+fn fix_refuses_a_root_that_is_a_link_to_its_own_archive_name_and_keeps_the_original() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = oversized_body();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let archive = repo.join("big.archive.md");
+    std::fs::write(&archive, &body).unwrap();
+    let root = repo.join("big.md");
+    std::os::unix::fs::symlink("big.archive.md", &root).unwrap();
+
+    let refused = fix_oversized(&root, &repo, 200, "gpt-4o");
+
+    assert!(is_its_own_file_holding(&archive, &body));
+    assert_eq!(
+        std::fs::read_link(&root).unwrap(),
+        Path::new("big.archive.md")
+    );
+    assert_eq!(names_in(&repo), ["big.archive.md", "big.md"]);
+    assert!(
+        matches!(&refused, Err(BudgetError::ArchiveIsRoot { path, .. }) if path == &root),
+        "{refused:?}"
+    );
+}
