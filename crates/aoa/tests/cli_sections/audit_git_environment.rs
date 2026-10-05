@@ -4,7 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 use super::falsify_policy::init_git_repo;
 use super::*;
 
-const INHERITED_REPOSITORY_VARIABLES: [&str; 17] = [
+pub(super) const INHERITED_REPOSITORY_VARIABLES: [&str; 17] = [
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_CONFIG",
     "GIT_CONFIG_PARAMETERS",
@@ -24,7 +24,7 @@ const INHERITED_REPOSITORY_VARIABLES: [&str; 17] = [
     "GIT_DISCOVERY_ACROSS_FILESYSTEM",
 ];
 
-const INHERITED_TRACE_VARIABLES: [&str; 5] = [
+pub(super) const INHERITED_TRACE_VARIABLES: [&str; 5] = [
     "GIT_TRACE",
     "GIT_TRACE_PERFORMANCE",
     "GIT_TRACE2",
@@ -32,7 +32,7 @@ const INHERITED_TRACE_VARIABLES: [&str; 5] = [
     "GIT_TRACE2_PERF",
 ];
 
-const STANDARD_OUTPUT: &str = "/dev/stdout";
+pub(super) const STANDARD_OUTPUT: &str = "/dev/stdout";
 
 const ASSUMED_OWNERSHIP_VARIABLE: [&str; 1] = ["GIT_TEST_ASSUME_DIFFERENT_OWNER"];
 

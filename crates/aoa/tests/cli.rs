@@ -29,6 +29,9 @@ mod audit_self;
 mod behavioral_signal;
 #[path = "cli_sections/checkbox_baseline.rs"]
 mod checkbox_baseline;
+#[cfg(unix)]
+#[path = "cli_sections/cli_git_environment.rs"]
+mod cli_git_environment;
 #[path = "cli_sections/core.rs"]
 mod core;
 #[path = "cli_sections/enforce.rs"]

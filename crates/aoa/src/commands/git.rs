@@ -49,11 +49,13 @@ pub(crate) fn checked(command: Command, label: &str) -> Result<Vec<u8>, String> 
 
 #[cfg(test)]
 mod tests {
+    use aoa_trace::git_free_of_inherited_state;
+
     use super::*;
 
     #[test]
     fn checked_returns_stdout_on_success() {
-        let mut cmd = Command::new("git");
+        let mut cmd = git_free_of_inherited_state();
         cmd.args(["--version"]);
         let out = checked(cmd, "git --version").expect("git --version succeeds");
         assert!(
@@ -64,7 +66,7 @@ mod tests {
 
     #[test]
     fn checked_folds_stderr_on_nonzero_exit() {
-        let mut cmd = Command::new("git");
+        let mut cmd = git_free_of_inherited_state();
         // A subcommand that always fails with a message on stderr, without
         // needing a repo.
         cmd.args([

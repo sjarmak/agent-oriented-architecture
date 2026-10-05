@@ -20,7 +20,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{anyhow, bail, Context, Result};
 
@@ -28,7 +27,7 @@ use aoa_audit::{structure_measurements, AuditConfig, AuditError, FindingKind, St
 use aoa_bench::{is_task_dir, load_task};
 use aoa_construct::{GatingThresholds, MetricName};
 use aoa_corpus::{build_report_from_corpus, mine_reverts, Corpus, GitRunner, MinedCommit, Repo};
-use aoa_trace::validate_single_component;
+use aoa_trace::{git_free_of_inherited_state, validate_single_component};
 
 use crate::cli::MineCorpusArgs;
 use crate::commands::fsutil::MAX_TASK_DIRS;
@@ -121,10 +120,11 @@ struct RepoInput {
 /// exit and spawn failure both surface as the runner's opaque `Err(String)`,
 /// which `mine_reverts` wraps into a typed error at the boundary.
 fn run_git(cmd: &[String]) -> std::result::Result<String, String> {
-    let (prog, args) = cmd
-        .split_first()
-        .ok_or_else(|| "empty git command".to_string())?;
-    let mut command = Command::new(prog);
+    let args = match cmd.split_first() {
+        Some((program, args)) if program == "git" => args,
+        _ => return Err(format!("not a git command: {}", cmd.join(" "))),
+    };
+    let mut command = git_free_of_inherited_state();
     command.args(args);
     // Strict decode: git output here (revert logs, OIDs) must be valid UTF-8;
     // garbage is a real error, not something to paper over lossily.
@@ -144,7 +144,7 @@ fn run_git(cmd: &[String]) -> std::result::Result<String, String> {
 /// form. `--verify … ^{commit}` also fails loud on a shallow/stale clone that
 /// lacks the commit, so the operator re-clones with full history.
 fn resolve_commit(clone: &Path, sha: &str) -> Result<String> {
-    let mut command = Command::new("git");
+    let mut command = git_free_of_inherited_state();
     command.arg("-C").arg(clone).args([
         "rev-parse",
         "--verify",
@@ -529,5 +529,16 @@ mod tests {
             vec![task],
             "only the in-tree task, no cycle, no escape"
         );
+    }
+
+    #[test]
+    fn run_git_refuses_a_command_line_whose_program_is_not_git() {
+        for line in [vec![], vec!["sh".to_string(), "-c".to_string()]] {
+            let refused = run_git(&line).expect_err("only git is spawned");
+            assert!(
+                refused.starts_with("not a git command"),
+                "unexpected refusal: {refused}"
+            );
+        }
     }
 }

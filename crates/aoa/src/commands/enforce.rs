@@ -739,7 +739,7 @@ fn add_hook(
 
 #[cfg(test)]
 mod tests {
-    use std::process::Command;
+    use aoa_trace::git_free_of_inherited_state;
 
     use super::*;
 
@@ -757,7 +757,7 @@ mod tests {
     }
 
     fn init_git_repo(path: &Path) {
-        let status = Command::new("git")
+        let status = git_free_of_inherited_state()
             .args(["init", "--quiet"])
             .arg(path)
             .status()
