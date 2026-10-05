@@ -22,6 +22,7 @@ mod error;
 mod fix;
 mod path;
 mod reference;
+mod replace;
 mod suppress;
 mod tokenizer;
 

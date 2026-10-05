@@ -5,6 +5,7 @@ use crate::budget::{count_budget, Config, Verdict};
 use crate::closure::{resolve_closure_within, resolve_contained_closure, Closure};
 use crate::error::BudgetError;
 use crate::path::normalize_path;
+use crate::replace::{replace, Standing};
 use crate::tokenizer::{count_tokens, target_encoder};
 
 /// The outcome of a [`fix_oversized`] operation.
@@ -47,28 +48,45 @@ pub fn fix_oversized(
         count_tokens(&encoder, t)
     });
 
-    let permissions = std::fs::metadata(path)
+    let (read_from, links) = file_behind(path, boundary)?;
+    let archive_trouble = |source| BudgetError::Io {
+        path: archive_path.clone(),
+        source,
+    };
+    if let Some(found) = &archive_found {
+        if is_the_file_at(found, &read_from).map_err(archive_trouble)? {
+            return Err(BudgetError::ArchiveIsRoot {
+                path: path.to_path_buf(),
+                archive: archive_path,
+            });
+        }
+        for link in &links {
+            if is_the_file_at(found, link).map_err(archive_trouble)? {
+                return Err(BudgetError::RootThroughArchive {
+                    path: path.to_path_buf(),
+                    archive: archive_path,
+                });
+            }
+        }
+    }
+    let root_standing = Standing::of_writable(&read_from)
+        .and_then(|standing| standing.ok_or_else(|| std::io::ErrorKind::NotFound.into()))
         .map_err(|source| BudgetError::Io {
             path: path.to_path_buf(),
-            source,
-        })?
-        .permissions();
-    let read_from = file_behind(path, boundary)?;
-    let aliased = archive_found
-        .map(|found| is_the_file_at(&found, &read_from))
-        .transpose()
-        .map_err(|source| BudgetError::Io {
-            path: archive_path.clone(),
             source,
         })?;
-    if aliased == Some(true) {
-        return Err(BudgetError::ArchiveIsRoot {
-            path: path.to_path_buf(),
-            archive: archive_path,
-        });
-    }
-    replace(&archive_path, &original, permissions.clone())?;
-    replace(&read_from, &summary, permissions)?;
+    let archive_standing = archive_found
+        .as_deref()
+        .map(Standing::of_writable)
+        .transpose()
+        .map_err(archive_trouble)?
+        .flatten()
+        .unwrap_or_else(|| root_standing.of_a_new_file());
+    replace(&archive_path, &original, &archive_standing).map_err(archive_trouble)?;
+    replace(&read_from, &summary, &root_standing).map_err(|source| BudgetError::Io {
+        path: read_from.clone(),
+        source,
+    })?;
 
     let closure = resolve_closure_within(path, boundary)?;
     let report = count_budget(&closure, target, &Config::blocking(ceiling))?;
@@ -97,17 +115,19 @@ fn root_text(closure: Closure, path: &Path) -> Result<String, BudgetError> {
         })
 }
 
-fn file_behind(path: &Path, boundary: &Path) -> Result<PathBuf, BudgetError> {
+fn file_behind(path: &Path, boundary: &Path) -> Result<(PathBuf, Vec<PathBuf>), BudgetError> {
     let opened = Boundary::open(boundary).map_err(|source| BudgetError::Io {
         path: boundary.to_path_buf(),
         source,
     })?;
-    let reached = opened.reach(path).map_err(|source| BudgetError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let (reached, links) = opened
+        .reach_through(path)
+        .map_err(|source| BudgetError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
     match reached {
-        Reached::Member { resolved, .. } => Ok(resolved),
+        Reached::Member { resolved, .. } => Ok((resolved, links)),
         Reached::Outside => Err(BudgetError::OutsideBoundary {
             path: path.to_path_buf(),
             boundary: boundary.to_path_buf(),
@@ -131,30 +151,6 @@ fn is_the_file_at(entry: &Path, file: &Path) -> std::io::Result<bool> {
 #[cfg(not(unix))]
 fn is_the_file_at(entry: &Path, file: &Path) -> std::io::Result<bool> {
     Ok(std::fs::canonicalize(entry)? == std::fs::canonicalize(file)?)
-}
-
-fn replace(path: &Path, body: &str, permissions: std::fs::Permissions) -> Result<(), BudgetError> {
-    let failed = |source| BudgetError::Io {
-        path: path.to_path_buf(),
-        source,
-    };
-    let dir = match path.parent() {
-        Some(dir) if !dir.as_os_str().is_empty() => dir,
-        _ => Path::new("."),
-    };
-    let mut fresh = tempfile::Builder::new()
-        .prefix(".aoa-budget-")
-        .tempfile_in(dir)
-        .map_err(failed)?;
-    std::io::Write::write_all(&mut fresh, body.as_bytes()).map_err(failed)?;
-    fresh
-        .as_file()
-        .set_permissions(permissions)
-        .map_err(failed)?;
-    fresh
-        .persist(path)
-        .map(drop)
-        .map_err(|refused| failed(refused.error))
 }
 
 fn contained_archive(

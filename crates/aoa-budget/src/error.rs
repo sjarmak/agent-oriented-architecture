@@ -22,6 +22,9 @@ pub enum BudgetError {
     #[error("context file {path} is the same file as {archive}, the name its archive would take")]
     ArchiveIsRoot { path: PathBuf, archive: PathBuf },
 
+    #[error("context file {path} is reached through {archive}, the name its archive would take")]
+    RootThroughArchive { path: PathBuf, archive: PathBuf },
+
     #[error("context closure of {path} came back without the file it was resolved from")]
     RootNotRead { path: PathBuf },
 

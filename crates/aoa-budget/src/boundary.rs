@@ -82,43 +82,46 @@ impl Boundary {
     }
 
     pub(crate) fn reach(&self, target: &Path) -> io::Result<Reached> {
+        self.reach_through(target).map(|(reached, _)| reached)
+    }
+
+    pub(crate) fn reach_through(&self, target: &Path) -> io::Result<(Reached, Vec<PathBuf>)> {
+        let mut links = Vec::new();
         let Ok(absolute) = std::path::absolute(target) else {
-            return Ok(Reached::Outside);
+            return Ok((Reached::Outside, links));
         };
         let absolute = normalize_path(&absolute);
         let Some((directory, beneath)) = self.locate(&absolute) else {
-            return Ok(Reached::Outside);
+            return Ok((Reached::Outside, links));
         };
-        let mut links_left = MAX_LINKS_FOLLOWED;
         let mut resolved = directory.to_path_buf();
         let mut entry = resolved.clone();
         let mut names = beneath.components();
         while let Some(name) = names.next() {
             entry = resolved.join(name);
-            match self.step(resolved, name, &mut links_left) {
-                Ok(next) => resolved = next,
-                Err(Lost::Outside) => return Ok(Reached::Outside),
-                Err(Lost::Absent) => {
-                    return Ok(Reached::Absent {
-                        entry: entry.join(names.as_path()),
-                    })
+            let lost = match self.step(resolved, name, &mut links) {
+                Ok(next) => {
+                    resolved = next;
+                    continue;
                 }
-                Err(Lost::Looping) => {
-                    return Ok(Reached::Looping {
-                        entry: entry.join(names.as_path()),
-                    })
-                }
-                Err(Lost::Failed(error)) => return Err(error),
-            }
+                Err(lost) => lost,
+            };
+            let entry = entry.join(names.as_path());
+            return match lost {
+                Lost::Outside => Ok((Reached::Outside, links)),
+                Lost::Absent => Ok((Reached::Absent { entry }, links)),
+                Lost::Looping => Ok((Reached::Looping { entry }, links)),
+                Lost::Failed(error) => Err(error),
+            };
         }
-        Ok(Reached::Member { entry, resolved })
+        Ok((Reached::Member { entry, resolved }, links))
     }
 
     fn step(
         &self,
         mut at: PathBuf,
         name: Component<'_>,
-        links_left: &mut usize,
+        links: &mut Vec<PathBuf>,
     ) -> Result<PathBuf, Lost> {
         let mut at_a_directory = true;
         let mut pending: Vec<OsString> = vec![name.as_os_str().to_os_string()];
@@ -144,8 +147,11 @@ impl Boundary {
                 at = next;
                 continue;
             }
-            *links_left = links_left.checked_sub(1).ok_or(Lost::Looping)?;
+            if links.len() == MAX_LINKS_FOLLOWED {
+                return Err(Lost::Looping);
+            }
             let target = std::fs::read_link(&next)?;
+            links.push(next);
             pending.extend(names_a_directory(&target).then(|| OsString::from(".")));
             let target = match target.has_root() {
                 false => target.as_path(),
