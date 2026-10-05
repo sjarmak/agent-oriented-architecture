@@ -11,6 +11,7 @@ use serde_json::Value;
 use crate::error::AuditError;
 use crate::hook_set::{
     hook_command, read_settings, superseded_hook_commands, AOA_SETTINGS_KEY, ENFORCE_HOOK_SET,
+    ENFORCE_WRAPPER_REL,
 };
 use crate::tier::EnforcementPlane;
 
@@ -314,16 +315,33 @@ pub(crate) fn runtime_hooks(repo: &Path) -> RuntimeHooks {
     let Ok(Some(settings)) = read_settings(repo) else {
         return RuntimeHooks::Missing;
     };
-    if ENFORCE_HOOK_SET
-        .into_iter()
-        .all(|(event, verb)| has_enforce_hook(&settings, event, verb))
-    {
+    if hook_set_installed(&settings) {
         return RuntimeHooks::Installed;
     }
     if carries_aoa_install(&settings) || hook_entries(&settings).next().is_none() {
         return RuntimeHooks::Missing;
     }
     RuntimeHooks::ForeignOnly
+}
+
+fn hook_set_installed(settings: &Value) -> bool {
+    ENFORCE_HOOK_SET
+        .into_iter()
+        .all(|(event, verb)| has_enforce_hook(settings, event, verb))
+}
+
+pub(crate) fn names_enforcement_without_installing_it(settings: &Value) -> bool {
+    !hook_set_installed(settings)
+        && hook_entries(settings).filter_map(command).any(|command| {
+            names_enforcement(command)
+                && !ENFORCE_HOOK_SET
+                    .iter()
+                    .any(|(_, verb)| is_enforce_command(command, verb))
+        })
+}
+
+fn names_enforcement(command: &str) -> bool {
+    command.contains(ENFORCE_WRAPPER_REL) || command.contains("aoa enforce ")
 }
 
 pub(crate) fn carries_aoa_install(settings: &Value) -> bool {
@@ -394,7 +412,7 @@ pub fn missing_planes(repo: &Path) -> Result<Vec<EnforcementPlane>, AuditError> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hook_set::{ENFORCE_WRAPPER_REL, MAX_SETTINGS_BYTES, SETTINGS_REL};
+    use crate::hook_set::{MAX_SETTINGS_BYTES, SETTINGS_REL};
 
     fn settings(repo: &Path, body: &str) {
         let path = repo.join(SETTINGS_REL);
@@ -502,6 +520,10 @@ mod tests {
         ));
         assert!(!is_enforce_command(
             "./tools/my-aoa-enforce record",
+            "record"
+        ));
+        assert!(!is_enforce_command(
+            "/opt/x.claude/hooks/aoa-enforce record",
             "record"
         ));
     }

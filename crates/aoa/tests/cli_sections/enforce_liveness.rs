@@ -379,6 +379,61 @@ fn a_foreign_hook_set_is_reported_apart_from_a_repo_with_no_hooks() {
 }
 
 #[test]
+fn a_decoy_command_naming_the_wrapper_reports_the_runtime_plane_absent() {
+    let repo = TempDir::new().unwrap();
+    observe_enforce(repo.path());
+    present_ci_plane(repo.path());
+    let settings_path = repo.path().join(".claude/settings.json");
+    let installed = audit_json(repo.path());
+    assert!(runtime_plane_items(&installed)
+        .iter()
+        .all(|item| item["kind"] != "missing_plane"));
+
+    let mut settings: Value =
+        serde_json::from_slice(&std::fs::read(&settings_path).unwrap()).unwrap();
+    let mut decoyed = 0;
+    for groups in settings["hooks"].as_object_mut().unwrap().values_mut() {
+        for group in groups.as_array_mut().unwrap() {
+            for hook in group["hooks"].as_array_mut().unwrap() {
+                let verb = aoa_audit::ENFORCE_HOOK_SET
+                    .iter()
+                    .map(|(_, verb)| *verb)
+                    .find(|verb| hook["command"] == aoa_audit::hook_command(verb));
+                if let Some(verb) = verb {
+                    hook["command"] =
+                        format!("true # decoy {} {verb}", aoa_audit::ENFORCE_WRAPPER_REL).into();
+                    decoyed += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(decoyed, aoa_audit::ENFORCE_HOOK_SET.len());
+    std::fs::write(&settings_path, settings.to_string()).unwrap();
+
+    let report = audit_json(repo.path());
+    assert_eq!(liveness_state(&report), "not-installed");
+    let items = runtime_plane_items(&report);
+    assert_eq!(items.len(), 1, "{report}");
+    assert_eq!(items[0]["kind"], "missing_plane");
+    assert_eq!(items[0]["tier"], "tier-1");
+    assert!(
+        report["enforce_hook_warning"]
+            .as_str()
+            .is_some_and(|warning| warning.contains("rerun `aoa observe --enforce`")),
+        "{report}"
+    );
+
+    aoa_stdin()
+        .args(["audit", "--fail-on", "tier1", "--repo"])
+        .arg(repo.path())
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "missing enforcement plane: runtime hook",
+        ));
+}
+
+#[test]
 fn a_foreign_hook_set_draws_no_stamp_warning_and_still_fails_the_tier1_gate() {
     let repo = TempDir::new().unwrap();
     foreign_hook_set(repo.path());

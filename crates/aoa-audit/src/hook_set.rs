@@ -188,15 +188,20 @@ pub enum HookSetDefect {
     StampMalformed,
     /// Stamped for an older hook set, so its commands are the ones the current
     /// set exists to retire.
-    Behind { installed: u64 },
+    Behind {
+        installed: u64,
+    },
     /// Stamped for a newer hook set than this binary knows how to write.
-    Ahead { installed: u64 },
+    Ahead {
+        installed: u64,
+    },
     /// The stamp is current and the wrapper its hooks run is absent.
     WrapperMissing,
     /// The wrapper path resolves to something that is not a regular file.
     WrapperNotRegularFile,
     /// The wrapper exists and no execute bit is set, so every hook fails.
     WrapperNotExecutable,
+    CommandNotInstallerWritten,
 }
 
 impl HookSetDefect {
@@ -236,6 +241,9 @@ impl HookSetDefect {
             HookSetDefect::WrapperNotExecutable => format!(
                 "{wrapper} is not executable; enforce hooks cannot run — rerun `aoa observe --enforce`"
             ),
+            HookSetDefect::CommandNotInstallerWritten => format!(
+                "{settings} registers an enforce hook command the installer did not write, which does not count as the runtime plane; rerun `aoa observe --enforce`"
+            ),
         }
     }
 }
@@ -258,14 +266,19 @@ pub fn hook_set_defect(repo: &Path) -> Option<HookSetDefect> {
         }
         Err(SettingsFault::Malformed) => return Some(HookSetDefect::SettingsMalformed),
     };
+    stamp_defect(repo, &settings).or_else(|| {
+        crate::planes::names_enforcement_without_installing_it(&settings)
+            .then_some(HookSetDefect::CommandNotInstallerWritten)
+    })
+}
 
+fn stamp_defect(repo: &Path, settings: &Value) -> Option<HookSetDefect> {
     let Some(version) = settings
         .get(AOA_SETTINGS_KEY)
         .and_then(Value::as_object)
         .and_then(|aoa| aoa.get(HOOK_VERSION_KEY))
     else {
-        return crate::planes::carries_aoa_install(&settings)
-            .then_some(HookSetDefect::StampMissing);
+        return crate::planes::carries_aoa_install(settings).then_some(HookSetDefect::StampMissing);
     };
     let Some(installed) = version.as_u64() else {
         return Some(HookSetDefect::StampMalformed);
@@ -429,6 +442,66 @@ mod tests {
             hook_set_defect(repo.path()),
             Some(HookSetDefect::StampMalformed)
         );
+    }
+
+    #[test]
+    fn a_hand_spelled_enforce_command_is_a_defect_until_the_installer_is_rerun() {
+        let repo = tempfile::tempdir().unwrap();
+        write_wrapper(repo.path(), 0o755);
+        for command in [
+            "/usr/local/bin/aoa enforce check".to_string(),
+            format!("true # decoy {ENFORCE_WRAPPER_REL} check"),
+            format!("{} || true", hook_command("check")),
+        ] {
+            let hooks = serde_json::json!({"PreToolUse": [{"hooks": [{"command": command}]}]});
+            for settings in [
+                serde_json::json!({"hooks": hooks}),
+                serde_json::json!({
+                    "hooks": hooks,
+                    AOA_SETTINGS_KEY: {HOOK_VERSION_KEY: ENFORCE_HOOK_SET_VERSION},
+                }),
+            ] {
+                write_settings(repo.path(), &settings.to_string());
+                let defect = hook_set_defect(repo.path());
+                assert_eq!(
+                    defect,
+                    Some(HookSetDefect::CommandNotInstallerWritten),
+                    "{settings}"
+                );
+                assert!(defect
+                    .unwrap()
+                    .render_line(repo.path())
+                    .contains("rerun `aoa observe --enforce`"));
+            }
+        }
+    }
+
+    #[test]
+    fn a_complete_install_is_not_faulted_for_an_extra_hand_spelled_command() {
+        let repo = tempfile::tempdir().unwrap();
+        write_wrapper(repo.path(), 0o755);
+        let mut hooks = serde_json::Map::new();
+        for (event, verb) in crate::hook_set::ENFORCE_HOOK_SET {
+            hooks
+                .entry(event)
+                .or_insert_with(|| serde_json::json!([]))
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({"hooks": [{"command": hook_command(verb)}]}));
+        }
+        hooks["PreToolUse"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"hooks": [{"command": "/usr/local/bin/aoa enforce check"}]}));
+        write_settings(
+            repo.path(),
+            &serde_json::json!({
+                "hooks": hooks,
+                AOA_SETTINGS_KEY: {HOOK_VERSION_KEY: ENFORCE_HOOK_SET_VERSION},
+            })
+            .to_string(),
+        );
+        assert_eq!(hook_set_defect(repo.path()), None);
     }
 
     /// A current stamp over a deleted wrapper is the installed-but-inert state
