@@ -283,9 +283,9 @@ impl HookSetDefect {
                 found,
                 required,
             } => format!(
-                "{settings} runs the enforce \"{verb}\" hook on {event} under {}, so the host \
-                 never fires it; it must run under matcher \"{required}\". Correct that entry \
-                 and rerun `aoa observe --enforce`",
+                "{settings} runs the enforce \"{verb}\" hook on {event} under {}, which is not \
+                 the scope the installer gives it; it must run under matcher \"{required}\". \
+                 Correct that entry and rerun `aoa observe --enforce`",
                 found.as_ref().map_or_else(
                     || "a group with no matcher".to_string(),
                     |found| format!("matcher \"{found}\"")
@@ -711,9 +711,9 @@ mod tests {
                 required: HookScope::Bash.matcher(),
             }
         );
-        assert!(defect
-            .render_line(repo.path())
-            .contains("a group with no matcher"));
+        let line = defect.render_line(repo.path());
+        assert!(line.contains("a group with no matcher"));
+        assert!(!line.contains("never fires"), "{line}");
     }
 
     #[test]
