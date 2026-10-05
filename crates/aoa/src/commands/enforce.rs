@@ -66,9 +66,9 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use aoa_audit::{
-    hook_command, hook_set_defect, superseded_hook_commands, HookScope, AOA_SETTINGS_KEY,
-    BLOCK_EXIT_CODE, ENFORCE_HOOK_SET, ENFORCE_HOOK_SET_VERSION, ENFORCE_WRAPPER_REL,
-    HOOK_VERSION_KEY, SETTINGS_REL,
+    hook_command, hook_set_defect, matchers_running, misplaced_matcher, superseded_hook_commands,
+    HookScope, AOA_SETTINGS_KEY, BLOCK_EXIT_CODE, COMMAND_HOOK_TYPE, ENFORCE_HOOK_SET,
+    ENFORCE_HOOK_SET_VERSION, ENFORCE_WRAPPER_REL, HOOK_VERSION_KEY, SETTINGS_REL,
 };
 use aoa_codeprobe_shim::bash_runs_tests;
 use aoa_enforce::{
@@ -702,24 +702,9 @@ fn add_hook(
         ));
     };
 
-    let registered_matcher = groups.iter().find_map(|group| {
-        let runs_command = group
-            .get("hooks")
-            .and_then(Value::as_array)
-            .is_some_and(|inner| {
-                inner
-                    .iter()
-                    .any(|h| h.get("command").and_then(Value::as_str) == Some(command))
-            });
-        runs_command.then(|| group.get("matcher").and_then(Value::as_str))
-    });
-
-    match registered_matcher {
-        Some(Some(found)) if found == matcher => Ok(()),
-        // A group with no usable matcher still can't be reconciled, but naming it
-        // as `""` would read as an entry that matches the empty string rather
-        // than one that is missing the key.
-        Some(found) => Err(anyhow!(
+    let registered = matchers_running(groups, |registered| registered == command);
+    if let Some(found) = misplaced_matcher(&registered, matcher) {
+        return Err(anyhow!(
             "hook event \"{event}\" already runs \"{command}\" under {}, but it \
              must run under matcher \"{matcher}\". Remove or correct that entry \
              and re-run.",
@@ -727,15 +712,15 @@ fn add_hook(
                 || "a group with no matcher".to_string(),
                 |m| format!("matcher \"{m}\"")
             )
-        )),
-        None => {
-            groups.push(json!({
-                "matcher": matcher,
-                "hooks": [{ "type": "command", "command": command }],
-            }));
-            Ok(())
-        }
+        ));
     }
+    if registered.is_empty() {
+        groups.push(json!({
+            "matcher": matcher,
+            "hooks": [{ "type": COMMAND_HOOK_TYPE, "command": command }],
+        }));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1167,6 +1152,50 @@ mod tests {
             !message.contains("matcher \"\""),
             "must not render the missing key as an empty matcher, got: {message}"
         );
+    }
+
+    #[test]
+    fn the_installer_and_the_audit_agree_on_a_hook_that_also_runs_outside_its_scope() {
+        let misplaced = json!({
+            "matcher": "Bash",
+            "hooks": [{ "type": "command", "command": hook_command("commit") }],
+        });
+        for at_the_front in [true, false] {
+            let repo = tempfile::tempdir().unwrap();
+            let mut installed = merge_enforce_hooks(json!({})).unwrap();
+            let groups = installed["hooks"]["PostToolUse"].as_array_mut().unwrap();
+            let at = if at_the_front { 0 } else { groups.len() };
+            groups.insert(at, misplaced.clone());
+            let settings = repo.path().join(SETTINGS_REL);
+            std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+            std::fs::write(&settings, installed.to_string()).unwrap();
+            let wrapper = repo.path().join(ENFORCE_WRAPPER_REL);
+            std::fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+            std::fs::write(&wrapper, "#!/bin/sh\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+
+            let refused = merge_enforce_hooks(installed).unwrap_err().to_string();
+            assert!(
+                refused.contains("under matcher \"Bash\""),
+                "misplaced group first: {at_the_front}, got: {refused}"
+            );
+            assert!(
+                matches!(
+                    hook_set_defect(repo.path()),
+                    Some(aoa_audit::HookSetDefect::HookScopeMismatch {
+                        verb: "commit",
+                        found: Some(ref found),
+                        ..
+                    }) if found == "Bash"
+                ),
+                "misplaced group first: {at_the_front}, got: {:?}",
+                hook_set_defect(repo.path())
+            );
+        }
     }
 
     #[test]

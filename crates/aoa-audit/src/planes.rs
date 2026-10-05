@@ -1,7 +1,5 @@
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
-use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use aoa_corpus::PRECOMMIT_HOOK_MARKERS;
@@ -10,10 +8,11 @@ use aoa_path_trust::{
 };
 use serde_json::Value;
 
+use crate::answer::{Answering, POLL_INTERVAL};
 use crate::error::AuditError;
 use crate::hook_set::{
-    hook_command, read_settings, superseded_hook_commands, HookScope, AOA_SETTINGS_KEY,
-    ENFORCE_HOOK_SET, ENFORCE_WRAPPER_REL,
+    hook_command, hooks_disabled, matchers_running, read_settings, superseded_hook_commands,
+    HookScope, AOA_SETTINGS_KEY, ENFORCE_HOOK_SET, ENFORCE_WRAPPER_REL, SETTINGS_REL,
 };
 use crate::tier::EnforcementPlane;
 
@@ -35,7 +34,6 @@ const NULL_DEVICE: &str = "NUL";
 const DEFAULT_PRE_COMMIT_HOOK: &str = "hooks/pre-commit";
 
 const GIT_DEADLINE: Duration = Duration::from_secs(10);
-const GIT_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 #[derive(Debug)]
 enum GitTrouble {
@@ -197,52 +195,54 @@ fn answer_within_deadline(command: &mut Command, repo: &Path) -> Result<GitAnswe
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|source| GitTrouble::Unasked(format!("git could not be started: {source}")))?;
-    let Some(mut pipe) = child.stdout.take() else {
+        .map_err(|source| unasked("git could not be started", &source))?;
+    let Some(pipe) = child.stdout.take() else {
         return Err(GitTrouble::Unasked(
             "git was started without a pipe to answer on".to_string(),
         ));
     };
-    let (read, stdout_read) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut stdout = Vec::new();
-        let _ = read.send(pipe.read_to_end(&mut stdout).map(|_| stdout));
-    });
-    let started = Instant::now();
+    let unread = |source| unasked("git's answer could not be read", &source);
     let unresponsive = || {
         GitTrouble::Unresponsive(AuditError::GitUnresponsive {
             repo: repo.to_path_buf(),
             seconds: GIT_DEADLINE.as_secs(),
         })
     };
+    let mut answering = match Answering::start(pipe) {
+        Ok(answering) => answering,
+        Err(source) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(unread(source));
+        }
+    };
+    let started = Instant::now();
     loop {
-        match child.try_wait() {
+        let waited = answering.take_written().and_then(|()| child.try_wait());
+        match waited {
             Ok(Some(status)) => {
                 let remaining = GIT_DEADLINE.saturating_sub(started.elapsed());
-                return match stdout_read.recv_timeout(remaining) {
-                    Ok(Ok(stdout)) => Ok(GitAnswer { status, stdout }),
-                    Ok(Err(source)) => Err(GitTrouble::Unasked(format!(
-                        "git's answer could not be read: {source}"
-                    ))),
-                    Err(RecvTimeoutError::Timeout) => Err(unresponsive()),
-                    Err(RecvTimeoutError::Disconnected) => Err(GitTrouble::Unasked(
-                        "the read of git's answer stopped before it finished".to_string(),
-                    )),
+                return match answering.finish(remaining) {
+                    Ok(Some(stdout)) => Ok(GitAnswer { status, stdout }),
+                    Ok(None) => Err(unresponsive()),
+                    Err(source) => Err(unread(source)),
                 };
             }
-            Ok(None) if started.elapsed() < GIT_DEADLINE => std::thread::sleep(GIT_POLL_INTERVAL),
+            Ok(None) if started.elapsed() < GIT_DEADLINE => std::thread::sleep(POLL_INTERVAL),
             waited => {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(match waited {
                     Ok(_) => unresponsive(),
-                    Err(source) => {
-                        GitTrouble::Unasked(format!("git could not be waited for: {source}"))
-                    }
+                    Err(source) => unasked("git could not be waited for", &source),
                 });
             }
         }
     }
+}
+
+fn unasked(what: &str, source: &std::io::Error) -> GitTrouble {
+    GitTrouble::Unasked(format!("{what}: {}", source.kind()))
 }
 
 fn git(repo: &Path) -> Command {
@@ -320,9 +320,12 @@ pub(crate) enum RuntimeHooks {
 }
 
 pub(crate) fn runtime_hooks(repo: &Path) -> RuntimeHooks {
-    let Ok(Some(settings)) = read_settings(repo) else {
+    let Ok(Some(settings)) = read_settings(repo, SETTINGS_REL) else {
         return RuntimeHooks::Missing;
     };
+    if !matches!(hooks_disabled(repo, &settings), Ok(None)) {
+        return RuntimeHooks::Missing;
+    }
     if hook_set_installed(&settings) {
         return RuntimeHooks::Installed;
     }
@@ -340,12 +343,14 @@ fn hook_set_installed(settings: &Value) -> bool {
 
 pub(crate) fn names_enforcement_without_installing_it(settings: &Value) -> bool {
     !hook_set_installed(settings)
-        && hook_entries(settings).filter_map(command).any(|command| {
-            names_enforcement(command)
-                && !ENFORCE_HOOK_SET
-                    .iter()
-                    .any(|(_, verb, _)| is_enforce_command(command, verb))
-        })
+        && hook_entries(settings)
+            .filter_map(named_command)
+            .any(|command| {
+                names_enforcement(command)
+                    && !ENFORCE_HOOK_SET
+                        .iter()
+                        .any(|(_, verb, _)| is_enforce_command(command, verb))
+            })
 }
 
 fn names_enforcement(command: &str) -> bool {
@@ -361,11 +366,13 @@ fn names_enforcement(command: &str) -> bool {
 
 pub(crate) fn carries_aoa_install(settings: &Value) -> bool {
     settings.get(AOA_SETTINGS_KEY).is_some()
-        || hook_entries(settings).filter_map(command).any(|command| {
-            ENFORCE_HOOK_SET
-                .iter()
-                .any(|(_, verb, _)| is_enforce_command(command, verb))
-        })
+        || hook_entries(settings)
+            .filter_map(named_command)
+            .any(|command| {
+                ENFORCE_HOOK_SET
+                    .iter()
+                    .any(|(_, verb, _)| is_enforce_command(command, verb))
+            })
 }
 
 fn hook_entries(settings: &Value) -> impl Iterator<Item = &Value> {
@@ -393,7 +400,7 @@ fn group_hooks(group: &Value) -> impl Iterator<Item = &Value> {
         .flatten()
 }
 
-fn command(hook: &Value) -> Option<&str> {
+fn named_command(hook: &Value) -> Option<&str> {
     hook.get("command").and_then(Value::as_str)
 }
 
@@ -411,17 +418,8 @@ pub(crate) fn enforce_hook_matchers<'a>(
         .get("hooks")
         .and_then(|hooks| hooks.get(event))
         .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|group| group_runs_verb(group, verb))
-        .map(|group| group.get("matcher").and_then(Value::as_str))
-        .collect()
-}
-
-fn group_runs_verb(group: &Value, verb: &str) -> bool {
-    group_hooks(group)
-        .filter_map(command)
-        .any(|command| is_enforce_command(command, verb))
+        .map(|groups| matchers_running(groups, |command| is_enforce_command(command, verb)))
+        .unwrap_or_default()
 }
 
 fn is_enforce_command(command: &str, verb: &str) -> bool {
@@ -493,8 +491,8 @@ mod tests {
         settings(
             repo.path(),
             r#"{"hooks":{"PostToolUse":[
-                {"matcher":"Bash","hooks":[{"command":"aoa enforce record"}]},
-                {"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"command":"aoa enforce check"}]}
+                {"matcher":"Bash","hooks":[{"type":"command","command":"aoa enforce record"}]},
+                {"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"type":"command","command":"aoa enforce check"}]}
             ]}}"#,
         );
         assert_eq!(
@@ -541,7 +539,7 @@ mod tests {
         assert!(!has_enforce_hook(
             &serde_json::json!({"hooks":{"PreToolUse":[{
                 "matcher": HookScope::Mutation.matcher(),
-                "hooks":[{"command": hook_command("record")}]
+                "hooks":[{"type":"command","command": hook_command("record")}]
             }]}}),
             "PreToolUse",
             "check",
@@ -853,11 +851,110 @@ mod tests {
             repo.path(),
             r#"{
                 "aoa":{"enforce_hook_set_version":3},
-                "hooks":{"PreToolUse":[{"hooks":[{"command":"./tools/guard.sh"}]}]}
+                "hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"./tools/guard.sh"}]}]}
             }"#,
         );
 
         assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::Missing);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_answer_larger_than_a_pipe_holds_is_read_whole_while_its_writer_still_runs() {
+        const ANSWER_BYTES: usize = 1 << 20;
+        let repo = tempfile::tempdir().unwrap();
+
+        let answer = answer_within_deadline(
+            Command::new("sh").args(["-c", &format!("head -c {ANSWER_BYTES} /dev/zero")]),
+            repo.path(),
+        )
+        .unwrap();
+
+        assert!(answer.status.success());
+        assert_eq!(answer.stdout.len(), ANSWER_BYTES);
+    }
+
+    #[test]
+    fn a_git_that_cannot_be_started_is_named_without_the_operating_systems_wording() {
+        let repo = tempfile::tempdir().unwrap();
+
+        let trouble = answer_within_deadline(
+            &mut Command::new(repo.path().join("no-such-git")),
+            repo.path(),
+        )
+        .map(|answer| answer.stdout);
+
+        let Err(GitTrouble::Unasked(reason)) = trouble else {
+            panic!("{trouble:?}");
+        };
+        assert_eq!(
+            reason,
+            format!("git could not be started: {}", std::io::ErrorKind::NotFound)
+        );
+        assert!(!reason.contains("os error"), "{reason}");
+    }
+
+    #[test]
+    fn a_hook_entry_that_is_not_a_command_hook_does_not_satisfy_the_plane() {
+        let untyped = |verb: &str| serde_json::json!({"command": hook_command(verb)});
+        let prompt =
+            |verb: &str| serde_json::json!({"type": "prompt", "command": hook_command(verb)});
+        for entry in [untyped as fn(&str) -> Value, prompt] {
+            let mut hooks = serde_json::Map::new();
+            for (event, verb, scope) in ENFORCE_HOOK_SET {
+                hooks
+                    .entry(event)
+                    .or_insert_with(|| serde_json::json!([]))
+                    .as_array_mut()
+                    .unwrap()
+                    .push(serde_json::json!({"matcher": scope.matcher(), "hooks": [entry(verb)]}));
+            }
+            let repo = tempfile::tempdir().unwrap();
+            settings(
+                repo.path(),
+                &serde_json::json!({ "hooks": hooks }).to_string(),
+            );
+
+            assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::Missing);
+            assert!(runtime_hook_missing(repo.path()));
+        }
+    }
+
+    #[test]
+    fn hooks_switched_off_by_either_settings_file_are_a_missing_plane() {
+        let installed: Value =
+            serde_json::from_str(&hook_set_settings(hook_command, contract_matcher)).unwrap();
+        let local = |repo: &Path, body: &str| {
+            std::fs::write(repo.join(crate::hook_set::LOCAL_SETTINGS_REL), body).unwrap();
+        };
+
+        let repo = tempfile::tempdir().unwrap();
+        let mut disabled = installed.clone();
+        disabled["disableAllHooks"] = true.into();
+        settings(repo.path(), &disabled.to_string());
+        assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::Missing);
+
+        local(repo.path(), r#"{"disableAllHooks":false}"#);
+        assert_eq!(
+            runtime_hooks(repo.path()),
+            RuntimeHooks::Installed,
+            "the local file is the one the host believes"
+        );
+
+        settings(repo.path(), &installed.to_string());
+        local(repo.path(), r#"{"disableAllHooks":true}"#);
+        assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::Missing);
+        assert!(runtime_hook_missing(repo.path()));
+
+        local(repo.path(), "{");
+        assert_eq!(
+            runtime_hooks(repo.path()),
+            RuntimeHooks::Missing,
+            "a local file that cannot be read cannot affirm the plane"
+        );
+
+        local(repo.path(), "{}");
+        assert_eq!(runtime_hooks(repo.path()), RuntimeHooks::Installed);
     }
 
     #[test]
@@ -883,8 +980,8 @@ mod tests {
             repo.path(),
             r#"{"hooks":{
                 "PreToolUse":[{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[
-                    {"command":"aoa enforce check"},
-                    {"command":"./tools/guard.sh"}
+                    {"type":"command","command":"aoa enforce check"},
+                    {"type":"command","command":"./tools/guard.sh"}
                 ]}]
             }}"#,
         );

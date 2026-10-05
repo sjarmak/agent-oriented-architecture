@@ -333,12 +333,12 @@ mod tests {
             repo.path().join(".claude/settings.json"),
             r#"{"hooks":{
                 "PostToolUse":[
-                    {"matcher":"Bash","hooks":[{"command":"aoa enforce record"}]},
-                    {"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"command":"aoa enforce commit"}]}
+                    {"matcher":"Bash","hooks":[{"type":"command","command":"aoa enforce record"}]},
+                    {"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"type":"command","command":"aoa enforce commit"}]}
                 ],
-                "PreToolUse":[{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"command":"aoa enforce check"}]}],
-                "PostToolUseFailure":[{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"command":"aoa enforce fail"}]}],
-                "PermissionDenied":[{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"command":"aoa enforce deny"}]}]
+                "PreToolUse":[{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"type":"command","command":"aoa enforce check"}]}],
+                "PostToolUseFailure":[{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"type":"command","command":"aoa enforce fail"}]}],
+                "PermissionDenied":[{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"type":"command","command":"aoa enforce deny"}]}]
             }}"#,
         )
         .unwrap();
@@ -582,7 +582,7 @@ mod tests {
         std::fs::create_dir_all(repo.path().join(".claude")).unwrap();
         std::fs::write(
             repo.path().join(".claude/settings.json"),
-            r#"{"hooks":{"PreToolUse":[{"hooks":[{"command":"./tools/guard.sh"}]}]}}"#,
+            r#"{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"./tools/guard.sh"}]}]}}"#,
         )
         .unwrap();
 

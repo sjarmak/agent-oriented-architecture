@@ -34,6 +34,12 @@ pub const ENFORCE_WRAPPER_REL: &str = ".claude/hooks/aoa-enforce";
 /// repository root.
 pub const SETTINGS_REL: &str = ".claude/settings.json";
 
+pub const LOCAL_SETTINGS_REL: &str = ".claude/settings.local.json";
+
+pub const COMMAND_HOOK_TYPE: &str = "command";
+
+const DISABLE_ALL_HOOKS_KEY: &str = "disableAllHooks";
+
 /// Bumped whenever [`hook_command`] changes shape, so a repo carrying the old
 /// spelling reports as behind and re-running the installer retires it.
 pub const ENFORCE_HOOK_SET_VERSION: u64 = 3;
@@ -170,8 +176,8 @@ pub(crate) enum SettingsFault {
 /// — they used to apply different rules to the same file, so a symlinked
 /// `settings.json` reported the plane MISSING while the stamp beside it reported
 /// a healthy install.
-pub(crate) fn read_settings(repo: &Path) -> Result<Option<Value>, SettingsFault> {
-    let path = repo.join(SETTINGS_REL);
+pub(crate) fn read_settings(repo: &Path, rel: &str) -> Result<Option<Value>, SettingsFault> {
+    let path = repo.join(rel);
     match std::fs::symlink_metadata(&path) {
         Ok(metadata) if !metadata.file_type().is_file() => {
             return Err(SettingsFault::Unreadable(
@@ -194,6 +200,53 @@ pub(crate) fn read_settings(repo: &Path) -> Result<Option<Value>, SettingsFault>
     serde_json::from_str(&raw)
         .map(Some)
         .map_err(|_| SettingsFault::Malformed)
+}
+
+pub(crate) fn hooks_disabled(
+    repo: &Path,
+    settings: &Value,
+) -> Result<Option<&'static str>, SettingsFault> {
+    let local = read_settings(repo, LOCAL_SETTINGS_REL)?;
+    let switch = |settings: &Value| settings.get(DISABLE_ALL_HOOKS_KEY).and_then(Value::as_bool);
+    Ok(match local.as_ref().and_then(switch) {
+        Some(true) => Some(LOCAL_SETTINGS_REL),
+        Some(false) => None,
+        None => (switch(settings) == Some(true)).then_some(SETTINGS_REL),
+    })
+}
+
+#[must_use]
+pub fn matchers_running(groups: &[Value], runs: impl Fn(&str) -> bool) -> Vec<Option<&str>> {
+    groups
+        .iter()
+        .filter(|group| {
+            group
+                .get("hooks")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(run_command)
+                .any(&runs)
+        })
+        .map(|group| group.get("matcher").and_then(Value::as_str))
+        .collect()
+}
+
+fn run_command(hook: &Value) -> Option<&str> {
+    (hook.get("type").and_then(Value::as_str) == Some(COMMAND_HOOK_TYPE))
+        .then(|| hook.get("command").and_then(Value::as_str))
+        .flatten()
+}
+
+#[must_use]
+pub fn misplaced_matcher<'a>(
+    matchers: &[Option<&'a str>],
+    required: &str,
+) -> Option<Option<&'a str>> {
+    matchers
+        .iter()
+        .copied()
+        .find(|matcher| *matcher != Some(required))
 }
 
 /// A defect in an installed hook set that [`crate::missing_planes`] cannot see.
@@ -229,6 +282,10 @@ pub enum HookSetDefect {
     /// The wrapper exists and no execute bit is set, so every hook fails.
     WrapperNotExecutable,
     CommandNotInstallerWritten,
+    HooksDisabled {
+        settings: &'static str,
+    },
+    LocalSettingsUntrusted,
     HookScopeMismatch {
         event: &'static str,
         verb: &'static str,
@@ -277,6 +334,14 @@ impl HookSetDefect {
             HookSetDefect::CommandNotInstallerWritten => format!(
                 "{settings} names an enforce hook command the installer did not write, which does not count as the runtime plane; rerun `aoa observe --enforce`"
             ),
+            HookSetDefect::HooksDisabled { settings } => format!(
+                "{} sets `disableAllHooks`, so the host runs none of the installed enforce hooks; remove that setting",
+                repo.join(settings).display()
+            ),
+            HookSetDefect::LocalSettingsUntrusted => format!(
+                "{} could not be read as settings, so it cannot be ruled out that it disables every hook; repair or remove it",
+                repo.join(LOCAL_SETTINGS_REL).display()
+            ),
             HookSetDefect::HookScopeMismatch {
                 event,
                 verb,
@@ -305,7 +370,7 @@ impl HookSetDefect {
 /// Reads only.
 #[must_use]
 pub fn hook_set_defect(repo: &Path) -> Option<HookSetDefect> {
-    let settings = match read_settings(repo) {
+    let settings = match read_settings(repo, SETTINGS_REL) {
         Ok(Some(settings)) => settings,
         Ok(None) => return None,
         Err(SettingsFault::Unreadable(reason)) => {
@@ -314,6 +379,7 @@ pub fn hook_set_defect(repo: &Path) -> Option<HookSetDefect> {
         Err(SettingsFault::Malformed) => return Some(HookSetDefect::SettingsMalformed),
     };
     stamp_defect(repo, &settings)
+        .or_else(|| disabled_defect(repo, &settings))
         .or_else(|| scope_defect(&settings))
         .or_else(|| {
             crate::planes::names_enforcement_without_installing_it(&settings)
@@ -321,20 +387,27 @@ pub fn hook_set_defect(repo: &Path) -> Option<HookSetDefect> {
         })
 }
 
+fn disabled_defect(repo: &Path, settings: &Value) -> Option<HookSetDefect> {
+    if !crate::planes::carries_aoa_install(settings) {
+        return None;
+    }
+    match hooks_disabled(repo, settings) {
+        Ok(disabling) => disabling.map(|settings| HookSetDefect::HooksDisabled { settings }),
+        Err(_) => Some(HookSetDefect::LocalSettingsUntrusted),
+    }
+}
+
 fn scope_defect(settings: &Value) -> Option<HookSetDefect> {
     ENFORCE_HOOK_SET
         .into_iter()
         .find_map(|(event, verb, scope)| {
             let found = crate::planes::enforce_hook_matchers(settings, event, verb);
-            let first = found.first().copied()?;
             let required = scope.matcher();
-            if found.contains(&Some(required.as_str())) {
-                return None;
-            }
+            let misplaced = misplaced_matcher(&found, &required)?;
             Some(HookSetDefect::HookScopeMismatch {
                 event,
                 verb,
-                found: first.map(str::to_owned),
+                found: misplaced.map(str::to_owned),
                 required,
             })
         })
@@ -394,7 +467,8 @@ pub(crate) mod fixtures {
     ) -> Value {
         let mut hooks = serde_json::Map::new();
         for (event, verb, scope) in ENFORCE_HOOK_SET {
-            let mut group = serde_json::json!({"hooks": [{"command": command(verb)}]});
+            let mut group =
+                serde_json::json!({"hooks": [{"type": "command", "command": command(verb)}]});
             let matcher = matcher(verb, scope);
             if !matcher.is_null() {
                 group["matcher"] = matcher;
@@ -488,7 +562,7 @@ mod tests {
         let repo = tempfile::tempdir().unwrap();
         for body in [
             r#"{"hooks":{}}"#,
-            r#"{"hooks":{"PreToolUse":[{"hooks":[{"command":"./tools/guard.sh"}]}]}}"#,
+            r#"{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"./tools/guard.sh"}]}]}}"#,
         ] {
             write_settings(repo.path(), body);
             assert_eq!(hook_set_defect(repo.path()), None, "{body}");
@@ -522,7 +596,7 @@ mod tests {
         let repo = tempfile::tempdir().unwrap();
         write_settings(
             repo.path(),
-            r#"{"hooks":{"PreToolUse":[{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"command":"aoa enforce check"}]}]}}"#,
+            r#"{"hooks":{"PreToolUse":[{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"type":"command","command":"aoa enforce check"}]}]}}"#,
         );
         assert_eq!(
             hook_set_defect(repo.path()),
@@ -556,7 +630,7 @@ mod tests {
         ] {
             let hooks = serde_json::json!({"PreToolUse": [{
                 "matcher": HookScope::Mutation.matcher(),
-                "hooks": [{"command": command}],
+                "hooks": [{"type":"command","command": command}],
             }]});
             for settings in [
                 serde_json::json!({"hooks": hooks}),
@@ -612,7 +686,7 @@ mod tests {
             let settings = serde_json::json!({
                 "hooks": {"PreToolUse": [{
                     "matcher": HookScope::Mutation.matcher(),
-                    "hooks": [{"command": command}],
+                    "hooks": [{"type":"command","command": command}],
                 }]}
             });
             write_settings(repo.path(), &settings.to_string());
@@ -633,7 +707,7 @@ mod tests {
             .unwrap()
             .push(serde_json::json!({
                 "matcher": HookScope::Mutation.matcher(),
-                "hooks": [{"command": "/usr/local/bin/aoa enforce check"}],
+                "hooks": [{"type":"command","command": "/usr/local/bin/aoa enforce check"}],
             }));
         write_settings(
             repo.path(),
@@ -740,6 +814,82 @@ mod tests {
             hook_set_defect(unwrapped.path()),
             Some(HookSetDefect::WrapperMissing)
         );
+    }
+
+    #[test]
+    fn a_second_group_running_a_hook_outside_its_scope_is_a_mismatch_wherever_it_sits() {
+        let misplaced = serde_json::json!({
+            "matcher": "Read",
+            "hooks": [{"type": "command", "command": hook_command("check")}],
+        });
+        for at_the_front in [true, false] {
+            let repo = stamped_repo(ENFORCE_HOOK_SET_VERSION);
+            let mut installed = stamped_hook_set(contract_matcher);
+            let groups = installed["hooks"]["PreToolUse"].as_array_mut().unwrap();
+            let at = if at_the_front { 0 } else { groups.len() };
+            groups.insert(at, misplaced.clone());
+            write_settings(repo.path(), &installed.to_string());
+
+            assert_eq!(
+                hook_set_defect(repo.path()),
+                Some(HookSetDefect::HookScopeMismatch {
+                    event: "PreToolUse",
+                    verb: "check",
+                    found: Some("Read".to_string()),
+                    required: HookScope::Mutation.matcher(),
+                }),
+                "misplaced group first: {at_the_front}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_installed_set_the_host_is_told_not_to_run_is_a_defect_naming_the_file_that_says_so() {
+        let repo = stamped_repo(ENFORCE_HOOK_SET_VERSION);
+        let local = repo.path().join(LOCAL_SETTINGS_REL);
+        let mut installed = stamped_hook_set(contract_matcher);
+        write_settings(repo.path(), &installed.to_string());
+
+        std::fs::write(&local, r#"{"disableAllHooks":true}"#).unwrap();
+        let defect = hook_set_defect(repo.path()).unwrap();
+        assert_eq!(
+            defect,
+            HookSetDefect::HooksDisabled {
+                settings: LOCAL_SETTINGS_REL
+            }
+        );
+        assert!(defect
+            .render_line(repo.path())
+            .contains(&local.display().to_string()));
+
+        std::fs::write(&local, "{").unwrap();
+        let defect = hook_set_defect(repo.path()).unwrap();
+        assert_eq!(defect, HookSetDefect::LocalSettingsUntrusted);
+        assert!(defect
+            .render_line(repo.path())
+            .contains(&local.display().to_string()));
+
+        std::fs::remove_file(&local).unwrap();
+        assert_eq!(hook_set_defect(repo.path()), None);
+
+        installed["disableAllHooks"] = true.into();
+        write_settings(repo.path(), &installed.to_string());
+        assert_eq!(
+            hook_set_defect(repo.path()),
+            Some(HookSetDefect::HooksDisabled {
+                settings: SETTINGS_REL
+            })
+        );
+
+        std::fs::write(&local, r#"{"disableAllHooks":false}"#).unwrap();
+        assert_eq!(hook_set_defect(repo.path()), None);
+    }
+
+    #[test]
+    fn settings_that_switch_hooks_off_with_no_enforce_install_have_nothing_to_report() {
+        let repo = tempfile::tempdir().unwrap();
+        write_settings(repo.path(), r#"{"disableAllHooks":true}"#);
+        assert_eq!(hook_set_defect(repo.path()), None);
     }
 
     #[test]

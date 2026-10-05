@@ -217,12 +217,12 @@ fn audit_fail_on_tier1_exits_zero_without_tier1_gap() {
         repo.path().join(".claude/settings.json"),
         r#"{"hooks":{
             "PostToolUse":[
-                {"matcher":"Bash","hooks":[{"command":"aoa enforce record"}]},
-                {"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"command":"aoa enforce commit"}]}
+                {"matcher":"Bash","hooks":[{"type":"command","command":"aoa enforce record"}]},
+                {"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"type":"command","command":"aoa enforce commit"}]}
             ],
-            "PreToolUse":[{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"command":"aoa enforce check"}]}],
-            "PostToolUseFailure":[{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"command":"aoa enforce fail"}]}],
-            "PermissionDenied":[{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"command":"aoa enforce deny"}]}]
+            "PreToolUse":[{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"type":"command","command":"aoa enforce check"}]}],
+            "PostToolUseFailure":[{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"type":"command","command":"aoa enforce fail"}]}],
+            "PermissionDenied":[{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"type":"command","command":"aoa enforce deny"}]}]
         }}"#,
     )
     .unwrap();
