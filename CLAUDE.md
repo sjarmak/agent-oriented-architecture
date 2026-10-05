@@ -13,7 +13,8 @@ This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full 
 bd ready              # Find available work
 bd show <id>          # View issue details
 bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
+gc-outcome-close <id> --producer formula-step --reason "Done: <summary>"  # Complete formula work (atomic)
+bd close <id>         # Complete work (non-formula work only)
 ```
 
 ### Rules
@@ -26,28 +27,27 @@ bd close <id>         # Complete work
 
 ## Session Completion
 
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+**When ending a work session**, you MUST complete ALL steps below. Formula-dispatched work is NOT complete until `gc-outcome-close` succeeds; pushing follows this rig's publication policy.
 
 **MANDATORY WORKFLOW:**
 
 1. **File issues for remaining work** - Create issues for anything that needs follow-up
 2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
+3. **Close finished work atomically** - Formula work: `gc-outcome-close <id> --producer formula-step --reason "Done: <summary>"` (add `--passing-verdict evidence.reviewer_verdict` when `gc.review_gate=pass`); plain `bd close <id>` only for work never dispatched through a formula. Update in-progress items
+4. **Publish per rig policy** - Only when this rig's publication policy authorizes pushing your work:
    ```bash
    git pull --rebase
    git push
    git status  # MUST show "up to date with origin"
    ```
 5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
+6. **Verify** - All changes committed; closes accepted (not reopened by the close gate); pushed when publication applies
 7. **Hand off** - Provide context for next session
 
 **CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
+- Formula-dispatched work is NOT complete until `gc-outcome-close` succeeds - never substitute plain `bd close`, and never write `gc.outcome=pass` or a passing review-verdict marker before it
+- Push ONLY under this rig's publication policy; when publication applies, do not stop before the push succeeds - resolve failures and retry
+- If a close is reopened within an hour, the close gate rejected it - fix the required metadata while the bead is open; do not force a re-close
 <!-- END BEADS INTEGRATION -->
 
 
