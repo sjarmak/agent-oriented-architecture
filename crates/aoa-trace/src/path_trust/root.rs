@@ -125,6 +125,12 @@ pub fn resolve_repository_root(candidate: &Path) -> Result<PathBuf, RepositoryRo
             }
             Ok(metadata) => match git_candidate_is_root(ancestor, metadata.is_dir())? {
                 None => return Ok(ancestor.to_path_buf()),
+                Some(GitCandidateRejection::Command(refusal)) => {
+                    return Err(RepositoryRootError::NotAGitRoot {
+                        marker,
+                        reason: refusal.to_string(),
+                    });
+                }
                 Some(rejection) => {
                     nearest_rejection.get_or_insert((marker, rejection));
                 }

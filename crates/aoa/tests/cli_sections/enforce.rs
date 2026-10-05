@@ -554,6 +554,59 @@ fn enforce_check_reports_safe_directory_exit_128_as_the_actual_git_failure() {
 }
 
 #[test]
+fn enforce_check_reports_a_refused_nested_repository_instead_of_using_its_parent() {
+    let fixture = TempDir::new().unwrap();
+    let parent = fixture.path().canonicalize().unwrap().join("parent");
+    let nested = parent.join("nested");
+    mark_git_repo(&parent);
+    mark_git_repo(&nested);
+    let only_parent_is_safe = fixture.path().join("only-parent-is-safe.gitconfig");
+    std::fs::write(
+        &only_parent_is_safe,
+        format!("[safe]\n\tdirectory = {}\n", parent.display()),
+    )
+    .unwrap();
+    let payload_from = |cwd: &Path| {
+        serde_json::to_string(&serde_json::json!({
+            "session_id": "it-refused-nested",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "src/lib.rs"},
+            "cwd": cwd.to_str().unwrap(),
+        }))
+        .unwrap()
+    };
+    let check = || {
+        let mut command = aoa_stdin();
+        command
+            .env("GIT_CONFIG_GLOBAL", &only_parent_is_safe)
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
+            .args(["enforce", "check"]);
+        command
+    };
+
+    check()
+        .write_stdin(payload_from(&nested))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("exit status: 128"))
+        .stderr(predicate::str::contains("dubious ownership"))
+        .stderr(predicate::str::contains(
+            nested.join(".git").to_str().unwrap(),
+        ));
+    assert!(
+        !parent.join(".aoa").exists(),
+        "a refused nested repository must not be enforced as its parent"
+    );
+    assert!(!nested.join(".aoa").exists());
+
+    check()
+        .write_stdin(payload_from(&parent))
+        .assert()
+        .stderr(predicate::str::contains("dubious ownership").not());
+}
+
+#[test]
 fn enforce_check_ignores_ambient_git_repository_overrides() {
     let unrelated_repo = TempDir::new().unwrap();
     mark_git_repo(unrelated_repo.path());
