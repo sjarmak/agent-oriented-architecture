@@ -30,6 +30,9 @@ pub enum PathTrustError {
     #[error("refusing {path}: it exists but is not a regular file")]
     NotRegularFile { path: PathBuf },
 
+    #[error("refusing {path}: resolving it passes through more than {limit} links")]
+    TooManyLinks { path: PathBuf, limit: usize },
+
     /// The filesystem could not answer whether the node is safe. Never treated
     /// as absent: a check that fails open is not a check.
     #[error("filesystem operation failed at {path}: {source}")]
@@ -47,6 +50,7 @@ impl PathTrustError {
             Self::UnsafePath { path }
             | Self::EscapesRoot { path }
             | Self::NotRegularFile { path }
+            | Self::TooManyLinks { path, .. }
             | Self::Io { path, .. } => path,
         }
     }

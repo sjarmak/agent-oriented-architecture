@@ -78,7 +78,7 @@ use aoa_enforce::{
 };
 use aoa_path_trust::{
     normalize_lexically, read_regular_file_nofollow, resolve_canonicalizing,
-    resolve_repository_root, PathTrustError, RepositoryRootError,
+    resolve_repository_root, resolve_written_path, PathTrustError, RepositoryRootError,
 };
 use aoa_policy::Policy;
 use aoa_trace::SpanType;
@@ -282,16 +282,16 @@ fn run_check(event: &HookEvent) -> Result<i32> {
         .transpose()?;
     let mut inside_base = false;
     let mut reproduction_root = None;
-    for root in governing_roots(&base, candidate.as_deref())? {
+    let governed = governed_write(&base, candidate.as_deref())?;
+    for root in governed.roots {
         let sessions_own = root == base;
-        let targets = match candidate
-            .as_deref()
-            .map(|candidate| scope_under(&root, candidate))
-            .transpose()?
-        {
-            Some(WriteScope::Outside) => continue,
-            Some(WriteScope::Inside(targets)) => Some(targets),
-            None => None,
+        let targets = if governed.spellings.is_empty() {
+            None
+        } else {
+            match scope_of_spellings(&root, &governed.spellings)? {
+                WriteScope::Outside => continue,
+                WriteScope::Inside(targets) => Some(targets),
+            }
         };
         inside_base |= sessions_own;
         let policy = load_policy(&root)?;
@@ -319,30 +319,77 @@ fn run_check(event: &HookEvent) -> Result<i32> {
     }
 }
 
-fn governing_roots(base: &Path, candidate: Option<&Path>) -> Result<Vec<PathBuf>> {
-    let mut session = vec![base.to_path_buf()];
-    while let Some(root) = enclosing_repository(session.last().and_then(|root| root.parent()))? {
-        session.push(root);
+struct GovernedWrite {
+    roots: Vec<PathBuf>,
+    spellings: Vec<PathBuf>,
+}
+
+fn governed_write(base: &Path, candidate: Option<&Path>) -> Result<GovernedWrite> {
+    let mut roots = vec![base.to_path_buf()];
+    while let Some(root) = enclosing_repository(roots.last().and_then(|root| root.parent()))? {
+        roots.push(root);
     }
-    let (Some(candidate), Some(outermost)) = (candidate, session.last()) else {
-        return Ok(session);
+    let (Some(candidate), Some(outermost)) = (candidate, roots.last()) else {
+        return Ok(GovernedWrite {
+            roots,
+            spellings: Vec::new(),
+        });
     };
     if scope_under(outermost, candidate)? == WriteScope::Outside {
-        return Ok(Vec::new());
+        return Ok(GovernedWrite {
+            roots: Vec::new(),
+            spellings: Vec::new(),
+        });
     }
 
-    let mut roots = Vec::new();
-    for directory in [target_directory(candidate)?, spelled_directory(candidate)?] {
-        let mut enclosing = enclosing_repository(directory.as_deref())?;
-        while let Some(root) =
-            enclosing.filter(|root| !session.contains(root) && !roots.contains(root))
-        {
+    let written = resolve_written_path(candidate)?;
+    let mut starts = vec![existing_directory_above(&written.canonical)?];
+    starts.extend(
+        written
+            .spellings
+            .iter()
+            .map(|spelling| Some(spelling.parent.clone())),
+    );
+    for start in starts {
+        let mut enclosing = enclosing_repository(start.as_deref())?;
+        while let Some(root) = enclosing.filter(|root| !roots.contains(root)) {
             enclosing = enclosing_repository(root.parent())?;
             roots.push(root);
         }
     }
-    roots.extend(session);
-    Ok(roots)
+    roots.sort_by(|left, right| {
+        right
+            .components()
+            .count()
+            .cmp(&left.components().count())
+            .then_with(|| left.cmp(right))
+    });
+
+    let mut spellings = vec![candidate.to_path_buf()];
+    for spelling in written.spellings {
+        if !spellings.contains(&spelling.spelled) {
+            spellings.push(spelling.spelled);
+        }
+    }
+    Ok(GovernedWrite { roots, spellings })
+}
+
+fn scope_of_spellings(root: &Path, spellings: &[PathBuf]) -> Result<WriteScope> {
+    let mut targets = Vec::new();
+    for spelling in spellings {
+        if let WriteScope::Inside(found) = scope_under(root, spelling)? {
+            for target in found {
+                if !targets.contains(&target) {
+                    targets.push(target);
+                }
+            }
+        }
+    }
+    Ok(if targets.is_empty() {
+        WriteScope::Outside
+    } else {
+        WriteScope::Inside(targets)
+    })
 }
 
 fn enclosing_repository(directory: Option<&Path>) -> Result<Option<PathBuf>> {
@@ -353,13 +400,8 @@ fn enclosing_repository(directory: Option<&Path>) -> Result<Option<PathBuf>> {
     }
 }
 
-fn target_directory(candidate: &Path) -> Result<Option<PathBuf>> {
-    let resolved = match resolve_canonicalizing(candidate) {
-        Ok(resolved) => resolved,
-        Err(PathTrustError::EscapesRoot { .. }) => return Ok(None),
-        Err(other) => return Err(anyhow!(other)),
-    };
-    for ancestor in resolved.ancestors().skip(1) {
+fn existing_directory_above(canonical: &Path) -> Result<Option<PathBuf>> {
+    for ancestor in canonical.ancestors().skip(1) {
         match std::fs::symlink_metadata(ancestor) {
             Ok(metadata) if metadata.is_dir() => return Ok(Some(ancestor.to_path_buf())),
             Ok(_) => {}
@@ -371,33 +413,6 @@ fn target_directory(candidate: &Path) -> Result<Option<PathBuf>> {
         }
     }
     Ok(None)
-}
-
-fn spelled_directory(candidate: &Path) -> Result<Option<PathBuf>> {
-    let spelled = match normalize_lexically(candidate) {
-        Ok(spelled) => spelled,
-        Err(PathTrustError::EscapesRoot { .. }) => return Ok(None),
-        Err(other) => return Err(anyhow!(other)),
-    };
-    let mut directory = None;
-    for ancestor in spelled
-        .ancestors()
-        .skip(1)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-    {
-        match std::fs::symlink_metadata(ancestor) {
-            Ok(metadata) if metadata.is_dir() => directory = Some(ancestor.to_path_buf()),
-            Ok(_) => break,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
-            Err(err) => {
-                return Err(anyhow!(err))
-                    .with_context(|| format!("failed to inspect {}", ancestor.display()))
-            }
-        }
-    }
-    Ok(directory)
 }
 
 fn path_refusal(policy: &Policy, targets: &[String]) -> Result<Option<BlockReason>> {
@@ -935,25 +950,64 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
-    fn governing_roots_list_a_repository_the_spelling_and_the_destination_share_once() {
+    fn governed_write_lists_a_root_every_chain_reaches_once_and_a_spelling_once() {
         let fixture = tempfile::tempdir().unwrap();
-        let parent = fixture.path().canonicalize().unwrap().join("parent");
-        let nested = parent.join("nested");
-        init_git_repo(&parent);
+        let outer = fixture.path().canonicalize().unwrap().join("outer");
+        let nested = outer.join("nested");
+        init_git_repo(&outer);
         init_git_repo(&nested);
         std::fs::create_dir_all(nested.join("real/src")).unwrap();
-        let expected = vec![nested.clone(), parent.clone()];
+        std::os::unix::fs::symlink(nested.join("real"), nested.join("alias")).unwrap();
+        let candidate = nested.join("alias/src/lib.rs");
 
-        let plain = governing_roots(&parent, Some(&nested.join("real/src/lib.rs"))).unwrap();
-        assert_eq!(plain, expected);
+        let governed = governed_write(&nested, Some(&candidate)).unwrap();
 
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(nested.join("real"), nested.join("alias")).unwrap();
-            let aliased = governing_roots(&parent, Some(&nested.join("alias/src/lib.rs"))).unwrap();
-            assert_eq!(aliased, expected);
-        }
+        assert_eq!(governed.roots, vec![nested.clone(), outer.clone()]);
+        assert_eq!(governed.spellings, vec![candidate]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn governed_write_orders_roots_innermost_first_whichever_chain_found_them() {
+        let fixture = tempfile::tempdir().unwrap();
+        let outer = fixture.path().canonicalize().unwrap().join("outer");
+        let q = outer.join("q");
+        init_git_repo(&outer);
+        init_git_repo(&q);
+        std::fs::create_dir_all(outer.join("real")).unwrap();
+        std::os::unix::fs::symlink(outer.join("real"), q.join("linked")).unwrap();
+
+        let governed = governed_write(&outer, Some(&q.join("linked/src.rs"))).unwrap();
+
+        assert_eq!(governed.roots, vec![q.clone(), outer.clone()]);
+        assert_eq!(
+            governed.spellings,
+            vec![q.join("linked/src.rs")],
+            "the link's spelling is the written path itself"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn governed_write_collects_every_repository_a_chain_of_links_passes_through() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().canonicalize().unwrap();
+        let (a, b, c) = (root.join("a"), root.join("b"), root.join("c"));
+        init_git_repo(&a);
+        init_git_repo(&b);
+        init_git_repo(&c);
+        std::os::unix::fs::symlink(b.join("l2"), a.join("l1")).unwrap();
+        std::os::unix::fs::symlink(&c, b.join("l2")).unwrap();
+
+        let governed = governed_write(&a, Some(&a.join("l1/src.rs"))).unwrap();
+
+        assert_eq!(governed.roots, vec![a.clone(), b.clone(), c.clone()]);
+        assert_eq!(
+            governed.spellings,
+            vec![a.join("l1/src.rs"), b.join("l2/src.rs")]
+        );
     }
 
     /// Containment is the only thing that stopped being an error. A target that
