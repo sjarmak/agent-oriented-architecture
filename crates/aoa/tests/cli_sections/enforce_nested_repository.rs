@@ -836,6 +836,56 @@ fn enforce_check_refuses_a_write_whose_path_loops_through_links() {
 }
 
 #[cfg(unix)]
+#[test]
+fn enforce_check_refuses_a_write_through_a_link_whose_target_climbs_above_the_filesystem_root() {
+    let fixture = TempDir::new().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    let o = root.join("o");
+    init_git_repo(&o);
+    std::fs::write(
+        o.join("aoa-policy.yaml"),
+        "protected_paths: [\"src.rs\"]\nreproduction_required: false\n",
+    )
+    .unwrap();
+    let target = o.join("src.rs");
+    plant(&target);
+    let below_root = Path::new("/..").join(o.strip_prefix("/").unwrap());
+    std::os::unix::fs::symlink(below_root, root.join("alias")).unwrap();
+    let spelled = root.join("alias/src.rs");
+
+    assert_check_is_refused_by_the_policy_of(
+        &o,
+        write_to(spelled.to_str().unwrap(), &o),
+        "protected path: policy forbids writing 'src.rs'",
+    );
+    assert_planted_target_is_untouched(&target);
+}
+
+#[test]
+fn enforce_check_refuses_a_write_spelled_above_the_filesystem_root() {
+    let fixture = TempDir::new().unwrap();
+    let o = fixture.path().canonicalize().unwrap().join("o");
+    init_git_repo(&o);
+    std::fs::write(
+        o.join("aoa-policy.yaml"),
+        "protected_paths: [\"src.rs\"]\nreproduction_required: false\n",
+    )
+    .unwrap();
+    let target = o.join("src.rs");
+    plant(&target);
+    let spelled = Path::new("/..")
+        .join(o.strip_prefix("/").unwrap())
+        .join("src.rs");
+
+    assert_check_is_refused_by_the_policy_of(
+        &o,
+        write_to(spelled.to_str().unwrap(), &o),
+        "protected path: policy forbids writing 'src.rs'",
+    );
+    assert_planted_target_is_untouched(&target);
+}
+
+#[cfg(unix)]
 fn assert_check_refuses_the_linked_policy_of(root: &Path, payload: String) {
     aoa_stdin()
         .args(["enforce", "check"])

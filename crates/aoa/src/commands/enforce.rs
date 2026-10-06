@@ -538,17 +538,10 @@ fn scope_under(root: &Path, candidate: &Path) -> Result<WriteScope> {
 }
 
 /// The repository-relative spelling of one resolution of a hook target, or
-/// `None` when that resolution lands outside the repository.
-///
-/// [`PathTrustError::EscapesRoot`] — a `..` chain walking off the filesystem
-/// root — is outside by construction, not a failure. Every other error is a
-/// real failure and propagates.
+/// `None` when that resolution lands outside the repository. A resolution
+/// error is a real failure and propagates.
 fn contained(base: &Path, resolution: Result<PathBuf, PathTrustError>) -> Result<Option<String>> {
-    let path = match resolution {
-        Ok(path) => path,
-        Err(PathTrustError::EscapesRoot { .. }) => return Ok(None),
-        Err(other) => return Err(anyhow!(other)),
-    };
+    let path = resolution.map_err(|err| anyhow!(err))?;
     let Ok(relative) = path.strip_prefix(base) else {
         return Ok(None);
     };

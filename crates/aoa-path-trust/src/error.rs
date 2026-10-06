@@ -10,7 +10,7 @@ pub struct UnsafePathComponent {
 /// Why a caller-supplied path was refused under its trust root.
 ///
 /// Callers map these onto their own error surface. The distinction that matters
-/// is refusal (`UnsafePath`, `EscapesRoot`) versus an inconclusive filesystem
+/// is refusal (every variant but `Io`) versus an inconclusive filesystem
 /// answer (`Io`): a trust check must never fold the latter into "safe".
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -22,10 +22,6 @@ pub enum PathTrustError {
          (no symlinks, no non-relative components)"
     )]
     UnsafePath { path: PathBuf },
-
-    /// Parent components walked above the trust root.
-    #[error("{path} traverses above its trust root")]
-    EscapesRoot { path: PathBuf },
 
     #[error("refusing {path}: it exists but is not a regular file")]
     NotRegularFile { path: PathBuf },
@@ -48,7 +44,6 @@ impl PathTrustError {
     pub fn path(&self) -> &std::path::Path {
         match self {
             Self::UnsafePath { path }
-            | Self::EscapesRoot { path }
             | Self::NotRegularFile { path }
             | Self::TooManyLinks { path, .. }
             | Self::Io { path, .. } => path,

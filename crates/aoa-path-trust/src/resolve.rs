@@ -24,13 +24,13 @@ pub fn normalize_lexically(path: &Path) -> Result<PathBuf, PathTrustError> {
         match component {
             Component::Prefix(_) | Component::RootDir => normalized.push(component.as_os_str()),
             Component::CurDir => {}
-            Component::ParentDir => {
-                if !normalized.pop() {
-                    return Err(PathTrustError::EscapesRoot {
-                        path: path.to_path_buf(),
-                    });
+            Component::ParentDir => match normalized.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    normalized.pop();
                 }
-            }
+                Some(Component::RootDir | Component::Prefix(_)) => {}
+                _ => normalized.push(".."),
+            },
             Component::Normal(part) => normalized.push(part),
         }
     }
@@ -114,11 +114,7 @@ pub fn resolve_written_path(candidate: &Path) -> Result<WrittenPath, PathTrustEr
                 missing = 0;
             }
             Step::Up => {
-                if !resolved.pop() {
-                    return Err(PathTrustError::EscapesRoot {
-                        path: candidate.to_path_buf(),
-                    });
-                }
+                resolved.pop();
                 missing = missing.saturating_sub(1);
             }
             Step::Name(name) if missing > 0 => {
@@ -175,10 +171,74 @@ mod tests {
             normalize_lexically(Path::new("/repo/./a/b/../c")).expect("reduce"),
             PathBuf::from("/repo/a/c")
         );
-        assert!(matches!(
-            normalize_lexically(Path::new("/..")),
-            Err(PathTrustError::EscapesRoot { .. })
-        ));
+        assert_eq!(
+            normalize_lexically(Path::new("a/../../b/../../c")).expect("reduce"),
+            PathBuf::from("../../c")
+        );
+    }
+
+    #[test]
+    fn a_parent_at_the_filesystem_root_stays_at_the_root_lexically() {
+        for spelled in ["/..", "/../..", "/../../etc", "/a/../../etc"] {
+            let expected = if spelled.ends_with("etc") {
+                PathBuf::from("/etc")
+            } else {
+                PathBuf::from("/")
+            };
+            assert_eq!(
+                normalize_lexically(Path::new(spelled)).expect("reduce"),
+                expected,
+                "{spelled}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_parent_at_the_filesystem_root_stays_at_the_root_when_resolving() {
+        let root = tempfile::tempdir().expect("create root");
+        let base = root.path().canonicalize().expect("canonical root");
+        let below_root = PathBuf::from("/..").join(base.strip_prefix("/").expect("absolute"));
+
+        assert_eq!(
+            resolve_canonicalizing(Path::new("/..")).expect("resolve"),
+            PathBuf::from("/")
+        );
+        assert_eq!(
+            resolve_canonicalizing(Path::new("/../..")).expect("resolve"),
+            PathBuf::from("/")
+        );
+        assert_eq!(
+            resolve_written_path(&below_root.join("leaf.rs")).expect("resolve"),
+            WrittenPath {
+                canonical: base.join("leaf.rs"),
+                spellings: Vec::new(),
+            }
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_target_beginning_with_a_parent_at_the_root_resolves_from_the_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("create root");
+        let base = root.path().canonicalize().expect("canonical root");
+        std::fs::create_dir(base.join("real")).expect("create real");
+        let below_root = PathBuf::from("/..").join(base.strip_prefix("/").expect("absolute"));
+        symlink(below_root.join("real"), base.join("alias")).expect("plant alias");
+
+        let written = resolve_written_path(&base.join("alias/leaf.rs")).expect("resolve");
+
+        assert_eq!(
+            written,
+            WrittenPath {
+                canonical: base.join("real/leaf.rs"),
+                spellings: vec![LinkSpelling {
+                    parent: base.clone(),
+                    spelled: base.join("alias/leaf.rs"),
+                }],
+            }
+        );
     }
 
     #[test]
