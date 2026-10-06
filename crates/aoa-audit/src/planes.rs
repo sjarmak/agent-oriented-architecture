@@ -4,7 +4,8 @@ use std::time::{Duration, Instant};
 
 use aoa_corpus::PRECOMMIT_HOOK_MARKERS;
 use aoa_path_trust::{
-    git_free_of_inherited_state, linked_worktree_points_back, RepositoryRootError,
+    git_free_of_inherited_state, linked_worktree_points_back, safe_join_nofollow,
+    RepositoryRootError,
 };
 use serde_json::Value;
 
@@ -59,7 +60,10 @@ fn present(repo: &Path, plane: EnforcementPlane) -> Result<bool, GitTrouble> {
 }
 
 fn any_exists(repo: &Path, markers: &[&str]) -> bool {
-    markers.iter().any(|rel| repo.join(rel).exists())
+    markers.iter().any(|rel| {
+        safe_join_nofollow(repo, Path::new(rel))
+            .is_ok_and(|marker| std::fs::symlink_metadata(marker).is_ok())
+    })
 }
 
 fn installed_pre_commit_hook(repo: &Path) -> Result<bool, GitTrouble> {

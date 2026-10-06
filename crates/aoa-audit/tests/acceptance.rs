@@ -1125,11 +1125,15 @@ fn default_audit_on_bare_repo_is_well_formed() {
 }
 
 fn pre_commit_plane_missing(repo: &Path) -> bool {
+    plane_missing(repo, aoa_audit::EnforcementPlane::PreCommit)
+}
+
+fn plane_missing(repo: &Path, plane: aoa_audit::EnforcementPlane) -> bool {
     audit(repo, &audit_config())
         .expect("audit succeeds")
         .items
         .iter()
-        .any(|item| item.plane == Some(aoa_audit::EnforcementPlane::PreCommit))
+        .any(|item| item.plane == Some(plane))
 }
 
 fn checkbox_scores_pre_commit(repo: &Path) -> bool {
@@ -1904,4 +1908,49 @@ fn a_hook_in_a_repository_whose_config_git_cannot_parse_is_a_missing_plane() {
 
     std::fs::write(repo.path().join(".git/config"), "[core\n").expect("corrupt the config");
     assert!(pre_commit_plane_missing(repo.path()));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_plane_marker_that_is_a_link_does_not_count_whatever_it_names() {
+    let outside = tempfile::tempdir().expect("outside dir");
+    write_hook(&outside.path().join("husky/pre-commit"));
+    std::fs::write(outside.path().join("pre-commit-config.yaml"), "repos: []\n")
+        .expect("write the outside config");
+    let linked_markers = [
+        (".husky", outside.path().join("husky")),
+        (".husky", outside.path().join("absent-husky")),
+        (".husky", PathBuf::from("tooling/husky")),
+        (
+            ".pre-commit-config.yaml",
+            outside.path().join("pre-commit-config.yaml"),
+        ),
+    ];
+    for (marker, target) in linked_markers {
+        let repo = fixture_repo();
+        std::fs::create_dir_all(repo.path().join("tooling/husky")).expect("create the inside dir");
+        std::os::unix::fs::symlink(&target, repo.path().join(marker)).expect("link the marker");
+        assert!(
+            pre_commit_plane_missing(repo.path()),
+            "{marker} -> {} must not count as a marker",
+            target.display()
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_ci_marker_reached_through_a_linked_directory_does_not_count() {
+    let outside = tempfile::tempdir().expect("outside dir");
+    std::fs::create_dir_all(outside.path().join("github/workflows")).expect("create workflows");
+    let repo = fixture_repo();
+    assert!(plane_missing(repo.path(), aoa_audit::EnforcementPlane::Ci));
+
+    std::os::unix::fs::symlink(outside.path().join("github"), repo.path().join(".github"))
+        .expect("link the directory");
+    assert!(plane_missing(repo.path(), aoa_audit::EnforcementPlane::Ci));
+
+    std::fs::remove_file(repo.path().join(".github")).expect("remove the link");
+    std::fs::create_dir_all(repo.path().join(".github/workflows")).expect("create workflows");
+    assert!(!plane_missing(repo.path(), aoa_audit::EnforcementPlane::Ci));
 }
