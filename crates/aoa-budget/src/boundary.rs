@@ -297,7 +297,7 @@ pub(crate) fn open_following_links(path: &Path) -> io::Result<File> {
 }
 
 #[cfg(unix)]
-mod descend {
+pub(crate) mod descend {
     use rustix::fs::OFlags;
 
     #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -306,7 +306,7 @@ mod descend {
     const TRAVERSE: OFlags = OFlags::RDONLY;
 
     pub(super) const DIRECTORY: OFlags = TRAVERSE.union(OFlags::DIRECTORY).union(OFlags::CLOEXEC);
-    pub(super) const MEMBER: OFlags = OFlags::RDONLY
+    pub(crate) const MEMBER: OFlags = OFlags::RDONLY
         .union(OFlags::NONBLOCK)
         .union(OFlags::NOCTTY)
         .union(OFlags::NOFOLLOW)

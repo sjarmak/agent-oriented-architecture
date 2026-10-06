@@ -62,10 +62,7 @@ impl Directory {
     }
 
     pub(crate) fn open_member(&self, name: &OsStr) -> io::Result<File> {
-        use rustix::fs::OFlags;
-
-        let flags =
-            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC;
+        let flags = crate::boundary::descend::MEMBER;
         let fd = rustix::fs::openat(&self.fd, name, flags, rustix::fs::Mode::empty())?;
         Ok(File::from(fd))
     }
