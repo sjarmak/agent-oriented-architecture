@@ -22,8 +22,8 @@ mod lint;
 mod report;
 
 pub use category::SmellCategory;
-pub use discover::discover_context_roots;
+pub use discover::{DiscoveredRoot, LintedDirectory};
 pub use error::LintError;
 pub use finding::Finding;
-pub use lint::{lint_context, lint_context_roots};
+pub use lint::lint_context;
 pub use report::{ClosureBudget, LintReport};

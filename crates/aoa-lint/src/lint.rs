@@ -2,11 +2,12 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use aoa_budget::{
-    count_budget, normalize_path, resolve_closure_within, resolve_contained_closure, BudgetReport,
-    Closure, Config, FileBudget, UnreadLink,
+    count_budget, normalize_path, resolve_closure_within, BudgetReport, Closure, Config,
+    FileBudget, UnreadLink,
 };
 
 use crate::detectors::{self, LintedFile};
+use crate::discover::{DiscoveredRoot, LintedDirectory};
 use crate::error::LintError;
 use crate::report::{ClosureBudget, LintReport};
 
@@ -26,46 +27,91 @@ pub fn lint_context(root: &Path, target_tokenizer: &str) -> Result<LintReport, L
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    lint_context_roots(&[root.to_path_buf()], &[], boundary, target_tokenizer)
+    LintedDirectory::hold(boundary)?.lint(&[root.to_path_buf()], &[], target_tokenizer)
 }
 
-pub fn lint_context_roots(
-    named: &[PathBuf],
-    discovered: &[PathBuf],
-    boundary: &Path,
-    target_tokenizer: &str,
-) -> Result<LintReport, LintError> {
-    let (merged, members) = resolve_members(named, discovered, boundary)?;
-    let budget = count_budget(
-        &merged,
-        target_tokenizer,
-        &Config::blocking(LINT_BUDGET_CEILING),
-    )?;
+impl LintedDirectory {
+    pub fn lint(
+        &self,
+        named: &[PathBuf],
+        discovered: &[DiscoveredRoot],
+        target_tokenizer: &str,
+    ) -> Result<LintReport, LintError> {
+        let (merged, members) = self.resolve_members(named, discovered)?;
+        let budget = count_budget(
+            &merged,
+            target_tokenizer,
+            &Config::blocking(LINT_BUDGET_CEILING),
+        )?;
 
-    let findings = merged
-        .files
-        .iter()
-        .flat_map(|file| {
-            detectors::run_all(
-                &LintedFile {
-                    path: file.path.clone(),
-                    text: file.text.clone(),
-                },
-                &merged.absent,
-            )
+        let findings = merged
+            .files
+            .iter()
+            .flat_map(|file| {
+                detectors::run_all(
+                    &LintedFile {
+                        path: file.path.clone(),
+                        text: file.text.clone(),
+                    },
+                    &merged.absent,
+                )
+            })
+            .collect();
+
+        let closures = members
+            .into_iter()
+            .map(|member| closure_budget(member, &budget))
+            .collect();
+
+        Ok(LintReport {
+            budget,
+            closures,
+            findings,
         })
-        .collect();
+    }
 
-    let closures = members
-        .into_iter()
-        .map(|member| closure_budget(member, &budget))
-        .collect();
-
-    Ok(LintReport {
-        budget,
-        closures,
-        findings,
-    })
+    fn resolve_members(
+        &self,
+        named: &[PathBuf],
+        discovered: &[DiscoveredRoot],
+    ) -> Result<(Closure, Vec<Member>), LintError> {
+        let first = named
+            .first()
+            .map(PathBuf::as_path)
+            .or(discovered.first().map(DiscoveredRoot::path))
+            .ok_or(LintError::NoRoots)?;
+        let mut seen = BTreeSet::new();
+        let mut files = Vec::new();
+        let mut absent = BTreeSet::new();
+        let mut members = Vec::with_capacity(named.len() + discovered.len());
+        let closures = named
+            .iter()
+            .map(|root| resolve_closure_within(root, self.path()))
+            .chain(discovered.iter().map(|root| self.resolve_discovered(root)));
+        for closure in closures {
+            let closure = closure?;
+            members.push(Member {
+                root: closure.root,
+                paths: closure.files.iter().map(|file| file.path.clone()).collect(),
+                outside_boundary: closure.outside_boundary,
+                unread: closure.unread,
+            });
+            absent.extend(closure.absent);
+            for file in closure.files {
+                if seen.insert(file.path.clone()) {
+                    files.push(file);
+                }
+            }
+        }
+        let merged = Closure {
+            root: normalize_path(first),
+            files,
+            outside_boundary: Vec::new(),
+            unread: Vec::new(),
+            absent,
+        };
+        Ok((merged, members))
+    }
 }
 
 struct Member {
@@ -73,52 +119,6 @@ struct Member {
     paths: Vec<PathBuf>,
     outside_boundary: Vec<PathBuf>,
     unread: Vec<UnreadLink>,
-}
-
-fn resolve_members(
-    named: &[PathBuf],
-    discovered: &[PathBuf],
-    boundary: &Path,
-) -> Result<(Closure, Vec<Member>), LintError> {
-    let first = named
-        .first()
-        .or(discovered.first())
-        .ok_or(LintError::NoRoots)?;
-    let mut seen = BTreeSet::new();
-    let mut files = Vec::new();
-    let mut absent = BTreeSet::new();
-    let mut members = Vec::with_capacity(named.len() + discovered.len());
-    let closures = named
-        .iter()
-        .map(|root| resolve_closure_within(root, boundary))
-        .chain(
-            discovered
-                .iter()
-                .map(|root| resolve_contained_closure(root, boundary)),
-        );
-    for closure in closures {
-        let closure = closure?;
-        members.push(Member {
-            root: closure.root,
-            paths: closure.files.iter().map(|file| file.path.clone()).collect(),
-            outside_boundary: closure.outside_boundary,
-            unread: closure.unread,
-        });
-        absent.extend(closure.absent);
-        for file in closure.files {
-            if seen.insert(file.path.clone()) {
-                files.push(file);
-            }
-        }
-    }
-    let merged = Closure {
-        root: normalize_path(first),
-        files,
-        outside_boundary: Vec::new(),
-        unread: Vec::new(),
-        absent,
-    };
-    Ok((merged, members))
 }
 
 fn closure_budget(member: Member, budget: &BudgetReport) -> ClosureBudget {

@@ -49,7 +49,7 @@ does not:
   there.
 - **`aoa-lint` walks, reads ignore rules and reads discovered roots through
   held directories.** `crates/aoa-lint/src/discover.rs` holds the linted
-  directory through `aoa_budget::Enclosure::hold`, lists each directory from
+  directory through `aoa_budget::Enclosure::open`, lists each directory from
   its descriptor (`Directory::entries`) and steps into a child with
   `openat(O_DIRECTORY | O_NOFOLLOW)` on that descriptor (`Directory::descend`),
   so a directory swapped for a link after it was listed is never entered and
@@ -61,18 +61,31 @@ does not:
   bytes. A directory swapped for a link after its rules were checked lists
   what was held, not what the link reaches
   (`a_directory_swapped_for_a_link_after_its_rules_were_checked_lists_what_was_held_not_what_the_link_reaches`
-  in `discover.rs`). `lint_context_roots` then reads a discovered root with
-  `resolve_contained_closure`, which reaches it inside the linted directory
-  and opens it through a `O_NOFOLLOW` descriptor chain, so a root whose
-  directory became a link leaving that directory is refused as
-  `OutsideBoundary` instead of read
-  (`a_discovered_root_whose_directory_became_a_link_leaving_the_linted_directory_is_refused_unread`
-  in `tests/discovery.rs`). A root the caller named is still read as named,
-  links followed. On Windows `Directory::entries` is `std::fs::read_dir` of
-  the held name, `Directory::descend` reopens the child by path and
-  `Directory::open_entry` is `symlink_metadata` then `File::open` of the
-  joined path, so a swap between any of those steps is not caught, and the
-  link-count refusal below does not apply.
+  in `discover.rs`). Discovery and reading hang off one `LintedDirectory`,
+  which holds the linted directory once and keeps each discovered root
+  together with the held directory it was listed in and its entry name. The
+  root is then read with `Enclosure::resolve_held`, which opens it relative to
+  that descriptor with `O_NOFOLLOW` and walks its closure under the boundary
+  discovery held, so neither the linted directory nor the root's directory is
+  reopened by path between discovery and reading. Swapping the linted
+  directory itself for a link in that window reads what was held and lints
+  nothing the link reaches
+  (`the_linted_directory_swapped_for_a_link_between_discovery_and_reading_is_read_as_discovered`
+  in `tests/discovery.rs`), and swapping the root's own directory does the
+  same
+  (`a_discovered_root_whose_directory_became_a_link_is_read_as_held_while_the_same_root_named_follows_the_link`).
+  A discovered root therefore no longer raises `OutsideBoundary`; a root the
+  caller named is still read as named, links followed. Every name handed to
+  `Directory::open_entry`, `open_member` or `descend` must be one normal path
+  component, so a name carrying a separator, `.`, `..` or an absolute path is
+  refused as `NotAnEntryName` before anything opens
+  (`a_name_that_is_not_one_entry_is_refused_before_anything_opens` in
+  `directory.rs`); a trailing separator would otherwise make `O_NOFOLLOW`
+  follow a directory link. On Windows `Directory::entries` is
+  `std::fs::read_dir` of the held name, `Directory::descend` reopens the child
+  by path and `Directory::open_entry` and `open_member` are `symlink_metadata`
+  then `File::open` of the joined path, so a swap between any of those steps
+  is not caught, and the link-count refusal below does not apply.
 - **`aoa-lint` cannot see a second name on Windows.** `has_another_name` reads
   the Unix link count. The Windows arm returns `false`, so an ignore file that
   is a hard link to a file outside the linted directory is read there. Rust's

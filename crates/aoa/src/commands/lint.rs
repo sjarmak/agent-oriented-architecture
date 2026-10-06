@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use aoa_budget::{normalize_path, UnreadLink};
-use aoa_lint::ClosureBudget;
+use aoa_lint::{ClosureBudget, DiscoveredRoot, LintedDirectory};
 use serde::Serialize;
 
 use crate::cli::LintArgs;
@@ -92,9 +92,12 @@ struct SuppressionView {
 /// from the composed budget report.
 pub fn run(args: &LintArgs) -> Result<i32> {
     let dir = linted_directory(args.root.as_deref());
+    let linted = LintedDirectory::hold(dir)
+        .with_context(|| format!("failed to find context files under {}", dir.display()))?;
     let named: Vec<PathBuf> = args.root.iter().map(|root| normalize_path(root)).collect();
-    let discovered = discovered_roots(&named, dir)?;
-    let report = aoa_lint::lint_context_roots(&named, &discovered, dir, &args.tokenizer)
+    let discovered = discovered_roots(&linted, &named)?;
+    let report = linted
+        .lint(&named, &discovered, &args.tokenizer)
         .context("failed to lint context")?;
 
     let changed: Option<BTreeSet<PathBuf>> = if args.changed.is_empty() {
@@ -136,7 +139,10 @@ pub fn run(args: &LintArgs) -> Result<i32> {
     };
 
     let view = LintView {
-        roots: named.into_iter().chain(discovered).collect(),
+        roots: named
+            .into_iter()
+            .chain(discovered.into_iter().map(DiscoveredRoot::into_path))
+            .collect(),
         budget,
         findings,
         suppressed,
@@ -156,11 +162,13 @@ fn linted_directory(root: Option<&Path>) -> &Path {
         .unwrap_or(Path::new("."))
 }
 
-fn discovered_roots(named: &[PathBuf], dir: &Path) -> Result<Vec<PathBuf>> {
-    let discovered: Vec<PathBuf> = aoa_lint::discover_context_roots(dir)
+fn discovered_roots(linted: &LintedDirectory, named: &[PathBuf]) -> Result<Vec<DiscoveredRoot>> {
+    let dir = linted.path();
+    let discovered: Vec<DiscoveredRoot> = linted
+        .discover()
         .with_context(|| format!("failed to find context files under {}", dir.display()))?
         .into_iter()
-        .filter(|path| !named.contains(path))
+        .filter(|root| !named.iter().any(|name| name == root.path()))
         .collect();
     if named.is_empty() && discovered.is_empty() {
         bail!(

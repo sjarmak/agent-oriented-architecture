@@ -1,7 +1,11 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use aoa_lint::{lint_context, Finding, LintReport, SmellCategory};
+use aoa_lint::{lint_context, Finding, LintError, LintReport, LintedDirectory, SmellCategory};
+
+fn lint_within(named: &[PathBuf], linted: &Path) -> Result<LintReport, LintError> {
+    LintedDirectory::hold(linted)?.lint(named, &[], "o200k_base")
+}
 
 fn fixture_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tree/AGENTS.md")
@@ -238,13 +242,7 @@ fn a_lone_nested_root_is_bounded_by_the_linted_directory_and_names_the_link_that
     )
     .unwrap();
 
-    let report = aoa_lint::lint_context_roots(
-        &[dir.path().join("pkg/AGENTS.md")],
-        &[],
-        dir.path(),
-        "o200k_base",
-    )
-    .unwrap();
+    let report = lint_within(&[dir.path().join("pkg/AGENTS.md")], dir.path()).unwrap();
 
     assert_eq!(
         report.closures[0].outside_boundary,
@@ -273,13 +271,7 @@ fn a_link_through_a_directory_symlink_that_leaves_the_linted_directory_is_not_pr
     )
     .unwrap();
 
-    let report = aoa_lint::lint_context_roots(
-        &[dir.path().join("AGENTS.md")],
-        &[],
-        dir.path(),
-        "o200k_base",
-    )
-    .unwrap();
+    let report = lint_within(&[dir.path().join("AGENTS.md")], dir.path()).unwrap();
 
     let stale: Vec<&str> = report
         .findings
@@ -325,8 +317,7 @@ fn a_missing_link_that_leaves_the_linted_directory_is_not_probed() {
     let root = dir.path().join("repo/AGENTS.md");
     std::fs::write(&root, "[out](../absent.md) [gone](absent.md)\n").unwrap();
 
-    let report =
-        aoa_lint::lint_context_roots(&[root], &[], &dir.path().join("repo"), "o200k_base").unwrap();
+    let report = lint_within(&[root], &dir.path().join("repo")).unwrap();
 
     let stale: Vec<&str> = report
         .findings
@@ -344,7 +335,7 @@ fn a_missing_link_that_leaves_the_linted_directory_is_not_probed() {
 fn stale_references(repo: &std::path::Path, body: &str) -> Vec<String> {
     let root = repo.join("AGENTS.md");
     std::fs::write(&root, body).unwrap();
-    aoa_lint::lint_context_roots(&[root], &[], repo, "o200k_base")
+    lint_within(&[root], repo)
         .unwrap()
         .findings
         .into_iter()
@@ -478,9 +469,7 @@ fn a_link_that_names_a_file_and_then_requires_a_directory_is_a_stale_reference()
         symlink(target, repo.join("probe.md")).unwrap();
         assert!(std::fs::read(repo.join("probe.md")).is_err(), "{target}");
 
-        let report =
-            aoa_lint::lint_context_roots(&[repo.join("AGENTS.md")], &[], &repo, "o200k_base")
-                .unwrap();
+        let report = lint_within(&[repo.join("AGENTS.md")], &repo).unwrap();
 
         let stale: Vec<&str> = report
             .findings
@@ -536,11 +525,9 @@ fn a_stale_reference_is_found_when_the_root_is_named_through_a_link_to_its_direc
     .unwrap();
     std::fs::write(dir.path().join("real/kept.md"), "kept\n").unwrap();
 
-    let report = aoa_lint::lint_context_roots(
+    let report = lint_within(
         &[dir.path().join("alias/AGENTS.md")],
-        &[],
         &dir.path().join("real"),
-        "o200k_base",
     )
     .unwrap();
 
@@ -596,7 +583,7 @@ fn a_link_back_out_of_a_directory_the_process_may_not_search_is_unread_not_follo
     std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o000)).unwrap();
     let searchable = std::fs::File::open(&probe).is_ok();
 
-    let report = aoa_lint::lint_context_roots(&[root], &[], &repo, "o200k_base");
+    let report = lint_within(&[root], &repo);
 
     std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).unwrap();
     if searchable {
@@ -629,7 +616,7 @@ fn a_linked_build_file_is_counted_but_not_linted_as_prose() {
     let root = dir.path().join("AGENTS.md");
     std::fs::write(&root, "[image](Dockerfile)\n").unwrap();
 
-    let report = aoa_lint::lint_context_roots(&[root], &[], dir.path(), "o200k_base").unwrap();
+    let report = lint_within(&[root], dir.path()).unwrap();
 
     assert_eq!(report.closures[0].files.len(), 2);
     assert!(report.findings.is_empty(), "{:?}", report.findings);
@@ -642,7 +629,7 @@ fn a_member_that_cannot_be_counted_is_named_on_its_closure() {
     let root = dir.path().join("AGENTS.md");
     std::fs::write(&root, "[binary](binary.md)\n").unwrap();
 
-    let report = aoa_lint::lint_context_roots(&[root], &[], dir.path(), "o200k_base").unwrap();
+    let report = lint_within(&[root], dir.path()).unwrap();
 
     assert_eq!(
         report.closures[0].unread,

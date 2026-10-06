@@ -136,6 +136,10 @@ impl Enclosure {
         })
     }
 
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     pub fn hold(&self) -> Result<Directory, BudgetError> {
         self.boundary
             .hold_root(self.path.clone())
@@ -143,6 +147,15 @@ impl Enclosure {
                 path: self.path.clone(),
                 source,
             })
+    }
+
+    pub fn resolve_held(
+        &self,
+        root: &Path,
+        directory: &Directory,
+        name: &OsStr,
+    ) -> Result<Closure, BudgetError> {
+        resolve_closure_held(root, &self.boundary, directory, name)
     }
 
     pub fn open_file(&self, path: &Path) -> Result<Option<File>, BudgetError> {
