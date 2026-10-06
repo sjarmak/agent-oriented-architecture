@@ -495,10 +495,28 @@ fn enforce_reproduction_toggle_off_allows_unprotected_write() {
         .success();
 }
 
+fn repository_enclosing(directory: &Path) -> Option<PathBuf> {
+    match aoa_path_trust::resolve_repository_root(directory) {
+        Ok(root) => Some(root),
+        Err(aoa_path_trust::RepositoryRootError::NotInRepository { .. }) => None,
+        Err(refusal) => panic!(
+            "{} has a usable trust root or none: {refusal}",
+            directory.display()
+        ),
+    }
+}
+
 #[test]
-fn enforce_check_rejects_a_cwd_whose_marker_git_refuses_without_writing() {
+fn enforce_check_rejects_an_arbitrary_non_repository_cwd_without_writing() {
     let dir = TempDir::new().unwrap();
-    std::fs::write(dir.path().join(".git"), "not a gitfile\n").unwrap();
+    if let Some(enclosing) = repository_enclosing(dir.path()) {
+        eprintln!(
+            "SKIP (docs/adr/0004-environment-dependent-test-skips.md): {} encloses the temp \
+             root, so no directory under it is outside a repository",
+            enclosing.display()
+        );
+        return;
+    }
     let payload = serde_json::to_string(&serde_json::json!({
         "session_id": "it-untrusted-root",
         "tool_name": "Write",
@@ -512,10 +530,7 @@ fn enforce_check_rejects_a_cwd_whose_marker_git_refuses_without_writing() {
         .write_stdin(payload)
         .assert()
         .code(2)
-        .stderr(predicate::str::contains(
-            "Git repository validation failed for",
-        ))
-        .stderr(predicate::str::contains("--show-toplevel"));
+        .stderr(predicate::str::contains("is not inside a Git repository"));
     assert!(
         !dir.path().join(".aoa").exists(),
         "a rejected payload must not create telemetry outside a repository"

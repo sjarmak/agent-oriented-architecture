@@ -143,6 +143,16 @@ const CLASSIFIED: &[Classified] = &[
         notices: 1,
         ignored: 0,
     },
+    Classified {
+        path: "crates/aoa/src/commands/enforce.rs",
+        notices: 1,
+        ignored: 0,
+    },
+    Classified {
+        path: "crates/aoa/tests/cli_sections/enforce.rs",
+        notices: 1,
+        ignored: 0,
+    },
 ];
 
 /// Sources the scan matches that hold no skip site at all — a doc comment

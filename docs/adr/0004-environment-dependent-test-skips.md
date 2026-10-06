@@ -113,6 +113,27 @@ than an accident:
   created beside the source. The test probes whether this process can write
   past the mode and prints the notice when it can, because a root process would
   pass the assertion for the wrong reason (aoa-m12mo).
+- `crates/aoa/src/commands/enforce.rs` and
+  `crates/aoa/tests/cli_sections/enforce.rs` hold one notice each, with a
+  precondition about the host rather than the user:
+  `resolve_base_surfaces_a_refused_trust_root` and
+  `enforce_check_rejects_an_arbitrary_non_repository_cwd_without_writing` are
+  the tests for the case the enforce hook exists to refuse, a cwd inside no Git
+  repository at all, and they place that cwd in a fresh temporary directory.
+  The trust-root resolver walks every ancestor for a `.git` marker, so a
+  repository enclosing the system temp directory turns the refusal into a
+  success, which is how the two failed on 2026-10-06 (aoa-fb309). Each test
+  therefore asks the same resolver whether anything encloses its temporary
+  directory and prints the notice naming that repository when something does.
+  CI satisfies the precondition without an install step, because the hosted
+  runner's temporary directory is outside its checkout; the notice is for a
+  developer whose `TMPDIR` sits inside a working tree, or a shared host where
+  another process has planted a marker above `/tmp`. Nothing in the workspace
+  checks that the runner's temporary directory stays outside a repository: a
+  runner that moved it under the checkout would report `ok` for these two
+  tests. The three `governed_write` tests beside the first do not skip; they
+  fold whatever the same walk finds above the fixture into their expected
+  roots, because their fixture roots remain asserted exactly either way.
 
 The `exposure_scan.rs` test also prints a SKIP notice, which is not a third convention: the notice
 sits *inside* the ignored test and reports an unset `AOA_R0_CAMPAIGN_RUNS` to

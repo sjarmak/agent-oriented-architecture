@@ -1085,14 +1085,21 @@ mod tests {
     /// softened into a usable base along the way.
     #[test]
     fn resolve_base_surfaces_a_refused_trust_root() {
-        let refused = tempfile::tempdir().unwrap();
-        std::fs::write(refused.path().join(".git"), "not a gitfile\n").unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        if let Some(enclosing) = repositories_enclosing(outside.path()).into_iter().next() {
+            eprintln!(
+                "SKIP (docs/adr/0004-environment-dependent-test-skips.md): {} encloses the \
+                 temp root, so no directory under it is outside a repository",
+                enclosing.display()
+            );
+            return;
+        }
         let mut e = event("Write", None);
-        e.cwd = refused.path().to_string_lossy().into_owned();
+        e.cwd = outside.path().to_string_lossy().into_owned();
 
-        let err = resolve_base(&e).expect_err("a marker Git rejects has no trust root");
+        let err = resolve_base(&e).expect_err("a directory in no repository has no trust root");
         assert!(
-            err.to_string().contains("Git repository validation failed"),
+            err.to_string().contains("not inside a Git repository"),
             "{err}"
         );
     }
