@@ -108,19 +108,19 @@ fn names_worktree(git_dir: &Path, common_dir: &Path, repo: &Path) -> Result<bool
             && linked_worktree_points_back(repo, git_dir).is_ok_and(|points_back| points_back));
     }
     let points_back = match linked_worktree_points_back(repo, git_dir) {
-        Ok(true) => Some(()),
+        Ok(true) => true,
         Ok(false) => return Ok(false),
         Err(RepositoryRootError::Backlink { source, .. })
             if source.kind() == std::io::ErrorKind::NotFound =>
         {
-            None
+            false
         }
         Err(_) => return Ok(false),
     };
     Ok(
         match config_value(repo, git_dir, &["--get", "core.worktree"])? {
             ConfigValue::Set(worktree) => same_directory(&git_dir.join(worktree), repo),
-            ConfigValue::Unset => points_back.is_some() || names_no_worktree(git_dir, repo)?,
+            ConfigValue::Unset => points_back || names_no_worktree(git_dir, repo)?,
             ConfigValue::Unreadable => false,
         },
     )
