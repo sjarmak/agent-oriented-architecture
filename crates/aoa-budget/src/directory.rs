@@ -79,16 +79,32 @@ impl Directory {
     }
 
     pub(crate) fn place(&self, from: &OsStr, to: &OsStr, placement: Placement) -> io::Result<()> {
-        use rustix::fs::AtFlags;
-
         match placement {
             Placement::Replacing => rustix::fs::renameat(&self.fd, from, &self.fd, to)?,
-            Placement::Creating => {
-                rustix::fs::linkat(&self.fd, from, &self.fd, to, AtFlags::empty())?;
-                rustix::fs::unlinkat(&self.fd, from, AtFlags::empty())?;
-            }
+            Placement::Creating => self.create_name(from, to)?,
         }
         Ok(())
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn create_name(&self, from: &OsStr, to: &OsStr) -> rustix::io::Result<()> {
+        let flags = rustix::fs::RenameFlags::NOREPLACE;
+        match rustix::fs::renameat_with(&self.fd, from, &self.fd, to, flags) {
+            Err(refused) if lacks_noreplace(refused) => self.link_then_unlink(from, to),
+            placed => placed,
+        }
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    fn create_name(&self, from: &OsStr, to: &OsStr) -> rustix::io::Result<()> {
+        self.link_then_unlink(from, to)
+    }
+
+    fn link_then_unlink(&self, from: &OsStr, to: &OsStr) -> rustix::io::Result<()> {
+        use rustix::fs::AtFlags;
+
+        rustix::fs::linkat(&self.fd, from, &self.fd, to, AtFlags::empty())?;
+        rustix::fs::unlinkat(&self.fd, from, AtFlags::empty())
     }
 
     pub(crate) fn remove(&self, name: &OsStr) -> io::Result<()> {
@@ -100,6 +116,11 @@ impl Directory {
         rustix::fs::fsync(&self.fd)?;
         Ok(())
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn lacks_noreplace(refused: rustix::io::Errno) -> bool {
+    matches!(refused, rustix::io::Errno::INVAL | rustix::io::Errno::NOSYS)
 }
 
 #[cfg(not(unix))]
@@ -151,5 +172,78 @@ impl Directory {
 
     pub(crate) fn sync(&self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::os::unix::fs::MetadataExt;
+
+    use super::*;
+    use crate::boundary::Boundary;
+
+    fn held(dir: &std::path::Path) -> Directory {
+        let boundary = Boundary::open(dir).unwrap();
+        boundary
+            .hold_directory(&dir.canonicalize().unwrap())
+            .unwrap()
+    }
+
+    fn names_in(dir: &std::path::Path) -> Vec<OsString> {
+        let mut names: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_name_created_from_a_fresh_file_leaves_one_link_and_no_temporary_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let directory = held(dir.path());
+        let (fresh, mut file) = directory.create_fresh(".temp-").unwrap();
+        std::io::Write::write_all(&mut file, b"archived").unwrap();
+        drop(file);
+        let archive = dir.path().join("big.archive.md");
+
+        directory
+            .place(&fresh, OsStr::new("big.archive.md"), Placement::Creating)
+            .unwrap();
+
+        assert_eq!(std::fs::metadata(&archive).unwrap().nlink(), 1);
+        assert_eq!(std::fs::read_to_string(&archive).unwrap(), "archived");
+        assert_eq!(names_in(dir.path()), ["big.archive.md"]);
+        assert!(!directory.holds(&fresh).unwrap());
+    }
+
+    #[test]
+    fn a_name_created_over_a_taken_name_is_refused_and_both_entries_stay() {
+        let dir = tempfile::tempdir().unwrap();
+        let directory = held(dir.path());
+        let (fresh, _file) = directory.create_fresh(".temp-").unwrap();
+        let taken = dir.path().join("big.archive.md");
+        std::fs::write(&taken, "planted").unwrap();
+
+        let refused = directory
+            .place(&fresh, OsStr::new("big.archive.md"), Placement::Creating)
+            .unwrap_err();
+
+        assert_eq!(refused.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read_to_string(&taken).unwrap(), "planted");
+        assert_eq!(std::fs::metadata(&taken).unwrap().nlink(), 1);
+        assert!(directory.holds(&fresh).unwrap());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn only_an_unsupported_flag_falls_back_to_linking() {
+        use rustix::io::Errno;
+
+        assert!(lacks_noreplace(Errno::INVAL));
+        assert!(lacks_noreplace(Errno::NOSYS));
+        assert!(!lacks_noreplace(Errno::EXIST));
+        assert!(!lacks_noreplace(Errno::PERM));
+        assert!(!lacks_noreplace(Errno::XDEV));
     }
 }

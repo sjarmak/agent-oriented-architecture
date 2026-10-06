@@ -3,9 +3,10 @@
 **Status:** Accepted. Recorded in 2026-10 from aoa-ea601, the Codex review of
 aoa-rqnb8 and aoa-4xshs. The review found two places that re-resolved a path
 after checking it and three places whose non-Unix arm never had the check at
-all. The two were fixed on every platform by holding the directory or the file
-open and acting through the handle. The three are fixed on Unix and recorded
-here on Windows, under the precedent of
+all. The two are fixed on Unix by holding the directory or the file open and
+acting through the handle; their Windows arms still act by path and are the
+first two sites below. The three are fixed on Unix and recorded here on
+Windows, under the precedent of
 [0007](0007-git-environment-and-config-for-subprocesses.md): CI never runs
 Windows, so a Windows fix would ship unobserved.
 
@@ -37,9 +38,10 @@ does not:
   followed: the temporary files and both renames land in the directory that
   was checked, and nothing is written where the link points
   (`a_directory_swapped_for_a_link_while_placing_writes_nothing_where_the_link_points`
-  in `fix.rs`). The archive is placed with `linkat` then `unlinkat`, so an
-  entry created at the archive name after the check is kept and the run is
-  refused with `AlreadyExists`
+  in `fix.rs`). The archive is placed with `renameat2` and `RENAME_NOREPLACE`
+  on Linux and with `linkat` then `unlinkat` elsewhere, so an entry created at
+  the archive name after the check is kept and the run is refused with
+  `AlreadyExists`
   (`an_entry_made_at_the_archive_name_after_the_check_is_kept_and_nothing_is_replaced`).
   The non-Unix arm of the same type uses `std::fs` by path under the held
   directory's name. It cannot hold the directory, so the swap is not caught
@@ -49,7 +51,10 @@ does not:
   through `aoa_budget::Enclosure`, which resolves the path inside the linted
   directory and opens the resolved member with `O_NOFOLLOW` on every step. The
   kind, link count and bytes come from that one handle, and the matcher is
-  built from those bytes; no walker reopens the file by path. On Windows the
+  built from those bytes; no walker reopens the file by path. A directory
+  swapped for a link after the check and before the read changes nothing
+  (`a_directory_swapped_for_a_link_between_the_check_and_the_read_keeps_the_rules_that_were_checked`
+  in `discover.rs`). On Windows the
   open is `File::open` of the resolved path, so a swap between resolution and
   open is not caught, and the link-count refusal below does not apply.
 - **`aoa-lint` cannot see a second name on Windows.** `has_another_name` reads

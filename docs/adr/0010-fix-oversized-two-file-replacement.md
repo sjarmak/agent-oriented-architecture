@@ -11,7 +11,9 @@ written, which replaces the rerun convergence this record first promised.
 Amended again 2026-10-06 from aoa-ea601: every create, rename and sync happens
 relative to a directory held open for the whole run, and the archive is placed
 by a call that cannot replace an entry, which closes the check-then-rename gap
-this record first accepted.
+this record first accepted. Amended again 2026-10-06 from aoa-1wwjz: on Linux
+that call is `renameat2` with `RENAME_NOREPLACE`, link-then-unlink is the
+fallback, and the filesystem requirement is stated.
 
 ## Context
 
@@ -20,9 +22,9 @@ ceiling. It writes the full original body to a sibling `<stem>.archive.md` and
 rewrites the context file as a summary that names the archive.
 
 Each file is replaced by writing a temporary file beside it, giving that file
-the mode, owner and attributes of the one it replaces, and renaming it into
-place. One rename is atomic. The two renames are separate system calls, so a
-failure or a kill can land between them.
+the mode, owner and attributes of the one it replaces, and moving it into
+place with one call that is atomic on its own. The two placements are separate
+system calls, so a failure or a kill can land between them.
 
 Every one of those calls is made relative to the directory that holds the
 file, opened once through the boundary with no link followed on any step and
@@ -47,12 +49,19 @@ The window itself is accepted. `fix_oversized` does not try to roll the archive
 back when the context file cannot be placed, because a rollback is a third
 rename with a window of its own.
 
-The archive is placed by linking the temporary file to the archive name and
-then unlinking the temporary name. A link fails when the name is taken, so the
-archive is never placed over an entry that appeared after the check; the run
-is refused with the `AlreadyExists` error at the archive path, and the entry
-that appeared is kept. The context file is placed by a rename, which does
-replace, because replacing the file that was read is the operation.
+The archive is placed by a call that creates its name and fails when the name
+is taken, so the archive is never placed over an entry that appeared after the
+check; the run is refused with the `AlreadyExists` error at the archive path,
+and the entry that appeared is kept. On Linux that call is `renameat2` with
+`RENAME_NOREPLACE`: one rename, and the archive never has a second name. On
+the other Unix targets, and on a Linux filesystem whose `renameat2` reports the
+flag unsupported (`EINVAL`) or a kernel without the call (`ENOSYS`), the
+temporary file is linked to the archive name and the temporary name is then
+unlinked. The filesystem that holds the context file's directory therefore has
+to support `RENAME_NOREPLACE` or hard links. One that supports neither refuses
+the run with the link call's error at the archive path; both temporary files
+are withdrawn and nothing is placed. The context file is placed by a rename,
+which does replace, because replacing the file that was read is the operation.
 
 A run that finds any entry at `<stem>.archive.md` is refused. It returns
 `BudgetError::ArchiveExists`, which names the context file and the archive
@@ -91,16 +100,28 @@ too, names both, in the order they were left.
 
 What this record does not cover:
 
-- A process killed between the two renames leaves the killed run's prepared
-  temporary file for the context file behind. This is accepted as a residual
-  and not fixed: the content converges with no duplication, the temporary
-  names are unique so the leftover never changes a later result, and deleting
-  files by pattern could remove a concurrent run's temporary file. Nothing
-  removes it on the next run. An operator finds it in the context file's
-  directory as `.aoa-budget-` followed by sixteen hexadecimal digits, so the
-  pattern `.aoa-budget-????????????????` matches it (`directory.rs` draws the
-  digits and creates the file exclusively, retrying on a taken name). It is
-  not linked from any context file, so it does not enter a closure.
+- A process killed between the two placements leaves the killed run's prepared
+  temporary file for the context file behind. On the link path there is a
+  second gap: a kill between the link and the unlink leaves the archive under
+  two names, its temporary name and `<stem>.archive.md`, beside the context
+  file's temporary file, so three entries are left instead of one; a kill
+  after the unlink leaves one, as on the `renameat2` path. Both are accepted
+  as residuals and not fixed: the content converges with no duplication, the
+  temporary names are unique so the leftover never changes a later result, and
+  deleting files by pattern could remove a concurrent run's temporary file.
+  Nothing removes a leftover on the next run. An operator finds it in the
+  context file's directory as `.aoa-budget-` followed by sixteen hexadecimal
+  digits, so the pattern `.aoa-budget-????????????????` matches it
+  (`directory.rs` draws the digits and creates the file exclusively, retrying
+  on a taken name). It is not linked from any context file, so it does not
+  enter a closure. A leftover that shares its inode with the archive is the
+  archive's second name; removing it loses nothing.
+- An unlink that fails after its link succeeded returns an error at the
+  archive path with the archive already placed. The withdrawal tries the
+  temporary name once more and names it in `BudgetError::TempFileLeftBehind`
+  when that fails too; the context file's temporary file is withdrawn and the
+  context file is untouched. A rerun is refused by the archive that stands, so
+  the operator proceeds as inside the window.
 - A run that fails after both files are placed (the sync of the context file's
   directory, or the recount that follows the write) returns an error with the
   summary already in place. A rerun is refused by the archive that stands, so
@@ -118,9 +139,13 @@ What this record does not cover:
   then the context file.
 - `crates/aoa-budget/src/directory.rs` holds the directory descriptor and
   every call made relative to it: exclusive creation of a temporary file, the
-  replacing rename, the non-replacing link-and-unlink, the entry check and the
-  sync. `crates/aoa-budget/src/boundary.rs` opens it, one component at a time
-  with no link followed, from the boundary's own descriptor.
+  replacing rename, the non-replacing placement (`renameat2` with
+  `RENAME_NOREPLACE`, or link then unlink where that is unsupported), the entry
+  check and the sync. `crates/aoa-budget/src/boundary.rs` opens it, one
+  component at a time with no link followed, from the boundary's own
+  descriptor. The unit tests there check that a created name leaves one link
+  and no temporary name, that a taken name refuses the placement and keeps
+  both entries, and which errors fall back to linking.
 - `crates/aoa-budget/src/replace.rs` holds one replacement. `Placing` is the
   crate-private pair of steps (place, directory sync) that the tests fail one
   at a time; `fix_oversized` always passes the real pair.
