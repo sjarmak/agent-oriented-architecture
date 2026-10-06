@@ -800,3 +800,79 @@ fn a_link_through_an_unresolvable_directory_is_reported_once_across_aliases() {
         )]
     );
 }
+
+#[cfg(unix)]
+fn held_closure_after_swapping_the_boundary_for_a_link(
+    root_text: &str,
+    held_files: &[(&str, &str)],
+    replacement_files: &[(&str, &str)],
+) -> (TempDir, PathBuf, aoa_budget::Closure) {
+    let dir = TempDir::new().unwrap();
+    let base = dir.path().canonicalize().unwrap();
+    let repo = base.join("repo");
+    let root = write(&repo, "AGENTS.md", root_text);
+    for (name, text) in held_files {
+        write(&repo, name, text);
+    }
+    for (name, text) in replacement_files {
+        write(&base.join("outside"), name, text);
+    }
+    let enclosure = aoa_budget::Enclosure::open(&repo).unwrap();
+    let held = enclosure.hold().unwrap();
+    fs::rename(&repo, base.join("elsewhere")).unwrap();
+    std::os::unix::fs::symlink(base.join("outside"), &repo).unwrap();
+
+    let closure = enclosure
+        .resolve_held(&root, &held, std::ffi::OsStr::new("AGENTS.md"))
+        .unwrap();
+    (dir, repo, closure)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_file_the_held_directory_has_is_read_after_the_directory_is_swapped_for_a_link_lacking_it(
+) {
+    let (_dir, repo, closure) = held_closure_after_swapping_the_boundary_for_a_link(
+        "[linked](linked.md)\n",
+        &[("linked.md", "held\n")],
+        &[("AGENTS.md", "outside\n")],
+    );
+    assert!(!repo.join("linked.md").exists());
+
+    let read: Vec<(PathBuf, String)> = closure
+        .files
+        .iter()
+        .map(|file| (file.path.clone(), file.text.clone()))
+        .collect();
+    assert_eq!(
+        read,
+        [
+            (repo.join("AGENTS.md"), "[linked](linked.md)\n".to_string()),
+            (repo.join("linked.md"), "held\n".to_string()),
+        ]
+    );
+    assert_eq!(closure.absent, std::collections::BTreeSet::new());
+    assert_eq!(closure.unread, Vec::new());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_file_only_the_replacement_has_is_absent_after_the_directory_is_swapped_for_a_link() {
+    let (_dir, repo, closure) = held_closure_after_swapping_the_boundary_for_a_link(
+        "[planted](planted.md)\n",
+        &[],
+        &[("AGENTS.md", "outside\n"), ("planted.md", "outside\n")],
+    );
+    assert!(repo.join("planted.md").is_file());
+
+    let read: Vec<PathBuf> = closure.files.iter().map(|file| file.path.clone()).collect();
+    assert_eq!(read, [repo.join("AGENTS.md")]);
+    assert!(closure
+        .files
+        .iter()
+        .all(|file| !file.text.contains("outside")));
+    assert_eq!(
+        closure.absent,
+        std::collections::BTreeSet::from([repo.join("planted.md")])
+    );
+}

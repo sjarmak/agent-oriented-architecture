@@ -1,4 +1,4 @@
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -27,6 +27,13 @@ enum Lost {
     Absent,
     Looping,
     Failed(io::Error),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Directory,
+    Link,
+    Other,
 }
 
 impl From<io::Error> for Lost {
@@ -133,21 +140,20 @@ impl Boundary {
                 if at == self.path {
                     return Err(Lost::Outside);
                 }
-                std::fs::symlink_metadata(at.join(".."))?;
+                self.kind_beneath(&at, OsStr::new(".."))?;
                 at.pop();
                 continue;
             }
-            let next = at.join(&name);
-            let kind = std::fs::symlink_metadata(&next)?.file_type();
-            if !kind.is_symlink() {
-                at_a_directory = kind.is_dir();
-                at = next;
+            let kind = self.kind_beneath(&at, &name)?;
+            if kind != Kind::Link {
+                at_a_directory = kind == Kind::Directory;
+                at.push(&name);
                 continue;
             }
             if *followed == MAX_LINKS_FOLLOWED {
                 return Err(Lost::Looping);
             }
-            let target = std::fs::read_link(&next)?;
+            let target = self.link_beneath(&at, &name)?;
             *followed += 1;
             pending.extend(names_a_directory(&target).then(|| OsString::from(".")));
             let target = match target.has_root() {
@@ -166,6 +172,43 @@ impl Boundary {
             }));
         }
         Ok(at)
+    }
+
+    #[cfg(unix)]
+    fn kind_beneath(&self, at: &Path, name: &OsStr) -> io::Result<Kind> {
+        use rustix::fs::{AtFlags, FileType};
+
+        let stat = rustix::fs::statat(&self.descend(at)?, name, AtFlags::SYMLINK_NOFOLLOW)?;
+        Ok(match FileType::from_raw_mode(stat.st_mode) {
+            FileType::Directory => Kind::Directory,
+            FileType::Symlink => Kind::Link,
+            _ => Kind::Other,
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn kind_beneath(&self, at: &Path, name: &OsStr) -> io::Result<Kind> {
+        let kind = std::fs::symlink_metadata(at.join(name))?.file_type();
+        Ok(if kind.is_symlink() {
+            Kind::Link
+        } else if kind.is_dir() {
+            Kind::Directory
+        } else {
+            Kind::Other
+        })
+    }
+
+    #[cfg(unix)]
+    fn link_beneath(&self, at: &Path, name: &OsStr) -> io::Result<PathBuf> {
+        use std::os::unix::ffi::OsStringExt;
+
+        let target = rustix::fs::readlinkat(&self.descend(at)?, name, Vec::new())?;
+        Ok(PathBuf::from(OsString::from_vec(target.into_bytes())))
+    }
+
+    #[cfg(not(unix))]
+    fn link_beneath(&self, at: &Path, name: &OsStr) -> io::Result<PathBuf> {
+        std::fs::read_link(at.join(name))
     }
 
     fn beneath<'a>(&self, resolved: &'a Path) -> io::Result<&'a Path> {

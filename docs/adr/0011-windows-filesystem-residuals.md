@@ -44,9 +44,19 @@ does not:
   at the archive name after the check is kept and the run is refused with
   `AlreadyExists`
   (`an_entry_made_at_the_archive_name_after_the_check_is_kept_and_nothing_is_replaced`).
-  The non-Unix arm of the same type uses `std::fs` by path under the held
-  directory's name. It cannot hold the directory, so the swap is not caught
-  there.
+  `Boundary::reach` in `boundary.rs` decides whether a linked file exists and
+  where it resolves by walking each step of its path with `statat` and
+  `readlinkat` relative to a directory descended from the held boundary
+  descriptor, the same descent `open_member` then reads through, so a
+  boundary swapped for a link after it was held resolves and reads what was
+  held and never consults the replacement
+  (`a_linked_file_the_held_directory_has_is_read_after_the_directory_is_swapped_for_a_link_lacking_it`
+  and
+  `a_linked_file_only_the_replacement_has_is_absent_after_the_directory_is_swapped_for_a_link`
+  in `tests/closure_bounds.rs`). The non-Unix arm of the same type uses
+  `std::fs` by path under the held directory's name, and its `reach` walks
+  with `symlink_metadata` and `read_link` from the canonical name. It cannot
+  hold the directory, so the swap is not caught there.
 - **`aoa-lint` walks, reads ignore rules and reads discovered roots through
   held directories.** `crates/aoa-lint/src/discover.rs` holds the linted
   directory through `aoa_budget::Enclosure::open`, lists each directory from
