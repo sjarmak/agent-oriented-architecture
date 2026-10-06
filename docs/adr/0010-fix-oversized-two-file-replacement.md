@@ -8,6 +8,10 @@ lead ruled on 2026-10-05 that the window between them is accepted and that what
 holds inside it has to be stated and tested. Amended 2026-10-06 from aoa-rqnb8:
 a run whose archive name is already taken is refused before anything is
 written, which replaces the rerun convergence this record first promised.
+Amended again 2026-10-06 from aoa-ea601: every create, rename and sync happens
+relative to a directory held open for the whole run, and the archive is placed
+by a call that cannot replace an entry, which closes the check-then-rename gap
+this record first accepted.
 
 ## Context
 
@@ -19,6 +23,14 @@ Each file is replaced by writing a temporary file beside it, giving that file
 the mode, owner and attributes of the one it replaces, and renaming it into
 place. One rename is atomic. The two renames are separate system calls, so a
 failure or a kill can land between them.
+
+Every one of those calls is made relative to the directory that holds the
+file, opened once through the boundary with no link followed on any step and
+held until the run ends. A directory renamed aside and replaced with a link
+while the run is in progress changes nothing: the held descriptor still names
+the directory that was checked, and that is where the temporary files, both
+renames and the directory sync go. The Windows arm cannot hold a directory and
+keeps acting by path; [0011](0011-windows-filesystem-residuals.md) records it.
 
 ## Decision
 
@@ -34,6 +46,13 @@ missing content.
 The window itself is accepted. `fix_oversized` does not try to roll the archive
 back when the context file cannot be placed, because a rollback is a third
 rename with a window of its own.
+
+The archive is placed by linking the temporary file to the archive name and
+then unlinking the temporary name. A link fails when the name is taken, so the
+archive is never placed over an entry that appeared after the check; the run
+is refused with the `AlreadyExists` error at the archive path, and the entry
+that appeared is kept. The context file is placed by a rename, which does
+replace, because replacing the file that was read is the operation.
 
 A run that finds any entry at `<stem>.archive.md` is refused. It returns
 `BudgetError::ArchiveExists`, which names the context file and the archive
@@ -78,33 +97,41 @@ What this record does not cover:
   names are unique so the leftover never changes a later result, and deleting
   files by pattern could remove a concurrent run's temporary file. Nothing
   removes it on the next run. An operator finds it in the context file's
-  directory as `.aoa-budget-` followed by six random letters and digits, so
-  the pattern `.aoa-budget-??????` matches it (the `tempfile` crate's default
-  name length behind the prefix `replace.rs` sets). It is not linked from any
-  context file, so it does not enter a closure.
+  directory as `.aoa-budget-` followed by sixteen hexadecimal digits, so the
+  pattern `.aoa-budget-????????????????` matches it (`directory.rs` draws the
+  digits and creates the file exclusively, retrying on a taken name). It is
+  not linked from any context file, so it does not enter a closure.
 - A run that fails after both files are placed (the sync of the context file's
   directory, or the recount that follows the write) returns an error with the
   summary already in place. A rerun is refused by the archive that stands, so
   the summary is never archived over the original; the operator reads the
   error, compares the two files and decides which to keep.
-- The check for an existing archive and the rename that places one are
-  separate calls. An entry created at the archive name between them is
-  replaced by the rename. Nothing in this crate writes there concurrently, and
-  the gap is accepted as it is for the two renames.
+- The check for an existing archive and the call that places one are still
+  separate, but the gap no longer loses anything: an entry created at the
+  archive name between them makes the link fail, the run is refused, and the
+  entry is kept (the gap this record accepted before aoa-ea601 is closed).
 
 ## Where this lives
 
 - `crates/aoa-budget/src/fix.rs` holds the order: `fix_placing` refuses a
   taken archive name, prepares both replacements, then places the archive,
   then the context file.
+- `crates/aoa-budget/src/directory.rs` holds the directory descriptor and
+  every call made relative to it: exclusive creation of a temporary file, the
+  replacing rename, the non-replacing link-and-unlink, the entry check and the
+  sync. `crates/aoa-budget/src/boundary.rs` opens it, one component at a time
+  with no link followed, from the boundary's own descriptor.
 - `crates/aoa-budget/src/replace.rs` holds one replacement. `Placing` is the
-  crate-private pair of steps (rename, directory sync) that the tests fail one
+  crate-private pair of steps (place, directory sync) that the tests fail one
   at a time; `fix_oversized` always passes the real pair.
 - The unit tests in `crates/aoa-budget/src/fix.rs` fail the second rename and
   the first directory sync, check that both files hold the original body, and
   check that a rerun is refused with both files still holding it. The same
   file strands both temporary files and checks the error names both;
-  `replace.rs` checks the order they are named in.
+  `replace.rs` checks the order they are named in. The same file swaps the
+  held directory for a link to another directory in the middle of placing and
+  checks that nothing lands where the link points, and plants an entry at the
+  archive name after the check and checks the entry is kept.
 - `crates/aoa-budget/tests/budget.rs` runs the fix twice on one file and checks
   the second run is refused with the archive byte for byte the original. The
   same file and `tests/fix_replace.rs` put a file, a link inside and outside

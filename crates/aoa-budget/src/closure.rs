@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -107,15 +108,41 @@ pub fn resolve_closure_within(root: &Path, boundary: &Path) -> Result<Closure, B
     resolve(root, &boundary, RootRead::FollowingLinks)
 }
 
-pub fn leaves_boundary(path: &Path, boundary: &Path) -> Result<bool, BudgetError> {
-    let path = normalize_path(path);
-    let reached = open_boundary(boundary)?
-        .reach(&path)
-        .map_err(|source| BudgetError::Io { path, source })?;
-    Ok(matches!(reached, Reached::Outside))
+pub struct Enclosure {
+    boundary: Boundary,
+    path: PathBuf,
 }
 
-fn open_boundary(boundary: &Path) -> Result<Boundary, BudgetError> {
+impl Enclosure {
+    pub fn open(boundary: &Path) -> Result<Self, BudgetError> {
+        Ok(Self {
+            boundary: open_boundary(boundary)?,
+            path: boundary.to_path_buf(),
+        })
+    }
+
+    pub fn open_file(&self, path: &Path) -> Result<Option<File>, BudgetError> {
+        let io_at = |source| BudgetError::Io {
+            path: path.to_path_buf(),
+            source,
+        };
+        match self.boundary.reach(path).map_err(io_at)? {
+            Reached::Member { resolved, .. } => self
+                .boundary
+                .open_member(&resolved)
+                .map(Some)
+                .map_err(io_at),
+            Reached::Absent { .. } => Ok(None),
+            Reached::Looping { .. } => Err(io_at(too_many_links())),
+            Reached::Outside => Err(BudgetError::OutsideBoundary {
+                path: path.to_path_buf(),
+                boundary: self.path.clone(),
+            }),
+        }
+    }
+}
+
+pub(crate) fn open_boundary(boundary: &Path) -> Result<Boundary, BudgetError> {
     Boundary::open(boundary).map_err(|source| BudgetError::Io {
         path: boundary.to_path_buf(),
         source,

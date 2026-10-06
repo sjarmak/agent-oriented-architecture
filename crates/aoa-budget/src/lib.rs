@@ -18,6 +18,7 @@
 mod boundary;
 mod budget;
 mod closure;
+mod directory;
 mod error;
 mod fix;
 mod path;
@@ -30,8 +31,8 @@ pub use budget::{
     count_budget, BudgetReport, Config, FileBudget, Verdict, DEFAULT_CONTEXT_CEILING,
 };
 pub use closure::{
-    leaves_boundary, resolve_closure, resolve_closure_within, resolve_contained_closure, Closure,
-    ContextFile, UnreadLink, UnreadReason, MAX_CONTEXT_FILE_BYTES,
+    resolve_closure, resolve_closure_within, resolve_contained_closure, Closure, ContextFile,
+    Enclosure, UnreadLink, UnreadReason, MAX_CONTEXT_FILE_BYTES,
 };
 pub use error::BudgetError;
 pub use fix::{fix_oversized, FixOutcome};

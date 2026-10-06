@@ -1,10 +1,12 @@
-use std::fs::{File, OpenOptions, Permissions};
+use std::ffi::{OsStr, OsString};
+use std::fs::{File, Permissions};
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use tempfile::{NamedTempFile, PersistError};
-
+use crate::directory::{Directory, Placement};
 use crate::error::{BudgetError, LeftBehindTemp};
+
+const FRESH_PREFIX: &str = ".aoa-budget-";
 
 pub(crate) struct Standing {
     permissions: Permissions,
@@ -15,14 +17,12 @@ pub(crate) struct Standing {
 }
 
 impl Standing {
-    pub(crate) fn of_writable(path: &Path) -> io::Result<Option<Self>> {
-        match std::fs::symlink_metadata(path) {
-            Ok(found) if found.is_file() => {}
-            Ok(_) => return Ok(None),
+    pub(crate) fn of_writable(directory: &Directory, name: &OsStr) -> io::Result<Option<Self>> {
+        let file = match directory.open_writable(name) {
+            Ok(file) => file,
             Err(absent) if absent.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error),
-        }
-        let file = open_for_writing(path)?;
+        };
         let found = file.metadata()?;
         if !found.is_file() {
             return Ok(None);
@@ -86,12 +86,12 @@ impl Unplaced {
         }
     }
 
-    pub(crate) fn withdrawing(self, prepared: Replacement) -> Self {
+    pub(crate) fn withdrawing(self, prepared: Replacement<'_>) -> Self {
         let (source, mut left) = match self {
             Unplaced::Refused(source) => (source, Vec::new()),
             Unplaced::LeftBehind { source, left } => (source, left),
         };
-        left.extend(withdraw(prepared.fresh));
+        left.extend(prepared.withdraw());
         Self::leaving(source, left)
     }
 
@@ -104,88 +104,71 @@ impl Unplaced {
     }
 }
 
-fn withdrawn(fresh: NamedTempFile, source: io::Error) -> Unplaced {
-    Unplaced::leaving(source, withdraw(fresh).into_iter().collect())
-}
-
-fn withdraw(fresh: NamedTempFile) -> Option<LeftBehindTemp> {
-    let temp = fresh.path().to_path_buf();
-    fresh
-        .close()
-        .err()
-        .map(|removal| LeftBehindTemp { temp, removal })
-}
-
 pub(crate) struct Placing<'a> {
-    pub(crate) rename: &'a dyn Fn(NamedTempFile, &Path) -> Result<(), PersistError>,
-    pub(crate) sync_directory: &'a dyn Fn(&Path) -> io::Result<()>,
+    pub(crate) rename: &'a dyn Fn(&Directory, &OsStr, &OsStr, Placement) -> io::Result<()>,
+    pub(crate) sync_directory: &'a dyn Fn(&Directory) -> io::Result<()>,
 }
 
 impl Placing<'static> {
     pub(crate) const REAL: Self = Self {
-        rename: &persist,
-        sync_directory: &sync_directory,
+        rename: &Directory::place,
+        sync_directory: &Directory::sync,
     };
 }
 
-fn persist(fresh: NamedTempFile, to: &Path) -> Result<(), PersistError> {
-    fresh.persist(to).map(drop)
+pub(crate) struct Replacement<'d> {
+    directory: &'d Directory,
+    fresh: OsString,
+    target: OsString,
+    placement: Placement,
 }
 
-pub(crate) struct Replacement {
-    fresh: NamedTempFile,
-    path: PathBuf,
-}
-
-impl Replacement {
-    pub(crate) fn prepare(path: &Path, body: &str, standing: &Standing) -> Result<Self, Unplaced> {
-        let mut fresh = tempfile::Builder::new()
-            .prefix(".aoa-budget-")
-            .tempfile_in(directory_of(path))
+impl<'d> Replacement<'d> {
+    pub(crate) fn prepare(
+        directory: &'d Directory,
+        target: &OsStr,
+        placement: Placement,
+        body: &str,
+        standing: &Standing,
+    ) -> Result<Self, Unplaced> {
+        let (fresh, mut file) = directory
+            .create_fresh(FRESH_PREFIX)
             .map_err(Unplaced::Refused)?;
-        let filled = fresh
+        let filled = file
             .write_all(body.as_bytes())
-            .and_then(|()| standing.dress(fresh.as_file()))
-            .and_then(|()| fresh.as_file().sync_all());
+            .and_then(|()| standing.dress(&file))
+            .and_then(|()| file.sync_all());
+        drop(file);
+        let prepared = Self {
+            directory,
+            fresh,
+            target: target.to_os_string(),
+            placement,
+        };
         match filled {
-            Ok(()) => Ok(Self {
-                fresh,
-                path: path.to_path_buf(),
-            }),
-            Err(source) => Err(withdrawn(fresh, source)),
+            Ok(()) => Ok(prepared),
+            Err(source) => Err(prepared.withdrawn(source)),
         }
     }
 
     pub(crate) fn put(self, placing: &Placing) -> Result<(), Unplaced> {
-        match (placing.rename)(self.fresh, &self.path) {
-            Ok(()) => (placing.sync_directory)(directory_of(&self.path)).map_err(Unplaced::Refused),
-            Err(refused) => Err(withdrawn(refused.file, refused.error)),
+        match (placing.rename)(self.directory, &self.fresh, &self.target, self.placement) {
+            Ok(()) => (placing.sync_directory)(self.directory).map_err(Unplaced::Refused),
+            Err(refused) => Err(self.withdrawn(refused)),
         }
     }
-}
 
-fn directory_of(path: &Path) -> &Path {
-    match path.parent() {
-        Some(dir) if !dir.as_os_str().is_empty() => dir,
-        _ => Path::new("."),
+    fn withdrawn(self, source: io::Error) -> Unplaced {
+        Unplaced::leaving(source, self.withdraw().into_iter().collect())
     }
-}
 
-#[cfg(unix)]
-fn open_for_writing(path: &Path) -> io::Result<File> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let flags = rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK;
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .custom_flags(flags.bits() as i32)
-        .open(path)
-}
-
-#[cfg(not(unix))]
-fn open_for_writing(path: &Path) -> io::Result<File> {
-    OpenOptions::new().read(true).write(true).open(path)
+    fn withdraw(self) -> Option<LeftBehindTemp> {
+        let temp = self.directory.naming(&self.fresh);
+        self.directory
+            .remove(&self.fresh)
+            .err()
+            .map(|removal| LeftBehindTemp { temp, removal })
+    }
 }
 
 #[cfg(unix)]
@@ -193,16 +176,6 @@ fn owner(found: &std::fs::Metadata) -> (u32, u32) {
     use std::os::unix::fs::MetadataExt;
 
     (found.uid(), found.gid())
-}
-
-#[cfg(unix)]
-fn sync_directory(dir: &Path) -> io::Result<()> {
-    File::open(dir)?.sync_all()
-}
-
-#[cfg(not(unix))]
-fn sync_directory(_dir: &Path) -> io::Result<()> {
-    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -240,19 +213,48 @@ fn sized(read: impl Fn(&mut [u8]) -> rustix::io::Result<usize>) -> rustix::io::R
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
+    use crate::boundary::Boundary;
+
+    fn held(dir: &Path) -> (Directory, PathBuf) {
+        let path = dir.join("big.md");
+        std::fs::write(&path, "standing").unwrap();
+        let boundary = Boundary::open(dir).unwrap();
+        let directory = boundary
+            .hold_directory(&dir.canonicalize().unwrap())
+            .unwrap();
+        (directory, path)
+    }
+
+    fn strand(temp: &Path) {
+        std::fs::remove_file(temp).unwrap();
+        std::fs::create_dir(temp).unwrap();
+        std::fs::write(temp.join("held"), "").unwrap();
+    }
+
+    fn prepared<'d>(directory: &'d Directory, standing: &Standing) -> Replacement<'d> {
+        Replacement::prepare(
+            directory,
+            OsStr::new("big.md"),
+            Placement::Replacing,
+            "fresh",
+            standing,
+        )
+        .unwrap()
+    }
 
     #[test]
     fn a_temporary_file_that_can_be_neither_placed_nor_removed_is_named_in_the_refusal() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("big.md");
-        std::fs::write(&path, "standing").unwrap();
-        let standing = Standing::of_writable(&path).unwrap().unwrap();
-        let replacement = Replacement::prepare(&path, "fresh", &standing).unwrap();
-        let temp = replacement.fresh.path().to_path_buf();
-        std::fs::remove_file(&temp).unwrap();
-        std::fs::create_dir(&temp).unwrap();
-        std::fs::write(temp.join("held"), "").unwrap();
+        let (directory, path) = held(dir.path());
+        let standing = Standing::of_writable(&directory, OsStr::new("big.md"))
+            .unwrap()
+            .unwrap();
+        let replacement = prepared(&directory, &standing);
+        let temp = directory.naming(&replacement.fresh);
+        strand(&temp);
 
         let refused = replacement.put(&Placing::REAL);
 
@@ -273,16 +275,15 @@ mod tests {
     #[test]
     fn withdrawing_a_second_unremovable_file_names_both_in_the_order_they_were_left() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("big.md");
-        std::fs::write(&path, "standing").unwrap();
-        let standing = Standing::of_writable(&path).unwrap().unwrap();
+        let (directory, _path) = held(dir.path());
+        let standing = Standing::of_writable(&directory, OsStr::new("big.md"))
+            .unwrap()
+            .unwrap();
         let mut temps = Vec::new();
         let mut stranded = || {
-            let replacement = Replacement::prepare(&path, "fresh", &standing).unwrap();
-            let temp = replacement.fresh.path().to_path_buf();
-            std::fs::remove_file(&temp).unwrap();
-            std::fs::create_dir(&temp).unwrap();
-            std::fs::write(temp.join("held"), "").unwrap();
+            let replacement = prepared(&directory, &standing);
+            let temp = directory.naming(&replacement.fresh);
+            strand(&temp);
             temps.push(temp);
             replacement
         };
@@ -302,16 +303,14 @@ mod tests {
     #[test]
     fn a_temporary_file_that_was_removed_leaves_the_refusal_as_it_was() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("big.md");
-        std::fs::write(&path, "standing").unwrap();
-        let standing = Standing::of_writable(&path).unwrap().unwrap();
-        let replacement = Replacement::prepare(&path, "fresh", &standing).unwrap();
+        let (directory, _path) = held(dir.path());
+        let standing = Standing::of_writable(&directory, OsStr::new("big.md"))
+            .unwrap()
+            .unwrap();
+        let replacement = prepared(&directory, &standing);
         let refusing = Placing {
-            rename: &|fresh, _to| {
-                Err(PersistError {
-                    error: io::Error::other("refused by the test"),
-                    file: fresh,
-                })
+            rename: &|_directory, _from, _to, _placement| {
+                Err(io::Error::other("refused by the test"))
             },
             sync_directory: Placing::REAL.sync_directory,
         };
@@ -324,5 +323,41 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(left, ["big.md"]);
+    }
+
+    #[test]
+    fn a_replacement_that_creates_does_not_replace_an_entry_made_at_its_name_meanwhile() {
+        let dir = tempfile::tempdir().unwrap();
+        let (directory, _path) = held(dir.path());
+        let standing = Standing::of_writable(&directory, OsStr::new("big.md"))
+            .unwrap()
+            .unwrap();
+        let archive = dir.path().join("big.archive.md");
+        let replacement = Replacement::prepare(
+            &directory,
+            OsStr::new("big.archive.md"),
+            Placement::Creating,
+            "fresh",
+            &standing,
+        )
+        .unwrap();
+        std::fs::write(&archive, "planted").unwrap();
+
+        let refused = replacement.put(&Placing::REAL);
+
+        assert!(
+            matches!(
+                &refused,
+                Err(Unplaced::Refused(source)) if source.kind() == io::ErrorKind::AlreadyExists
+            ),
+            "{refused:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&archive).unwrap(), "planted");
+        let mut left: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["big.archive.md", "big.md"]);
     }
 }

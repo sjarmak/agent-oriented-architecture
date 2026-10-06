@@ -1,8 +1,10 @@
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use crate::boundary::{Boundary, Reached};
 use crate::budget::{count_budget, Config, Verdict};
-use crate::closure::{resolve_closure_within, resolve_contained_closure, Closure};
+use crate::closure::{open_boundary, resolve_closure_within, resolve_contained_closure, Closure};
+use crate::directory::{Directory, Placement};
 use crate::error::BudgetError;
 use crate::path::normalize_path;
 use crate::replace::{Placing, Replacement, Standing};
@@ -52,22 +54,49 @@ fn fix_placing(
     let original = root_text(resolve_contained_closure(path, boundary)?, path)?;
     let encoder = target_encoder(target)?;
 
-    let (archive_name, archive_path) = free_archive_name(path)?;
+    let archive_name = archive_name_of(path);
+    let archive_path = directory_of(path).join(&archive_name);
 
     let summary = summarize_under(&original, ceiling, &archive_name, |t| {
         count_tokens(&encoder, t)
     });
 
-    let read_from = file_behind(path, boundary)?;
-    let root_standing = Standing::of_writable(&read_from)
-        .and_then(|standing| standing.ok_or_else(|| std::io::ErrorKind::NotFound.into()))
-        .map_err(|source| BudgetError::Io {
+    let opened = open_boundary(boundary)?;
+    let beside = hold_directory_of(&opened, directory_of(path), path, boundary)?;
+    let archive_name = OsStr::new(&archive_name);
+    if beside
+        .holds(archive_name)
+        .map_err(|source| io_at(&archive_path, source))?
+    {
+        return Err(BudgetError::ArchiveExists {
             path: path.to_path_buf(),
-            source,
-        })?;
-    let archive = Replacement::prepare(&archive_path, &original, &root_standing.of_a_new_file())
-        .map_err(|unplaced| unplaced.at(&archive_path))?;
-    let root = match Replacement::prepare(&read_from, &summary, &root_standing) {
+            archive: archive_path,
+        });
+    }
+
+    let read_from = reach_member(&opened, path, path, boundary)?;
+    let (root_directory, root_name) = opened
+        .split(&read_from)
+        .map_err(|source| io_at(path, source))?;
+    let within = hold_directory_of(&opened, &root_directory, path, boundary)?;
+    let root_standing = Standing::of_writable(&within, &root_name)
+        .and_then(|standing| standing.ok_or_else(|| std::io::ErrorKind::NotFound.into()))
+        .map_err(|source| io_at(path, source))?;
+    let archive = Replacement::prepare(
+        &beside,
+        archive_name,
+        Placement::Creating,
+        &original,
+        &root_standing.of_a_new_file(),
+    )
+    .map_err(|unplaced| unplaced.at(&archive_path))?;
+    let root = match Replacement::prepare(
+        &within,
+        &root_name,
+        Placement::Replacing,
+        &summary,
+        &root_standing,
+    ) {
         Ok(root) => root,
         Err(unplaced) => return Err(unplaced.withdrawing(archive).at(&read_from)),
     };
@@ -104,49 +133,57 @@ fn root_text(closure: Closure, path: &Path) -> Result<String, BudgetError> {
         })
 }
 
-fn file_behind(path: &Path, boundary: &Path) -> Result<PathBuf, BudgetError> {
-    let opened = Boundary::open(boundary).map_err(|source| BudgetError::Io {
-        path: boundary.to_path_buf(),
-        source,
-    })?;
-    let reached = opened.reach(path).map_err(|source| BudgetError::Io {
+fn io_at(path: &Path, source: std::io::Error) -> BudgetError {
+    BudgetError::Io {
         path: path.to_path_buf(),
         source,
-    })?;
+    }
+}
+
+fn reach_member(
+    opened: &Boundary,
+    target: &Path,
+    path: &Path,
+    boundary: &Path,
+) -> Result<PathBuf, BudgetError> {
+    let reached = opened.reach(target).map_err(|source| io_at(path, source))?;
     match reached {
         Reached::Member { resolved, .. } => Ok(resolved),
         Reached::Outside => Err(BudgetError::OutsideBoundary {
             path: path.to_path_buf(),
             boundary: boundary.to_path_buf(),
         }),
-        Reached::Absent { .. } | Reached::Looping { .. } => Err(BudgetError::Io {
-            path: path.to_path_buf(),
-            source: std::io::ErrorKind::NotFound.into(),
-        }),
+        Reached::Absent { .. } | Reached::Looping { .. } => {
+            Err(io_at(path, std::io::ErrorKind::NotFound.into()))
+        }
     }
 }
 
-fn free_archive_name(path: &Path) -> Result<(String, PathBuf), BudgetError> {
+fn hold_directory_of(
+    opened: &Boundary,
+    directory: &Path,
+    path: &Path,
+    boundary: &Path,
+) -> Result<Directory, BudgetError> {
+    let resolved = reach_member(opened, directory, path, boundary)?;
+    opened
+        .hold_directory(&resolved)
+        .map_err(|source| io_at(path, source))
+}
+
+fn directory_of(path: &Path) -> &Path {
+    match path.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir,
+        _ => Path::new("."),
+    }
+}
+
+fn archive_name_of(path: &Path) -> String {
     let stem = path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "context".to_string());
-    let dir = path.parent().unwrap_or(Path::new("."));
-    let archive_name = format!("{stem}.archive.md");
-    let archive_path = dir.join(&archive_name);
-    match std::fs::symlink_metadata(&archive_path) {
-        Ok(_) => Err(BudgetError::ArchiveExists {
-            path: path.to_path_buf(),
-            archive: archive_path,
-        }),
-        Err(absent) if absent.kind() == std::io::ErrorKind::NotFound => {
-            Ok((archive_name, archive_path))
-        }
-        Err(source) => Err(BudgetError::Io {
-            path: archive_path,
-            source,
-        }),
-    }
+    format!("{stem}.archive.md")
 }
 
 /// Build an extractive summary that counts under `ceiling`.
@@ -190,8 +227,6 @@ mod tests {
     use std::collections::BTreeSet;
     use std::ffi::OsString;
 
-    use tempfile::PersistError;
-
     use super::*;
 
     struct Tree {
@@ -233,6 +268,20 @@ mod tests {
         path.file_name().is_some_and(|found| found == name)
     }
 
+    fn prepared_root_beside(dir: &Path, archive_temp: &OsStr) -> PathBuf {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|entry| entry.file_name() != Some(archive_temp) && !entry.ends_with("big.md"))
+            .unwrap()
+    }
+
+    fn strand(temp: &Path) {
+        std::fs::remove_file(temp).unwrap();
+        std::fs::create_dir(temp).unwrap();
+        std::fs::write(temp.join("held"), "").unwrap();
+    }
+
     fn assert_nothing_was_lost_and_a_rerun_is_refused(
         tree: &Tree,
         interrupted: Result<FixOutcome, BudgetError>,
@@ -266,14 +315,11 @@ mod tests {
     fn a_root_that_cannot_be_placed_after_its_archive_loses_nothing_and_a_rerun_is_refused() {
         let tree = tree();
         let failing_the_root = Placing {
-            rename: &|fresh, to| {
-                if is_named(to, "big.md") {
-                    return Err(PersistError {
-                        error: refused(),
-                        file: fresh,
-                    });
+            rename: &|directory, from, to, placement| {
+                if to == "big.md" {
+                    return Err(refused());
                 }
-                (Placing::REAL.rename)(fresh, to)
+                (Placing::REAL.rename)(directory, from, to, placement)
             },
             sync_directory: Placing::REAL.sync_directory,
         };
@@ -289,12 +335,12 @@ mod tests {
         let synced = Cell::new(0);
         let failing_the_first_sync = Placing {
             rename: Placing::REAL.rename,
-            sync_directory: &|dir| {
+            sync_directory: &|directory| {
                 synced.set(synced.get() + 1);
                 if synced.get() == 1 {
                     return Err(refused());
                 }
-                (Placing::REAL.sync_directory)(dir)
+                (Placing::REAL.sync_directory)(directory)
             },
         };
 
@@ -309,20 +355,11 @@ mod tests {
         let tree = tree();
         let stranded = Cell::new(None);
         let refusing_the_archive = Placing {
-            rename: &|fresh, _to| {
-                let prepared_root = std::fs::read_dir(tree.dir.path())
-                    .unwrap()
-                    .map(|entry| entry.unwrap().path())
-                    .find(|entry| entry != fresh.path() && !entry.ends_with("big.md"))
-                    .unwrap();
-                std::fs::remove_file(&prepared_root).unwrap();
-                std::fs::create_dir(&prepared_root).unwrap();
-                std::fs::write(prepared_root.join("held"), "").unwrap();
+            rename: &|_directory, from, _to, _placement| {
+                let prepared_root = prepared_root_beside(tree.dir.path(), from);
+                strand(&prepared_root);
                 stranded.set(Some(prepared_root));
-                Err(PersistError {
-                    error: refused(),
-                    file: fresh,
-                })
+                Err(refused())
             },
             sync_directory: Placing::REAL.sync_directory,
         };
@@ -349,30 +386,18 @@ mod tests {
         );
     }
 
-    fn strand(temp: &Path) {
-        std::fs::remove_file(temp).unwrap();
-        std::fs::create_dir(temp).unwrap();
-        std::fs::write(temp.join("held"), "").unwrap();
-    }
-
     #[test]
     fn two_temporary_files_that_cannot_be_withdrawn_are_both_named_when_the_archive_is_refused() {
         let tree = tree();
         let stranded = Cell::new(None);
         let stranding_both = Placing {
-            rename: &|fresh, _to| {
-                let prepared_root = std::fs::read_dir(tree.dir.path())
-                    .unwrap()
-                    .map(|entry| entry.unwrap().path())
-                    .find(|entry| entry != fresh.path() && !entry.ends_with("big.md"))
-                    .unwrap();
+            rename: &|directory, from, _to, _placement| {
+                let prepared_root = prepared_root_beside(tree.dir.path(), from);
+                let archive_temp = directory.naming(from);
                 strand(&prepared_root);
-                strand(fresh.path());
-                stranded.set(Some((fresh.path().to_path_buf(), prepared_root)));
-                Err(PersistError {
-                    error: refused(),
-                    file: fresh,
-                })
+                strand(&archive_temp);
+                stranded.set(Some((archive_temp, prepared_root)));
+                Err(refused())
             },
             sync_directory: Placing::REAL.sync_directory,
         };
@@ -396,6 +421,75 @@ mod tests {
             std::fs::read_to_string(&tree.root).unwrap(),
             oversized_body()
         );
+    }
+
+    #[test]
+    fn an_entry_made_at_the_archive_name_after_the_check_is_kept_and_nothing_is_replaced() {
+        let tree = tree();
+        let planting = Placing {
+            rename: &|directory, from, to, placement| {
+                std::fs::write(&tree.archive, "planted").unwrap();
+                (Placing::REAL.rename)(directory, from, to, placement)
+            },
+            sync_directory: Placing::REAL.sync_directory,
+        };
+
+        let refused = fix(&tree, &planting);
+
+        assert!(
+            matches!(
+                &refused,
+                Err(BudgetError::Io { path, source })
+                    if path == &tree.archive && source.kind() == std::io::ErrorKind::AlreadyExists
+            ),
+            "{refused:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&tree.archive).unwrap(), "planted");
+        assert_eq!(
+            std::fs::read_to_string(&tree.root).unwrap(),
+            oversized_body()
+        );
+        assert_eq!(names_in(tree.dir.path()), ["big.archive.md", "big.md"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_swapped_for_a_link_while_placing_writes_nothing_where_the_link_points() {
+        let base = tempfile::tempdir().unwrap();
+        let base = base.path().canonicalize().unwrap();
+        let repo = base.join("repo");
+        let docs = repo.join("docs");
+        let outside = base.join("outside");
+        let elsewhere = base.join("elsewhere");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        let root = docs.join("big.md");
+        std::fs::write(&root, oversized_body()).unwrap();
+        let swapped = Cell::new(false);
+        let swapping = Placing {
+            rename: &|directory, from, to, placement| {
+                if !swapped.replace(true) {
+                    std::fs::rename(&docs, &elsewhere).unwrap();
+                    std::os::unix::fs::symlink(&outside, &docs).unwrap();
+                }
+                (Placing::REAL.rename)(directory, from, to, placement)
+            },
+            sync_directory: Placing::REAL.sync_directory,
+        };
+
+        let outcome = fix_placing(&root, &repo, 200, "gpt-4o", &swapping);
+
+        assert!(swapped.get());
+        assert!(outcome.is_err(), "{outcome:?}");
+        assert_eq!(names_in(&outside), Vec::<OsString>::new());
+        assert_eq!(names_in(&elsewhere), ["big.archive.md", "big.md"]);
+        assert_eq!(
+            std::fs::read_to_string(elsewhere.join("big.archive.md")).unwrap(),
+            oversized_body()
+        );
+        assert!(std::fs::read_to_string(elsewhere.join("big.md"))
+            .unwrap()
+            .starts_with("> Summarized to fit budget."));
     }
 
     #[test]

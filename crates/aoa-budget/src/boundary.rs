@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+use crate::directory::Directory;
 use crate::normalize_path;
 
 const MAX_LINKS_FOLLOWED: usize = 256;
@@ -176,30 +177,56 @@ impl Boundary {
         })
     }
 
+    pub(crate) fn split(&self, resolved: &Path) -> io::Result<(PathBuf, OsString)> {
+        self.beneath(resolved)?;
+        match (resolved.parent(), resolved.file_name()) {
+            (Some(parent), Some(name)) => Ok((parent.to_path_buf(), name.to_os_string())),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "member path names no file",
+            )),
+        }
+    }
+
     #[cfg(unix)]
-    pub(crate) fn open_member(&self, resolved: &Path) -> io::Result<File> {
+    fn descend(&self, resolved: &Path) -> io::Result<std::os::fd::OwnedFd> {
         let mut current = self.directory.try_clone()?;
-        let mut names = self.beneath(resolved)?.components().peekable();
-        while let Some(component) = names.next() {
-            let std::path::Component::Normal(name) = component else {
+        for component in self.beneath(resolved)?.components() {
+            let Component::Normal(name) = component else {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "member path is not canonical",
                 ));
             };
-            let flags = if names.peek().is_some() {
-                descend::DIRECTORY | rustix::fs::OFlags::NOFOLLOW
-            } else {
-                descend::MEMBER
-            };
+            let flags = descend::DIRECTORY | rustix::fs::OFlags::NOFOLLOW;
             current = rustix::fs::openat(&current, name, flags, rustix::fs::Mode::empty())?;
         }
-        Ok(File::from(current))
+        Ok(current)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn hold_directory(&self, resolved: &Path) -> io::Result<Directory> {
+        Directory::hold(&self.descend(resolved)?, resolved.to_path_buf())
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn hold_directory(&self, resolved: &Path) -> io::Result<Directory> {
+        self.beneath(resolved)?;
+        Directory::hold(resolved.to_path_buf())
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn open_member(&self, resolved: &Path) -> io::Result<File> {
+        let (parent, name) = self.split(resolved)?;
+        let directory = self.descend(&parent)?;
+        let flags = descend::MEMBER;
+        let fd = rustix::fs::openat(&directory, name, flags, rustix::fs::Mode::empty())?;
+        Ok(File::from(fd))
     }
 
     #[cfg(not(unix))]
     pub(crate) fn open_member(&self, resolved: &Path) -> io::Result<File> {
-        self.beneath(resolved)?;
+        self.split(resolved)?;
         File::open(resolved)
     }
 }
