@@ -58,11 +58,14 @@ fn fix_refuses_a_root_the_process_may_not_write_and_changes_nothing() {
     assert!(
         matches!(
             &refused,
-            Err(BudgetError::Io { path, source })
+            Err(BudgetError::RootNotWritable { path, source })
                 if path == &root && source.kind() == std::io::ErrorKind::PermissionDenied
         ),
         "{refused:?}"
     );
+    let message = refused.unwrap_err().to_string();
+    assert!(message.contains("may not write"), "{message}");
+    assert!(!message.contains("failed to read"), "{message}");
     assert_eq!(std::fs::read_to_string(&root).unwrap(), body);
     assert_eq!(mode(&root), 0o444);
     assert_eq!(names_in(dir.path()), ["big.md"]);

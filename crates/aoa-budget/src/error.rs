@@ -22,6 +22,13 @@ pub enum BudgetError {
     #[error("refusing to archive context file {path}: {archive} already exists")]
     ArchiveExists { path: PathBuf, archive: PathBuf },
 
+    #[error("refusing to replace context file {path}: this process may not write it")]
+    RootNotWritable {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("failed to replace {path}, and {}", left_behind(.left))]
     TempFileLeftBehind {
         path: PathBuf,

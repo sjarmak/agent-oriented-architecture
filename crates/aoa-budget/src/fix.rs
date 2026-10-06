@@ -81,7 +81,13 @@ fn fix_placing(
     let within = hold_directory_of(&opened, &root_directory, path, boundary)?;
     let root_standing = Standing::of_writable(&within, &root_name)
         .and_then(|standing| standing.ok_or_else(|| std::io::ErrorKind::NotFound.into()))
-        .map_err(|source| io_at(path, source))?;
+        .map_err(|source| match source.kind() {
+            std::io::ErrorKind::PermissionDenied => BudgetError::RootNotWritable {
+                path: path.to_path_buf(),
+                source,
+            },
+            _ => io_at(path, source),
+        })?;
     let archive = Replacement::prepare(
         &beside,
         archive_name,
