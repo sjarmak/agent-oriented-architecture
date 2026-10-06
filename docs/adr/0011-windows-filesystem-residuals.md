@@ -40,8 +40,8 @@ does not:
   descriptor, and nothing is written where the link points
   (`a_directory_swapped_for_a_link_while_placing_writes_nothing_where_the_link_points`
   in `fix.rs`). The archive is placed with `renameat2` and `RENAME_NOREPLACE`
-  on Linux and with `linkat` then `unlinkat` elsewhere, so an entry created at
-  the archive name after the check is kept and the run is refused with
+  on Linux and with `linkat` then `unlinkat` on other Unix, so an entry created
+  at the archive name after the check is kept and the run is refused with
   `AlreadyExists`
   (`an_entry_made_at_the_archive_name_after_the_check_is_kept_and_nothing_is_replaced`).
   The non-Unix arm of the same type uses `std::fs` by path under the held
@@ -82,10 +82,16 @@ does not:
   (`a_name_that_is_not_one_entry_is_refused_before_anything_opens` in
   `directory.rs`); a trailing separator would otherwise make `O_NOFOLLOW`
   follow a directory link. On Windows `Directory::entries` is
-  `std::fs::read_dir` of the held name, `Directory::descend` reopens the child
-  by path and `Directory::open_entry` and `open_member` are `symlink_metadata`
-  then `File::open` of the joined path, so a swap between any of those steps
-  is not caught, and the link-count refusal below does not apply.
+  `std::fs::read_dir` of the held name and `Directory::descend` reopens the
+  child by path, entering a link to a directory. `Directory::open_entry`,
+  which opens an ignore file, is `symlink_metadata` then `File::open` of the
+  joined path: an entry that is a link when checked is resolved by path
+  through the boundary as above, but one replaced with a link between the two
+  calls is followed. `Directory::open_member`, which reads a discovered root
+  for `Enclosure::resolve_held`, is `File::open` of the joined path with no
+  check before it, so a root replaced with a link after discovery is read from
+  wherever the link points. No swap between any of those steps is caught, and
+  the link-count refusal below does not apply.
 - **`aoa-lint` cannot see a second name on Windows.** `has_another_name` reads
   the Unix link count. The Windows arm returns `false`, so an ignore file that
   is a hard link to a file outside the linted directory is read there. Rust's
