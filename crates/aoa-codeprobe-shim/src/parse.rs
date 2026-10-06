@@ -128,16 +128,6 @@ fn decode_utf8(raw: Vec<u8>, path: &Path) -> Result<String, ShimError> {
 /// Blank and non-JSON lines are skipped (matching codeprobe's reader). All
 /// emitted spans have `source = native`.
 ///
-/// Returns [`ShimError::NoAgentEvents`] when no line is an `assistant` or
-/// `user` event: the current codeprobe writes only the agent's extracted final
-/// answer to `agent_output.txt`, and such a file observes no agent action. See
-/// [`crate::parse_trial`] for the reader that falls back to `trace.db` then.
-///
-/// Returns [`ShimError::TooManySpans`] if the transcript would produce more than
-/// the 200 000-span cap: a silently truncated trace would corrupt the locality
-/// metrics computed from it, so the bound fails loud. Warnings, being lossy
-/// diagnostics, are capped behind a sentinel instead.
-///
 /// # Secrets
 ///
 /// This parser does **not** sanitize. Tool targets are lifted verbatim into span
@@ -145,8 +135,7 @@ fn decode_utf8(raw: Vec<u8>, path: &Path) -> Result<String, ShimError> {
 /// paths. Callers MUST pass a codeprobe-sanitized transcript — codeprobe strips
 /// secrets upstream when it writes `agent_output.txt`. An unsanitized transcript
 /// (e.g. a `Bash` command with an inline token) would carry that secret straight
-/// into the emitted [`Trace`](aoa_trace::Trace), so do not feed raw,
-/// un-sanitized agent output here.
+/// into the emitted [`Trace`], so do not feed raw, un-sanitized agent output here.
 pub fn parse_transcript(raw: &str) -> Result<ShimResult, ShimError> {
     parse_transcript_bounded(raw, Limits::DEFAULT)
 }

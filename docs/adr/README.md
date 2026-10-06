@@ -22,6 +22,7 @@ duplicates one is already built.
 | [0009](0009-nested-policy-only-tightens.md) | A nested repository's policy may only tighten: a write is refused if any enclosing governed repository's policy refuses it | Accepted |
 | [0010](0010-fix-oversized-two-file-replacement.md) | `fix_oversized` replaces two files with two placements, archive first: the window between them is accepted and loses no content, and an archive that already stands refuses the run | Accepted |
 | [0011](0011-windows-filesystem-residuals.md) | Windows keeps five sites by path where Unix acts through a held handle: the Unix arms are the tested specification, the Windows arms stay by-path until CI runs Windows | Accepted |
+| [0012](0012-codeprobe-trace-db-fallback.md) | A codeprobe trial whose transcript holds no agent events is read from a private copy of the run's `trace.db`, under one byte cap and against exactly schema v1; the database records no tool results, so its writes stay `write.attempt` | Accepted |
 
 ## What belongs here
 

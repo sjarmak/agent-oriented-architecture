@@ -1,13 +1,3 @@
-//! The span builder every trace source feeds: tool calls in, an ordered
-//! [`Trace`] of native spans out.
-//!
-//! The stream-json walk ([`crate::parse`]) and the `trace.db` reader
-//! ([`crate::trace_db`]) see the same `tool_use` blocks through different
-//! containers. Both hand them here so a tool call maps to the same span with the
-//! same target whichever file it was read from, and so the caps, the warning
-//! sentinel, the `write.attempt` settlement and the trailing `abstain` rule are
-//! stated once.
-
 use std::collections::HashMap;
 
 use aoa_trace::{Span, SpanSource, SpanType, Trace};
@@ -16,7 +6,7 @@ use serde_json::{Map, Value};
 use crate::error::ShimError;
 use crate::mapping::{classify, Mapping};
 
-/// Largest span count a single trial may produce. Well above any real run
+/// Largest span count a single transcript may produce. Well above any real run
 /// (a 64 MiB transcript of minimal tool_use blocks tops out near ~1.3M spans);
 /// hitting this means the input is pathological and parsing fails loud.
 pub(crate) const MAX_SPANS: usize = 200_000;
@@ -26,8 +16,8 @@ pub(crate) const MAX_SPANS: usize = 200_000;
 /// amplification of a file made entirely of tiny non-JSON lines.
 const MAX_WARNINGS: usize = 10_000;
 
-/// Resource bounds applied while building, factored out so tests can exercise
-/// the caps with tiny values instead of materializing a multi-MiB input.
+/// Resource bounds applied while parsing, factored out so tests can exercise the
+/// caps with tiny values instead of materializing a multi-MiB transcript.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Limits {
     pub(crate) max_spans: usize,
@@ -41,7 +31,7 @@ impl Limits {
     };
 }
 
-/// Outcome of parsing one trial.
+/// Outcome of parsing one transcript.
 ///
 /// `trace` is built with a strictly increasing `seq`, the invariant
 /// `validate_trace` checks (asserted by the crate's integration tests).
@@ -54,7 +44,6 @@ pub struct ShimResult {
     pub warnings: Vec<String>,
 }
 
-/// Accumulates spans in tool-call order under the resource bounds.
 pub(crate) struct SpanBuilder {
     spans: Vec<Span>,
     warnings: Vec<String>,
@@ -74,12 +63,6 @@ impl SpanBuilder {
         }
     }
 
-    /// Map one `tool_use` block to a span, or record it as unmapped.
-    ///
-    /// `id` is the block's `tool_use` id when the source carries one; a later
-    /// [`tool_result`](Self::tool_result) correlates through it. Fails with
-    /// [`ShimError::TooManySpans`] rather than truncating: a silently truncated
-    /// trace would corrupt the locality metrics computed from it.
     pub(crate) fn tool_use(
         &mut self,
         id: Option<&str>,
@@ -124,23 +107,6 @@ impl SpanBuilder {
         Ok(())
     }
 
-    /// Settle the outcome of the write a tool result correlates to.
-    ///
-    /// Until a result arrives the span stays `write.attempt`, so a transcript
-    /// truncated mid-call leaves an unresolved attempt rather than fabricating
-    /// either outcome. Only an unresolved attempt is settled; a span that
-    /// already carries an outcome is never re-decided, and a result for an
-    /// unknown or non-write span is ignored.
-    ///
-    /// An errored result maps to `write.blocked` rather than `write.failed` on
-    /// purpose. A reconstructed transcript exposes only the `is_error` boolean;
-    /// separating a policy denial from an execution error would mean
-    /// classifying the human-readable message beside it (the fixtures carry
-    /// "Permission denied ... blocked by policy" as prose), and reading meaning
-    /// out of prose is exactly what this parser must not do. The narrower
-    /// distinction is available on the hook path, where the host reports each
-    /// outcome as its own event. Both provenances agree on what matters here:
-    /// neither `write.blocked` nor `write.failed` is a landed edit.
     pub(crate) fn tool_result(&mut self, tool_use_id: &str, is_error: bool) {
         let Some(&idx) = self.span_index_by_tool_id.get(tool_use_id) else {
             return;
@@ -155,8 +121,6 @@ impl SpanBuilder {
         };
     }
 
-    /// Append a warning, capping growth. The entry that reaches the cap becomes
-    /// a sentinel so the truncation is visible, never silent.
     pub(crate) fn warn(&mut self, msg: String) {
         let max = self.limits.max_warnings;
         if self.warnings.len() < max {
@@ -168,8 +132,6 @@ impl SpanBuilder {
         }
     }
 
-    /// Close the trial: a trial that attempted no write gets a trailing
-    /// `abstain` span.
     pub(crate) fn finish(mut self) -> ShimResult {
         if !self.saw_write {
             self.spans.push(Span {
