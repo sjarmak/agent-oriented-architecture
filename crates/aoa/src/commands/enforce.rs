@@ -854,6 +854,16 @@ mod tests {
         assert!(status.success(), "git init failed for test fixture");
     }
 
+    fn repositories_enclosing(directory: &Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        let mut next = enclosing_repository(Some(directory)).unwrap();
+        while let Some(root) = next {
+            next = enclosing_repository(root.parent()).unwrap();
+            found.push(root);
+        }
+        found
+    }
+
     #[test]
     fn records_test_run_only_for_test_commands() {
         assert_eq!(
@@ -929,7 +939,9 @@ mod tests {
     #[test]
     fn governed_write_lists_a_root_every_chain_reaches_once_and_a_spelling_once() {
         let fixture = tempfile::tempdir().unwrap();
-        let outer = fixture.path().canonicalize().unwrap().join("outer");
+        let root = fixture.path().canonicalize().unwrap();
+        let above = repositories_enclosing(&root);
+        let outer = root.join("outer");
         let nested = outer.join("nested");
         init_git_repo(&outer);
         init_git_repo(&nested);
@@ -939,7 +951,10 @@ mod tests {
 
         let governed = governed_write(&outer, Some(&candidate)).unwrap();
 
-        assert_eq!(governed.roots, vec![nested.clone(), outer.clone()]);
+        assert_eq!(
+            governed.roots,
+            [vec![nested.clone(), outer.clone()], above].concat()
+        );
         assert_eq!(governed.spellings, vec![candidate]);
     }
 
@@ -947,7 +962,9 @@ mod tests {
     #[test]
     fn governed_write_orders_roots_innermost_first_whichever_chain_found_them() {
         let fixture = tempfile::tempdir().unwrap();
-        let outer = fixture.path().canonicalize().unwrap().join("outer");
+        let root = fixture.path().canonicalize().unwrap();
+        let above = repositories_enclosing(&root);
+        let outer = root.join("outer");
         let q = outer.join("q");
         init_git_repo(&outer);
         init_git_repo(&q);
@@ -956,7 +973,10 @@ mod tests {
 
         let governed = governed_write(&outer, Some(&q.join("linked/src.rs"))).unwrap();
 
-        assert_eq!(governed.roots, vec![q.clone(), outer.clone()]);
+        assert_eq!(
+            governed.roots,
+            [vec![q.clone(), outer.clone()], above].concat()
+        );
         assert_eq!(
             governed.spellings,
             vec![q.join("linked/src.rs")],
@@ -969,6 +989,7 @@ mod tests {
     fn governed_write_collects_every_repository_a_chain_of_links_passes_through() {
         let fixture = tempfile::tempdir().unwrap();
         let root = fixture.path().canonicalize().unwrap();
+        let above = repositories_enclosing(&root);
         let (a, b, c) = (root.join("a"), root.join("b"), root.join("c"));
         init_git_repo(&a);
         init_git_repo(&b);
@@ -978,7 +999,10 @@ mod tests {
 
         let governed = governed_write(&a, Some(&a.join("l1/src.rs"))).unwrap();
 
-        assert_eq!(governed.roots, vec![a.clone(), b.clone(), c.clone()]);
+        assert_eq!(
+            governed.roots,
+            [vec![a.clone(), b.clone(), c.clone()], above].concat()
+        );
         assert_eq!(
             governed.spellings,
             vec![a.join("l1/src.rs"), b.join("l2/src.rs")]
@@ -1061,13 +1085,14 @@ mod tests {
     /// softened into a usable base along the way.
     #[test]
     fn resolve_base_surfaces_a_refused_trust_root() {
-        let outside = tempfile::tempdir().unwrap();
+        let refused = tempfile::tempdir().unwrap();
+        std::fs::write(refused.path().join(".git"), "not a gitfile\n").unwrap();
         let mut e = event("Write", None);
-        e.cwd = outside.path().to_string_lossy().into_owned();
+        e.cwd = refused.path().to_string_lossy().into_owned();
 
-        let err = resolve_base(&e).expect_err("a directory in no repository has no trust root");
+        let err = resolve_base(&e).expect_err("a marker Git rejects has no trust root");
         assert!(
-            err.to_string().contains("not inside a Git repository"),
+            err.to_string().contains("Git repository validation failed"),
             "{err}"
         );
     }

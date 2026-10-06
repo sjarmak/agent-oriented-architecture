@@ -496,8 +496,9 @@ fn enforce_reproduction_toggle_off_allows_unprotected_write() {
 }
 
 #[test]
-fn enforce_check_rejects_an_arbitrary_non_repository_cwd_without_writing() {
+fn enforce_check_rejects_a_cwd_whose_marker_git_refuses_without_writing() {
     let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join(".git"), "not a gitfile\n").unwrap();
     let payload = serde_json::to_string(&serde_json::json!({
         "session_id": "it-untrusted-root",
         "tool_name": "Write",
@@ -511,13 +512,10 @@ fn enforce_check_rejects_an_arbitrary_non_repository_cwd_without_writing() {
         .write_stdin(payload)
         .assert()
         .code(2)
-        // A temp dir has no `.git` marker anywhere above it, so the walk ends
-        // with nothing to hand Git and the rejection says exactly that. The
-        // `--show-toplevel` probe wording belongs to the case where a marker
-        // *does* exist and Git rejects it — the two tests below, and the
-        // `git_candidate_reports_*` unit tests. Asserting it here described a
-        // path this payload never takes.
-        .stderr(predicate::str::contains("is not inside a Git repository"));
+        .stderr(predicate::str::contains(
+            "Git repository validation failed for",
+        ))
+        .stderr(predicate::str::contains("--show-toplevel"));
     assert!(
         !dir.path().join(".aoa").exists(),
         "a rejected payload must not create telemetry outside a repository"
