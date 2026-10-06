@@ -1,4 +1,4 @@
-# 0010: `fix_oversized` replaces two files with two renames, archive first
+# 0010: `fix_oversized` replaces two files with two placements, archive first
 
 **Status:** Accepted. Recorded in 2026-10 from aoa-a03ih, the second review
 round of aoa-4xshs. The review found that the previous change described the
@@ -13,7 +13,11 @@ relative to a directory held open for the whole run, and the archive is placed
 by a call that cannot replace an entry, which closes the check-then-rename gap
 this record first accepted. Amended again 2026-10-06 from aoa-1wwjz: on Linux
 that call is `renameat2` with `RENAME_NOREPLACE`, link-then-unlink is the
-fallback, and the filesystem requirement is stated.
+fallback, and the filesystem requirement is stated. Amended again 2026-10-06
+from aoa-fv4je: the recount that follows the placements reads the context file
+through the held directory, and a placement is the creation of the destination
+name, which on the link fallback is separate from the removal of the temporary
+name.
 
 ## Context
 
@@ -22,17 +26,27 @@ ceiling. It writes the full original body to a sibling `<stem>.archive.md` and
 rewrites the context file as a summary that names the archive.
 
 Each file is replaced by writing a temporary file beside it, giving that file
-the mode, owner and attributes of the one it replaces, and moving it into
-place with one call that is atomic on its own. The two placements are separate
-system calls, so a failure or a kill can land between them.
+the mode, owner and attributes of the one it replaces, and creating the
+destination name with one call that is atomic on its own. A placement is that
+one call. For the context file it is a rename, which drops the temporary name
+in the same step. For the archive it is a rename that refuses a taken name, or
+on the link fallback a link, after which the temporary name is removed by a
+later call that is not part of the placement: the archive stands under its
+name from the link onward, whether or not that removal runs. The two
+placements are separate, so a failure or a kill can land between them.
 
 Every one of those calls is made relative to the directory that holds the
 file, opened once through the boundary with no link followed on any step and
 held until the run ends. A directory renamed aside and replaced with a link
 while the run is in progress changes nothing: the held descriptor still names
 the directory that was checked, and that is where the temporary files, both
-renames and the directory sync go. The Windows arm cannot hold a directory and
-keeps acting by path; [0011](0011-windows-filesystem-residuals.md) records it.
+placements and the directory sync go. The recount that follows the placements
+reads the context file through the same held descriptor, so the count it
+reports is of the summary that was written and never of a file where a
+swapped link points; the files the summary links to are reached through the
+boundary's own descriptor, as in any resolution. The Windows arm cannot hold a
+directory and keeps acting by path;
+[0011](0011-windows-filesystem-residuals.md) records it.
 
 ## Decision
 
@@ -41,13 +55,13 @@ that can be found early (a file that cannot be written, a directory that cannot
 hold a new file) is found while nothing has changed.
 
 The archive is placed first and the context file second. The order is the
-decision: between the two renames the context file still holds the full
+decision: between the two placements the context file still holds the full
 original body, and the archive holds the same body. No state in that window is
 missing content.
 
 The window itself is accepted. `fix_oversized` does not try to roll the archive
 back when the context file cannot be placed, because a rollback is a third
-rename with a window of its own.
+placement with a window of its own.
 
 The archive is placed by a call that creates its name and fails when the name
 is taken, so the archive is never placed over an entry that appeared after the
@@ -149,14 +163,21 @@ What this record does not cover:
 - `crates/aoa-budget/src/replace.rs` holds one replacement. `Placing` is the
   crate-private pair of steps (place, directory sync) that the tests fail one
   at a time; `fix_oversized` always passes the real pair.
-- The unit tests in `crates/aoa-budget/src/fix.rs` fail the second rename and
-  the first directory sync, check that both files hold the original body, and
-  check that a rerun is refused with both files still holding it. The same
-  file strands both temporary files and checks the error names both;
+- `crates/aoa-budget/src/closure.rs` holds the recount's read:
+  `resolve_closure_held` opens the context file by name through the held
+  directory and reaches the files it links to through the boundary, where
+  `resolve_closure_within` opens the root by path.
+- The unit tests in `crates/aoa-budget/src/fix.rs` fail the context file's
+  placement and the first directory sync, check that both files hold the
+  original body, and check that a rerun is refused with both files still
+  holding it. The same file strands both temporary files and checks the error
+  names both;
   `replace.rs` checks the order they are named in. The same file swaps the
-  held directory for a link to another directory in the middle of placing and
-  checks that nothing lands where the link points, and plants an entry at the
-  archive name after the check and checks the entry is kept.
+  held directory for a link to another directory holding a different `big.md`
+  in the middle of placing, and checks that nothing lands where the link
+  points and that the reported count is of the summary that was written, not
+  of the file the link points to; it also plants an entry at the archive name
+  after the check and checks the entry is kept.
 - `crates/aoa-budget/tests/budget.rs` runs the fix twice on one file and checks
   the second run is refused with the archive byte for byte the original. The
   same file and `tests/fix_replace.rs` put a file, a link inside and outside

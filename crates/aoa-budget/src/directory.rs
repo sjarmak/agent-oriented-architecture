@@ -61,6 +61,15 @@ impl Directory {
         Ok(File::from(fd))
     }
 
+    pub(crate) fn open_member(&self, name: &OsStr) -> io::Result<File> {
+        use rustix::fs::OFlags;
+
+        let flags =
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC;
+        let fd = rustix::fs::openat(&self.fd, name, flags, rustix::fs::Mode::empty())?;
+        Ok(File::from(fd))
+    }
+
     fn create_new(&self, name: &OsStr) -> io::Result<File> {
         use rustix::fs::{Mode, OFlags};
 
@@ -137,6 +146,10 @@ impl Directory {
             .read(true)
             .write(true)
             .open(self.naming(name))
+    }
+
+    pub(crate) fn open_member(&self, name: &OsStr) -> io::Result<File> {
+        File::open(self.naming(name))
     }
 
     fn create_new(&self, name: &OsStr) -> io::Result<File> {

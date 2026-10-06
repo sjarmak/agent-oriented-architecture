@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -6,6 +7,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::boundary::{open_following_links, too_many_links, Boundary, Reached};
+use crate::directory::Directory;
 use crate::error::BudgetError;
 use crate::normalize_path;
 use crate::reference::extract_references;
@@ -108,6 +110,19 @@ pub fn resolve_closure_within(root: &Path, boundary: &Path) -> Result<Closure, B
     resolve(root, &boundary, RootRead::FollowingLinks)
 }
 
+pub(crate) fn resolve_closure_held(
+    root: &Path,
+    boundary: &Boundary,
+    directory: &Directory,
+    name: &OsStr,
+) -> Result<Closure, BudgetError> {
+    resolve(
+        normalize_path(root),
+        boundary,
+        RootRead::Held { directory, name },
+    )
+}
+
 pub struct Enclosure {
     boundary: Boundary,
     path: PathBuf,
@@ -149,15 +164,19 @@ pub(crate) fn open_boundary(boundary: &Path) -> Result<Boundary, BudgetError> {
     })
 }
 
-enum RootRead {
+enum RootRead<'a> {
     FollowingLinks,
     Beneath(PathBuf),
+    Held {
+        directory: &'a Directory,
+        name: &'a OsStr,
+    },
 }
 
 fn resolve(
     root: PathBuf,
     boundary: &Boundary,
-    root_read: RootRead,
+    root_read: RootRead<'_>,
 ) -> Result<Closure, BudgetError> {
     let mut visited: BTreeSet<PathBuf> = BTreeSet::new();
     let mut resolved_members: BTreeSet<PathBuf> = BTreeSet::new();
@@ -175,6 +194,7 @@ fn resolve(
             let opened = match &root_read {
                 RootRead::FollowingLinks => open_following_links(&path),
                 RootRead::Beneath(resolved) => boundary.open_member(resolved),
+                RootRead::Held { directory, name } => directory.open_member(name),
             };
             let text = read_regular_file(opened).map_err(|failure| failure.into_error(&path))?;
             let reached = boundary.reach(&path).map_err(|source| BudgetError::Io {

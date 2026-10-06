@@ -35,8 +35,9 @@ does not:
   `crates/aoa-budget/src/directory.rs` holds the directory that was resolved
   inside the boundary and creates, renames, links, stats and syncs through its
   descriptor. A directory swapped for a link after it was held is not
-  followed: the temporary files and both renames land in the directory that
-  was checked, and nothing is written where the link points
+  followed: the temporary files and both placements land in the directory
+  that was checked, the recount reads the context file through the same
+  descriptor, and nothing is written where the link points
   (`a_directory_swapped_for_a_link_while_placing_writes_nothing_where_the_link_points`
   in `fix.rs`). The archive is placed with `renameat2` and `RENAME_NOREPLACE`
   on Linux and with `linkat` then `unlinkat` elsewhere, so an entry created at

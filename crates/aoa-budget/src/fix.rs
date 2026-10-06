@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::boundary::{Boundary, Reached};
 use crate::budget::{count_budget, Config, Verdict};
-use crate::closure::{open_boundary, resolve_closure_within, resolve_contained_closure, Closure};
+use crate::closure::{open_boundary, resolve_closure_held, resolve_contained_closure, Closure};
 use crate::directory::{Directory, Placement};
 use crate::error::BudgetError;
 use crate::path::normalize_path;
@@ -106,7 +106,7 @@ fn fix_placing(
     root.put(placing)
         .map_err(|unplaced| unplaced.at(&read_from))?;
 
-    let closure = resolve_closure_within(path, boundary)?;
+    let closure = resolve_closure_held(path, &opened, &within, &root_name)?;
     let report = count_budget(&closure, target, &Config::blocking(ceiling))?;
     if report.verdict != Verdict::Pass {
         return Err(BudgetError::FixFailed {
@@ -463,6 +463,7 @@ mod tests {
         let elsewhere = base.join("elsewhere");
         std::fs::create_dir_all(&docs).unwrap();
         std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("big.md"), "outside\n").unwrap();
         let root = docs.join("big.md");
         std::fs::write(&root, oversized_body()).unwrap();
         let swapped = Cell::new(false);
@@ -477,19 +478,27 @@ mod tests {
             sync_directory: Placing::REAL.sync_directory,
         };
 
-        let outcome = fix_placing(&root, &repo, 200, "gpt-4o", &swapping);
+        let outcome = fix_placing(&root, &repo, 200, "gpt-4o", &swapping).unwrap();
 
         assert!(swapped.get());
-        assert!(outcome.is_err(), "{outcome:?}");
-        assert_eq!(names_in(&outside), Vec::<OsString>::new());
+        assert_eq!(names_in(&outside), ["big.md"]);
+        assert_eq!(
+            std::fs::read_to_string(outside.join("big.md")).unwrap(),
+            "outside\n"
+        );
         assert_eq!(names_in(&elsewhere), ["big.archive.md", "big.md"]);
         assert_eq!(
             std::fs::read_to_string(elsewhere.join("big.archive.md")).unwrap(),
             oversized_body()
         );
-        assert!(std::fs::read_to_string(elsewhere.join("big.md"))
-            .unwrap()
-            .starts_with("> Summarized to fit budget."));
+        let summary = std::fs::read_to_string(elsewhere.join("big.md")).unwrap();
+        assert!(summary.starts_with("> Summarized to fit budget."));
+        let encoder = target_encoder("gpt-4o").unwrap();
+        assert_ne!(
+            count_tokens(&encoder, &summary),
+            count_tokens(&encoder, "outside\n")
+        );
+        assert_eq!(outcome.target_tokens, count_tokens(&encoder, &summary));
     }
 
     #[test]
