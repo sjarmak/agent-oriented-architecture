@@ -4,7 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 use super::falsify_policy::init_git_repo;
 use super::*;
 
-pub(super) const INHERITED_REPOSITORY_VARIABLES: [&str; 17] = [
+pub(super) const INHERITED_REPOSITORY_VARIABLES: [&str; 19] = [
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_CONFIG",
     "GIT_CONFIG_PARAMETERS",
@@ -22,6 +22,8 @@ pub(super) const INHERITED_REPOSITORY_VARIABLES: [&str; 17] = [
     "GIT_COMMON_DIR",
     "GIT_CEILING_DIRECTORIES",
     "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+    "GIT_NAMESPACE",
+    "GIT_QUARANTINE_PATH",
 ];
 
 pub(super) const INHERITED_TRACE_VARIABLES: [&str; 5] = [

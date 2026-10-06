@@ -1,7 +1,7 @@
 use std::ffi::OsStr;
 use std::process::Command;
 
-const REPOSITORY_LOCAL_GIT_ENV: [&str; 17] = [
+const REPOSITORY_LOCAL_GIT_ENV: [&str; 19] = [
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_CONFIG",
     "GIT_CONFIG_PARAMETERS",
@@ -19,6 +19,8 @@ const REPOSITORY_LOCAL_GIT_ENV: [&str; 17] = [
     "GIT_COMMON_DIR",
     "GIT_CEILING_DIRECTORIES",
     "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+    "GIT_NAMESPACE",
+    "GIT_QUARANTINE_PATH",
 ];
 
 const STRIPPED_ENV_PREFIXES: [&[u8]; 2] = [b"GIT_TRACE", b"GIT_REDIRECT_"];

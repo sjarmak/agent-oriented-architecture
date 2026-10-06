@@ -52,7 +52,7 @@ The rule is applied in four places.
 
 **1. The shared strip, for every git subprocess.**
 `aoa_path_trust::git_free_of_inherited_state` is the only constructor for a git
-`Command` in production code. It removes the 17 repository-local variables
+`Command` in production code. It removes the 19 repository-local variables
 (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_OBJECT_DIRECTORY`, `GIT_CONFIG_PARAMETERS`,
 `GIT_CONFIG_COUNT` and the rest of the list in that file), removes every
 variable named `GIT_TRACE*` or `GIT_REDIRECT_*`, and sets the three trace2
