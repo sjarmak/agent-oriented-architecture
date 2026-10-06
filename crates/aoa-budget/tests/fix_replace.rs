@@ -192,24 +192,37 @@ fn fix_refuses_a_root_whose_link_chain_passes_through_its_archive_name() {
 }
 
 #[test]
-fn fix_refuses_a_root_that_steps_through_its_archive_name_as_a_directory() {
+fn fix_archives_beside_the_file_a_root_reaches_through_a_directory_link_named_like_its_archive() {
     let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().canonicalize().unwrap();
     let body = oversized_body();
-    std::fs::create_dir(dir.path().join("held")).unwrap();
-    let held = dir.path().join("held/real.md");
+    std::fs::create_dir(base.join("held")).unwrap();
+    let held = base.join("held/real.md");
     std::fs::write(&held, &body).unwrap();
-    let archive = dir.path().join("big.archive.md");
-    symlink("held", &archive).unwrap();
-    let root = dir.path().join("big.md");
+    let directory_link = base.join("big.archive.md");
+    symlink("held", &directory_link).unwrap();
+    let root = base.join("big.md");
     symlink("big.archive.md/real.md", &root).unwrap();
 
-    let refused = fix_oversized(&root, dir.path(), 200, "gpt-4o");
+    let fixed = fix_oversized(&root, &base, 200, "gpt-4o").unwrap();
 
-    assert!(
-        matches!(&refused, Err(BudgetError::ArchiveExists { path, .. }) if path == &root),
-        "{refused:?}"
+    assert_eq!(fixed.root, root);
+    assert_eq!(fixed.archive, base.join("held/big.archive.md"));
+    assert_eq!(
+        std::fs::read_to_string(base.join("held/big.archive.md")).unwrap(),
+        body
     );
-    assert_eq!(std::fs::read_to_string(&held).unwrap(), body);
-    assert_eq!(std::fs::read_link(&archive).unwrap(), Path::new("held"));
-    assert_eq!(names_in(dir.path()), ["big.archive.md", "big.md", "held"]);
+    assert!(std::fs::read_to_string(&held)
+        .unwrap()
+        .contains("[big.archive.md]"));
+    assert_eq!(
+        std::fs::read_link(&root).unwrap(),
+        Path::new("big.archive.md/real.md")
+    );
+    assert_eq!(
+        std::fs::read_link(&directory_link).unwrap(),
+        Path::new("held")
+    );
+    assert_eq!(names_in(&base), ["big.archive.md", "big.md", "held"]);
+    assert_eq!(names_in(&base.join("held")), ["big.archive.md", "real.md"]);
 }

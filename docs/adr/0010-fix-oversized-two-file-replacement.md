@@ -22,8 +22,11 @@ name.
 ## Context
 
 `aoa_budget::fix_oversized` brings an over-budget context file under its
-ceiling. It writes the full original body to a sibling `<stem>.archive.md` and
-rewrites the context file as a summary that names the archive.
+ceiling. It writes the full original body to `<stem>.archive.md`, named after
+the path it was given and placed beside the file that path resolves to inside
+the boundary, and rewrites that file as a summary that names the archive. A
+root that is a link therefore stays a link, and the archive stands next to the
+summary that names it rather than next to the link.
 
 Each file is replaced by writing a temporary file beside it, giving that file
 the mode, owner and attributes of the one it replaces, and creating the

@@ -22,6 +22,9 @@ pub enum BudgetError {
     #[error("refusing to archive context file {path}: {archive} already exists")]
     ArchiveExists { path: PathBuf, archive: PathBuf },
 
+    #[error("cannot name an archive for context file {path}: its file name is not UTF-8")]
+    ArchiveNameNotUtf8 { path: PathBuf },
+
     #[error("refusing to replace context file {path}: this process may not write it")]
     RootNotWritable {
         path: PathBuf,

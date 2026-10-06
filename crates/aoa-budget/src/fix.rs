@@ -26,10 +26,7 @@ pub struct FixOutcome {
 /// The body is reduced deterministically (no external model): every markdown
 /// heading is kept verbatim, and each remaining paragraph is condensed to its
 /// first line followed by an elision marker. Paragraphs are dropped from the
-/// tail until the summarized file counts under `ceiling`. The full original
-/// body is archived to a sibling `<stem>.archive.md`, which the summary points
-/// to but does **not** link (it is reference material loaded on demand, so it
-/// stays out of the active context closure).
+/// tail until the summarized file counts under `ceiling`.
 ///
 /// After writing, the closure rooted at `path` is re-resolved and re-counted;
 /// if it is still at or over the ceiling, [`BudgetError::FixFailed`] is
@@ -54,17 +51,20 @@ fn fix_placing(
     let original = root_text(resolve_contained_closure(path, boundary)?, path)?;
     let encoder = target_encoder(target)?;
 
-    let archive_name = archive_name_of(path);
-    let archive_path = directory_of(path).join(&archive_name);
-
+    let opened = open_boundary(boundary)?;
+    let read_from = reach_member(&opened, path, path, boundary)?;
+    let (root_directory, root_name) = opened
+        .split(&read_from)
+        .map_err(|source| io_at(path, source))?;
+    let archive_name = archive_name_of(path.file_name().unwrap_or(&root_name), path)?;
+    let archive_path = root_directory.join(&archive_name);
     let summary = summarize_under(&original, ceiling, &archive_name, |t| {
         count_tokens(&encoder, t)
     });
 
-    let opened = open_boundary(boundary)?;
-    let beside = hold_directory_of(&opened, directory_of(path), path, boundary)?;
+    let within = hold_directory_of(&opened, &root_directory, path, boundary)?;
     let archive_name = OsStr::new(&archive_name);
-    if beside
+    if within
         .holds(archive_name)
         .map_err(|source| io_at(&archive_path, source))?
     {
@@ -73,12 +73,6 @@ fn fix_placing(
             archive: archive_path,
         });
     }
-
-    let read_from = reach_member(&opened, path, path, boundary)?;
-    let (root_directory, root_name) = opened
-        .split(&read_from)
-        .map_err(|source| io_at(path, source))?;
-    let within = hold_directory_of(&opened, &root_directory, path, boundary)?;
     let root_standing = Standing::of_writable(&within, &root_name)
         .and_then(|standing| standing.ok_or_else(|| std::io::ErrorKind::NotFound.into()))
         .map_err(|source| match source.kind() {
@@ -89,7 +83,7 @@ fn fix_placing(
             _ => io_at(path, source),
         })?;
     let archive = Replacement::prepare(
-        &beside,
+        &within,
         archive_name,
         Placement::Creating,
         &original,
@@ -177,19 +171,14 @@ fn hold_directory_of(
         .map_err(|source| io_at(path, source))
 }
 
-fn directory_of(path: &Path) -> &Path {
-    match path.parent() {
-        Some(dir) if !dir.as_os_str().is_empty() => dir,
-        _ => Path::new("."),
-    }
-}
-
-fn archive_name_of(path: &Path) -> String {
-    let stem = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "context".to_string());
-    format!("{stem}.archive.md")
+fn archive_name_of(name: &OsStr, path: &Path) -> Result<String, BudgetError> {
+    let stem = Path::new(name).file_stem().unwrap_or(name);
+    let stem = stem
+        .to_str()
+        .ok_or_else(|| BudgetError::ArchiveNameNotUtf8 {
+            path: path.to_path_buf(),
+        })?;
+    Ok(format!("{stem}.archive.md"))
 }
 
 /// Build an extractive summary that counts under `ceiling`.
@@ -505,6 +494,54 @@ mod tests {
             count_tokens(&encoder, "outside\n")
         );
         assert_eq!(outcome.target_tokens, count_tokens(&encoder, &summary));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_context_file_is_archived_beside_the_file_the_link_names() {
+        let base = tempfile::tempdir().unwrap();
+        let base = base.path().canonicalize().unwrap();
+        let repo = base.join("repo");
+        let docs = repo.join("docs");
+        let real = repo.join("real");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::create_dir(&real).unwrap();
+        std::fs::write(real.join("big.md"), oversized_body()).unwrap();
+        let link = docs.join("link.md");
+        std::os::unix::fs::symlink("../real/big.md", &link).unwrap();
+
+        let outcome = fix_placing(&link, &repo, 200, "gpt-4o", &Placing::REAL).unwrap();
+
+        assert_eq!(outcome.root, link);
+        assert_eq!(outcome.archive, real.join("link.archive.md"));
+        assert_eq!(names_in(&docs), ["link.md"]);
+        assert_eq!(names_in(&real), ["big.md", "link.archive.md"]);
+        assert_eq!(
+            std::fs::read_to_string(real.join("link.archive.md")).unwrap(),
+            oversized_body()
+        );
+        let summary = std::fs::read_to_string(&link).unwrap();
+        assert!(summary.contains("[link.archive.md]"), "{summary}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_context_file_whose_name_is_not_utf8_is_refused_before_anything_is_written() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let name = OsStr::from_bytes(b"big-\xff.md");
+        let root = dir.path().join(name);
+        std::fs::write(&root, oversized_body()).unwrap();
+
+        let refused = fix_placing(&root, dir.path(), 200, "gpt-4o", &Placing::REAL);
+
+        assert!(
+            matches!(&refused, Err(BudgetError::ArchiveNameNotUtf8 { path }) if path == &root),
+            "{refused:?}"
+        );
+        assert_eq!(names_in(dir.path()), [name]);
+        assert_eq!(std::fs::read_to_string(&root).unwrap(), oversized_body());
     }
 
     #[test]
