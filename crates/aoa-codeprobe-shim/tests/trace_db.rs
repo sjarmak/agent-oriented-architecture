@@ -1054,3 +1054,17 @@ impl From<ShimError> for Located {
         Located::Shim(err)
     }
 }
+
+#[test]
+fn a_trace_source_has_one_spelling_on_the_wire_and_another_for_people() {
+    assert_eq!(
+        serde_json::to_value(TraceSource::StreamJson).unwrap(),
+        serde_json::json!("stream_json")
+    );
+    assert_eq!(
+        serde_json::to_value(TraceSource::TraceDb).unwrap(),
+        serde_json::json!("trace_db")
+    );
+    assert_eq!(TraceSource::StreamJson.as_str(), "stream-json");
+    assert_eq!(TraceSource::TraceDb.as_str(), "trace.db");
+}
