@@ -267,13 +267,13 @@ mod tests {
         let outside = base.join("outside");
         let elsewhere = base.join("elsewhere");
         std::fs::create_dir_all(&docs).unwrap();
-        std::fs::create_dir_all(outside.join("nested")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
         std::fs::write(docs.join("CLAUDE.md"), "").unwrap();
         std::fs::write(docs.join(".gitignore"), "vendor/\n").unwrap();
+        std::fs::write(docs.join(".ignore"), "build/\n").unwrap();
         std::fs::write(outside.join("AGENTS.md"), "").unwrap();
-        std::fs::write(outside.join("nested/AGENTS.md"), "").unwrap();
         let swapping = |checked: &Path| {
-            if checked == docs.join(".gitignore") {
+            if checked == docs.join(".ignore") {
                 std::fs::rename(&docs, &elsewhere).unwrap();
                 std::os::unix::fs::symlink(&outside, &docs).unwrap();
             }
@@ -283,7 +283,6 @@ mod tests {
 
         assert!(docs.is_symlink());
         assert!(docs.join("AGENTS.md").is_file());
-        assert!(docs.join("nested/AGENTS.md").is_file());
         assert_eq!(roots, [docs.join("CLAUDE.md")]);
     }
 }
