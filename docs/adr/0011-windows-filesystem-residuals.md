@@ -47,16 +47,37 @@ does not:
   `Boundary::reach` in `boundary.rs` decides whether a linked file exists and
   where it resolves by walking each step of its path with `statat` and
   `readlinkat` relative to a directory descended from the held boundary
-  descriptor, the same descent `open_member` then reads through, so a
-  boundary swapped for a link after it was held resolves and reads what was
-  held and never consults the replacement
-  (`a_linked_file_the_held_directory_has_is_read_after_the_directory_is_swapped_for_a_link_lacking_it`
-  and
+  descriptor, the same descent `open_member` then reads through. When the
+  walk ends without a member, `Boundary::kind_named` decides what the closure
+  says about the link, a broken symlink, an unreadable entry or nothing, with
+  the same descent and a no-follow `statat` of the final name in the
+  directory the walk reached. A boundary swapped for a link after it was held
+  therefore resolves, reads and classifies what was held and consults the
+  replacement for none of it
+  (`a_linked_file_the_held_directory_has_is_read_after_the_directory_is_swapped_for_a_link_lacking_it`,
   `a_linked_file_only_the_replacement_has_is_absent_after_the_directory_is_swapped_for_a_link`
+  and
+  `a_link_only_the_replacement_has_is_absent_not_broken_after_the_directory_is_swapped_for_a_link`
   in `tests/closure_bounds.rs`). The non-Unix arm of the same type uses
-  `std::fs` by path under the held directory's name, and its `reach` walks
-  with `symlink_metadata` and `read_link` from the canonical name. It cannot
-  hold the directory, so the swap is not caught there.
+  `std::fs` by path under the held directory's name, and its `reach` and
+  `kind_named` walk with `symlink_metadata` and `read_link` from the
+  canonical name. It cannot hold the directory, so the swap is not caught
+  there.
+- **`aoa-budget` needs read permission on every directory it descends on
+  Unix other than Linux and Android.** The descent above opens each directory
+  with `O_PATH | O_DIRECTORY` on Linux and Android and with
+  `O_RDONLY | O_DIRECTORY` elsewhere (`descend::TRAVERSE` in `boundary.rs`),
+  because only Linux has `O_PATH`. The pathname lookup the descent replaced
+  needed search permission on a directory it passed through; `O_RDONLY` needs
+  read permission on it. On those systems an execute-only directory (mode
+  `0111`) beneath the boundary makes `reach` fail with `PermissionDenied`, so
+  a linked file under it is reported unreadable where the pathname walk would
+  have read it or reported it absent, and a link whose target steps through
+  such a directory with `..` fails the same way. CI runs Linux only and every
+  read of a member already goes through the same descent, so the code stays
+  and this record is where the difference is stated. The Linux arm is the
+  specification; a port that gains an `O_PATH` equivalent overturns this
+  bullet.
 - **`aoa-lint` walks, reads ignore rules and reads discovered roots through
   held directories.** `crates/aoa-lint/src/discover.rs` holds the linted
   directory through `aoa_budget::Enclosure::open`, lists each directory from

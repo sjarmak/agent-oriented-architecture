@@ -30,7 +30,7 @@ enum Lost {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Kind {
+pub(crate) enum Kind {
     Directory,
     Link,
     Other,
@@ -119,6 +119,20 @@ impl Boundary {
             };
         }
         Ok(Reached::Member { entry, resolved })
+    }
+
+    pub(crate) fn kind_named(&self, target: &Path) -> io::Result<Kind> {
+        let (Some(parent), Some(name)) = (target.parent(), target.file_name()) else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "target path names no file",
+            ));
+        };
+        match self.reach(parent)? {
+            Reached::Member { resolved, .. } => self.kind_beneath(&resolved, name),
+            Reached::Absent { .. } | Reached::Outside => Err(io::ErrorKind::NotFound.into()),
+            Reached::Looping { .. } => Err(too_many_links()),
+        }
     }
 
     fn step(

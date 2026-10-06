@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::boundary::{open_following_links, too_many_links, Boundary, Reached};
+use crate::boundary::{open_following_links, too_many_links, Boundary, Kind, Reached};
 use crate::directory::Directory;
 use crate::error::BudgetError;
 use crate::normalize_path;
@@ -242,7 +242,7 @@ fn resolve(
                 }
                 Ok(Reached::Absent { entry } | Reached::Looping { entry }) => {
                     if resolved_members.insert(entry) {
-                        unread.extend(unresolved_link(&path));
+                        unread.extend(unresolved_link(boundary, &path));
                     }
                     absent.insert(path);
                     continue;
@@ -286,10 +286,10 @@ fn resolve(
     })
 }
 
-fn unresolved_link(path: &Path) -> Option<UnreadLink> {
-    let reason = match std::fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_symlink() => UnreadReason::BrokenSymlink,
-        Ok(_) => UnreadReason::Unreadable,
+fn unresolved_link(boundary: &Boundary, path: &Path) -> Option<UnreadLink> {
+    let reason = match boundary.kind_named(path) {
+        Ok(Kind::Link) => UnreadReason::BrokenSymlink,
+        Ok(Kind::Directory | Kind::Other) => UnreadReason::Unreadable,
         Err(error)
             if matches!(
                 error.kind(),
