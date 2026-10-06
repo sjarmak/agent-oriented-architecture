@@ -1,4 +1,4 @@
-# 0011: Windows keeps four filesystem checks that are checks, then uses
+# 0011: Windows keeps five sites by path where Unix acts through a held handle
 
 **Status:** Accepted. Recorded in 2026-10 from aoa-ea601, the Codex review of
 aoa-rqnb8 and aoa-4xshs. The review found two places that re-resolved a path

@@ -1,4 +1,6 @@
-use std::io::{Read, Write};
+#[cfg(unix)]
+use std::io::Read;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use aoa_path_trust::{safe_join_nofollow, validate_single_component, PathTrustError};
