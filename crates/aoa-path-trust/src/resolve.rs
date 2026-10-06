@@ -18,7 +18,7 @@ use super::PathTrustError;
 ///
 /// Keeps the caller's spelling of a path that may be reached through a link, so
 /// a policy can match the alias as well as the destination.
-pub fn normalize_lexically(path: &Path) -> Result<PathBuf, PathTrustError> {
+pub fn normalize_lexically(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
         match component {
@@ -34,7 +34,7 @@ pub fn normalize_lexically(path: &Path) -> Result<PathBuf, PathTrustError> {
             Component::Normal(part) => normalized.push(part),
         }
     }
-    Ok(normalized)
+    normalized
 }
 
 /// Resolve `candidate` to the location a write would actually reach, even when
@@ -168,11 +168,11 @@ mod tests {
     #[test]
     fn lexical_reduction_drops_cur_dir_and_pops_parents() {
         assert_eq!(
-            normalize_lexically(Path::new("/repo/./a/b/../c")).expect("reduce"),
+            normalize_lexically(Path::new("/repo/./a/b/../c")),
             PathBuf::from("/repo/a/c")
         );
         assert_eq!(
-            normalize_lexically(Path::new("a/../../b/../../c")).expect("reduce"),
+            normalize_lexically(Path::new("a/../../b/../../c")),
             PathBuf::from("../../c")
         );
     }
@@ -186,7 +186,7 @@ mod tests {
                 PathBuf::from("/")
             };
             assert_eq!(
-                normalize_lexically(Path::new(spelled)).expect("reduce"),
+                normalize_lexically(Path::new(spelled)),
                 expected,
                 "{spelled}"
             );

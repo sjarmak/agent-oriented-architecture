@@ -78,7 +78,7 @@ use aoa_enforce::{
 };
 use aoa_path_trust::{
     normalize_lexically, read_regular_file_nofollow, resolve_canonicalizing,
-    resolve_repository_root, resolve_written_path, PathTrustError, RepositoryRootError,
+    resolve_repository_root, resolve_written_path, RepositoryRootError,
 };
 use aoa_policy::Policy;
 use aoa_trace::SpanType;
@@ -524,8 +524,8 @@ fn target_candidate(base: &Path, raw: &str) -> Result<PathBuf> {
 }
 
 fn scope_under(root: &Path, candidate: &Path) -> Result<WriteScope> {
-    let lexical = contained(root, normalize_lexically(candidate))?;
-    let resolved = contained(root, resolve_canonicalizing(candidate))?;
+    let lexical = contained(root, &normalize_lexically(candidate))?;
+    let resolved = contained(root, &resolve_canonicalizing(candidate)?)?;
 
     Ok(match (lexical, resolved) {
         (None, None) => WriteScope::Outside,
@@ -538,10 +538,8 @@ fn scope_under(root: &Path, candidate: &Path) -> Result<WriteScope> {
 }
 
 /// The repository-relative spelling of one resolution of a hook target, or
-/// `None` when that resolution lands outside the repository. A resolution
-/// error is a real failure and propagates.
-fn contained(base: &Path, resolution: Result<PathBuf, PathTrustError>) -> Result<Option<String>> {
-    let path = resolution.map_err(|err| anyhow!(err))?;
+/// `None` when that resolution lands outside the repository.
+fn contained(base: &Path, path: &Path) -> Result<Option<String>> {
     let Ok(relative) = path.strip_prefix(base) else {
         return Ok(None);
     };
