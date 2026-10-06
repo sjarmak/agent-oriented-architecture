@@ -14,6 +14,7 @@ use crate::error::LintError;
 const CONTEXT_ROOT_NAMES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
 const IGNORE_FILE_NAMES: [&str; 2] = [".gitignore", ".ignore"];
 const UTF8_BOM: char = '\u{feff}';
+const MAX_IGNORE_FILE_BYTES: u64 = 1 << 20;
 
 pub struct LintedDirectory {
     enclosure: Enclosure,
@@ -164,7 +165,7 @@ impl<'a> Rules<'a> {
         name: &str,
     ) -> Result<Option<String>, LintError> {
         let path = directory.path().join(name);
-        let Some(mut file) = self.open(directory, name)? else {
+        let Some(file) = self.open(directory, name)? else {
             return Ok(None);
         };
         let found = file
@@ -181,8 +182,15 @@ impl<'a> Rules<'a> {
         }
         (self.checked)(&path);
         let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)
+        file.take(MAX_IGNORE_FILE_BYTES + 1)
+            .read_to_end(&mut bytes)
             .map_err(|source| walk_failed(&path, source))?;
+        if bytes.len() as u64 > MAX_IGNORE_FILE_BYTES {
+            return Err(LintError::IgnoreFileOversized {
+                path,
+                max_bytes: MAX_IGNORE_FILE_BYTES,
+            });
+        }
         String::from_utf8(bytes).map(Some).map_err(|invalid| {
             walk_failed(
                 &path,

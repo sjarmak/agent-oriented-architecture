@@ -25,6 +25,9 @@ pub enum LintError {
     #[error("ignore file {path} has another name, so what it holds can be written from outside the linted directory")]
     IgnoreFileHardLinked { path: PathBuf },
 
+    #[error("ignore file {path} is larger than {max_bytes} bytes")]
+    IgnoreFileOversized { path: PathBuf, max_bytes: u64 },
+
     #[error("no context files to lint")]
     NoRoots,
 }

@@ -709,3 +709,26 @@ fn paths_of_files(report: &LintReport) -> Vec<PathBuf> {
         .map(|file| file.path.clone())
         .collect()
 }
+
+#[test]
+fn an_ignore_file_larger_than_a_mebibyte_is_refused_and_one_exactly_that_size_is_read() {
+    let base = TempDir::new().expect("tempdir");
+    let repo = base.path().join("repo");
+    write(&repo, "AGENTS.md", "# Root\n");
+    write(&repo, "skipped/AGENTS.md", "# Skipped\n");
+    let filler = "#".repeat((1 << 20) - "skipped/\n".len());
+    let ignore_file = write(&repo, ".gitignore", &format!("skipped/\n{filler}"));
+
+    assert_eq!(relative_roots(&repo), [PathBuf::from("AGENTS.md")]);
+
+    fs::write(&ignore_file, format!("skipped/\n{filler}#")).expect("grow the ignore file");
+    let refused = discover_context_roots(&repo);
+
+    assert!(
+        matches!(
+            &refused,
+            Err(LintError::IgnoreFileOversized { path, max_bytes: 1_048_576 }) if path == &ignore_file
+        ),
+        "{refused:?}"
+    );
+}
