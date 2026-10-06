@@ -47,17 +47,32 @@ does not:
   The non-Unix arm of the same type uses `std::fs` by path under the held
   directory's name. It cannot hold the directory, so the swap is not caught
   there.
-- **`aoa-lint` reads ignore rules from the handle it validated.**
-  `crates/aoa-lint/src/discover.rs` opens each `.gitignore` and `.ignore`
-  through `aoa_budget::Enclosure`, which resolves the path inside the linted
-  directory and opens the resolved member with `O_NOFOLLOW` on every step. The
-  kind, link count and bytes come from that one handle, and the matcher is
-  built from those bytes; no walker reopens the file by path. A directory
-  swapped for a link after the check and before the read changes nothing
-  (`a_directory_swapped_for_a_link_between_the_check_and_the_read_keeps_the_rules_that_were_checked`
-  in `discover.rs`). On Windows the
-  open is `File::open` of the resolved path, so a swap between resolution and
-  open is not caught, and the link-count refusal below does not apply.
+- **`aoa-lint` walks, reads ignore rules and reads discovered roots through
+  held directories.** `crates/aoa-lint/src/discover.rs` holds the linted
+  directory through `aoa_budget::Enclosure::hold`, lists each directory from
+  its descriptor (`Directory::entries`) and steps into a child with
+  `openat(O_DIRECTORY | O_NOFOLLOW)` on that descriptor (`Directory::descend`),
+  so a directory swapped for a link after it was listed is never entered and
+  never re-listed by path. Each `.gitignore` and `.ignore` is opened with
+  `O_NOFOLLOW` relative to the held directory (`Directory::open_entry`); only
+  an entry that is itself a link is resolved by path, through the boundary,
+  and a link that leaves the linted directory is refused. The kind, link count
+  and bytes come from that one handle, and the matcher is built from those
+  bytes. A directory swapped for a link after its rules were checked lists
+  what was held, not what the link reaches
+  (`a_directory_swapped_for_a_link_after_its_rules_were_checked_lists_what_was_held_not_what_the_link_reaches`
+  in `discover.rs`). `lint_context_roots` then reads a discovered root with
+  `resolve_contained_closure`, which reaches it inside the linted directory
+  and opens it through a `O_NOFOLLOW` descriptor chain, so a root whose
+  directory became a link leaving that directory is refused as
+  `OutsideBoundary` instead of read
+  (`a_discovered_root_whose_directory_became_a_link_leaving_the_linted_directory_is_refused_unread`
+  in `tests/discovery.rs`). A root the caller named is still read as named,
+  links followed. On Windows `Directory::entries` is `std::fs::read_dir` of
+  the held name, `Directory::descend` reopens the child by path and
+  `Directory::open_entry` is `symlink_metadata` then `File::open` of the
+  joined path, so a swap between any of those steps is not caught, and the
+  link-count refusal below does not apply.
 - **`aoa-lint` cannot see a second name on Windows.** `has_another_name` reads
   the Unix link count. The Windows arm returns `false`, so an ignore file that
   is a hard link to a file outside the linted directory is read there. Rust's
@@ -97,8 +112,8 @@ does not:
 
 - `crates/aoa-budget/src/directory.rs`, `boundary.rs`, `replace.rs` and
   `fix.rs` hold the Unix descriptor-relative placement and its non-Unix arm.
-- `crates/aoa-lint/src/discover.rs` holds the handle-validated ignore reader
-  and `has_another_name`.
+- `crates/aoa-lint/src/discover.rs` holds the held-directory walk, the
+  handle-validated ignore reader and `has_another_name`.
 - `crates/aoa-path-trust/src/nofollow.rs` holds both arms of the trust-file
   open.
 - `crates/aoa-audit/src/answer.rs` holds both arms of the deadline reader.

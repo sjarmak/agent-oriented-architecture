@@ -136,6 +136,15 @@ impl Enclosure {
         })
     }
 
+    pub fn hold(&self) -> Result<Directory, BudgetError> {
+        self.boundary
+            .hold_root(self.path.clone())
+            .map_err(|source| BudgetError::Io {
+                path: self.path.clone(),
+                source,
+            })
+    }
+
     pub fn open_file(&self, path: &Path) -> Result<Option<File>, BudgetError> {
         let io_at = |source| BudgetError::Io {
             path: path.to_path_buf(),

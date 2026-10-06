@@ -2,9 +2,29 @@ use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::hash::{BuildHasher, Hasher, RandomState};
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const FRESH_NAME_ATTEMPTS: usize = 32;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    pub name: OsString,
+    pub kind: EntryKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
+    Directory,
+    File,
+    Other,
+}
+
+#[derive(Debug)]
+pub enum Opened {
+    File(File),
+    Absent,
+    Link,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Placement {
@@ -12,13 +32,17 @@ pub(crate) enum Placement {
     Creating,
 }
 
-pub(crate) struct Directory {
+pub struct Directory {
     path: PathBuf,
     #[cfg(unix)]
     fd: std::os::fd::OwnedFd,
 }
 
 impl Directory {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     pub(crate) fn naming(&self, entry: &OsStr) -> PathBuf {
         self.path.join(entry)
     }
@@ -61,10 +85,68 @@ impl Directory {
         Ok(File::from(fd))
     }
 
-    pub(crate) fn open_member(&self, name: &OsStr) -> io::Result<File> {
+    pub fn open_member(&self, name: &OsStr) -> io::Result<File> {
         let flags = crate::boundary::descend::MEMBER;
         let fd = rustix::fs::openat(&self.fd, name, flags, rustix::fs::Mode::empty())?;
         Ok(File::from(fd))
+    }
+
+    pub fn open_entry(&self, name: &OsStr) -> io::Result<Opened> {
+        use rustix::io::Errno;
+
+        let flags = crate::boundary::descend::MEMBER;
+        match rustix::fs::openat(&self.fd, name, flags, rustix::fs::Mode::empty()) {
+            Ok(fd) => Ok(Opened::File(File::from(fd))),
+            Err(Errno::NOENT) => Ok(Opened::Absent),
+            Err(Errno::LOOP) => Ok(Opened::Link),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    pub fn descend(&self, name: &OsStr) -> io::Result<Self> {
+        use rustix::fs::OFlags;
+
+        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let fd = rustix::fs::openat(&self.fd, name, flags, rustix::fs::Mode::empty())?;
+        Ok(Self {
+            path: self.naming(name),
+            fd,
+        })
+    }
+
+    pub fn entries(&self) -> io::Result<Vec<Entry>> {
+        use std::os::unix::ffi::OsStringExt;
+
+        let mut entries = Vec::new();
+        for entry in rustix::fs::Dir::read_from(&self.fd)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            if name == c"." || name == c".." {
+                continue;
+            }
+            let name = OsString::from_vec(name.to_bytes().to_vec());
+            let kind = self.kind_of(entry.file_type(), &name)?;
+            entries.push(Entry { name, kind });
+        }
+        entries.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(entries)
+    }
+
+    fn kind_of(&self, listed: rustix::fs::FileType, name: &OsStr) -> io::Result<EntryKind> {
+        use rustix::fs::{AtFlags, FileType};
+
+        let found = match listed {
+            FileType::Unknown => {
+                let stat = rustix::fs::statat(&self.fd, name, AtFlags::SYMLINK_NOFOLLOW)?;
+                FileType::from_raw_mode(stat.st_mode)
+            }
+            known => known,
+        };
+        Ok(match found {
+            FileType::Directory => EntryKind::Directory,
+            FileType::RegularFile => EntryKind::File,
+            _ => EntryKind::Other,
+        })
     }
 
     fn create_new(&self, name: &OsStr) -> io::Result<File> {
@@ -145,8 +227,43 @@ impl Directory {
             .open(self.naming(name))
     }
 
-    pub(crate) fn open_member(&self, name: &OsStr) -> io::Result<File> {
+    pub fn open_member(&self, name: &OsStr) -> io::Result<File> {
         File::open(self.naming(name))
+    }
+
+    pub fn open_entry(&self, name: &OsStr) -> io::Result<Opened> {
+        let path = self.naming(name);
+        match std::fs::symlink_metadata(&path) {
+            Ok(found) if found.is_symlink() => Ok(Opened::Link),
+            Ok(_) => File::open(path).map(Opened::File),
+            Err(absent) if absent.kind() == io::ErrorKind::NotFound => Ok(Opened::Absent),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn descend(&self, name: &OsStr) -> io::Result<Self> {
+        Self::hold(self.naming(name))
+    }
+
+    pub fn entries(&self) -> io::Result<Vec<Entry>> {
+        let mut entries = Vec::new();
+        for entry in std::fs::read_dir(&self.path)? {
+            let entry = entry?;
+            let found = entry.file_type()?;
+            let kind = if found.is_dir() {
+                EntryKind::Directory
+            } else if found.is_file() {
+                EntryKind::File
+            } else {
+                EntryKind::Other
+            };
+            entries.push(Entry {
+                name: entry.file_name(),
+                kind,
+            });
+        }
+        entries.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(entries)
     }
 
     fn create_new(&self, name: &OsStr) -> io::Result<File> {
@@ -206,6 +323,54 @@ mod tests {
             .collect();
         names.sort();
         names
+    }
+
+    #[test]
+    fn a_directory_swapped_for_a_link_after_it_was_held_lists_and_serves_what_was_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(base.join("repo/docs/deeper")).unwrap();
+        std::fs::write(base.join("repo/docs/inside.md"), "inside\n").unwrap();
+        std::fs::create_dir(base.join("outside")).unwrap();
+        std::fs::write(base.join("outside/planted.md"), "outside\n").unwrap();
+        let repo = held(&base.join("repo"));
+        let docs = repo.descend(OsStr::new("docs")).unwrap();
+        std::fs::rename(base.join("repo/docs"), base.join("moved")).unwrap();
+        std::os::unix::fs::symlink(base.join("outside"), base.join("repo/docs")).unwrap();
+        assert!(base.join("repo/docs/planted.md").is_file());
+
+        let listed = docs.entries().unwrap();
+        let mut text = String::new();
+        std::io::Read::read_to_string(
+            &mut docs.open_member(OsStr::new("inside.md")).unwrap(),
+            &mut text,
+        )
+        .unwrap();
+        let through_the_link = repo.descend(OsStr::new("docs"));
+
+        assert_eq!(
+            listed,
+            [
+                Entry {
+                    name: OsString::from("deeper"),
+                    kind: EntryKind::Directory
+                },
+                Entry {
+                    name: OsString::from("inside.md"),
+                    kind: EntryKind::File
+                },
+            ]
+        );
+        assert_eq!(docs.path(), base.join("repo/docs"));
+        assert_eq!(text, "inside\n");
+        assert!(through_the_link.is_err());
+        assert_eq!(
+            repo.entries().unwrap(),
+            [Entry {
+                name: OsString::from("docs"),
+                kind: EntryKind::Other
+            }]
+        );
     }
 
     #[test]

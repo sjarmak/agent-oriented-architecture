@@ -77,7 +77,7 @@ fn every_root_is_linted_and_a_shared_file_is_linted_once() {
     write(dir.path(), "shared.md", DUPLICATED_HEADING);
 
     let report =
-        lint_context_roots(&[root, nested], dir.path(), "o200k_base").expect("lint succeeds");
+        lint_context_roots(&[], &[root, nested], dir.path(), "o200k_base").expect("lint succeeds");
 
     let duplicated: Vec<PathBuf> = report
         .findings
@@ -113,8 +113,13 @@ fn each_root_reports_its_own_closure_tokens_and_a_shared_file_counts_in_both() {
     );
     let shared = write(dir.path(), "shared.md", "# Shared\n\nalpha beta gamma\n");
 
-    let report = lint_context_roots(&[root.clone(), nested.clone()], dir.path(), "o200k_base")
-        .expect("lint succeeds");
+    let report = lint_context_roots(
+        &[],
+        &[root.clone(), nested.clone()],
+        dir.path(),
+        "o200k_base",
+    )
+    .expect("lint succeeds");
 
     let counted = |path: &PathBuf| {
         report
@@ -166,8 +171,8 @@ fn a_suppressed_file_is_reported_but_left_out_of_the_closure_gating_tokens() {
         "# aoa-allow: oversized-context generated reference\n\n# Big\n\nalpha beta\n",
     );
 
-    let report =
-        lint_context_roots(std::slice::from_ref(&root), dir.path(), "o200k_base").expect("lint");
+    let report = lint_context_roots(&[], std::slice::from_ref(&root), dir.path(), "o200k_base")
+        .expect("lint");
 
     let closure = &report.closures[0];
     let [root_file, big] = closure.files.as_slice() else {
@@ -184,7 +189,7 @@ fn a_suppressed_file_is_reported_but_left_out_of_the_closure_gating_tokens() {
 
 #[test]
 fn linting_no_roots_fails() {
-    let result = lint_context_roots(&[], Path::new("."), "o200k_base");
+    let result = lint_context_roots(&[], &[], Path::new("."), "o200k_base");
     assert!(matches!(result, Err(LintError::NoRoots)));
 }
 
@@ -588,4 +593,47 @@ fn ignore_file_caught_in_a_link_loop_fails_discovery_and_names_the_file() {
             "{name}: {refused:?}"
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_discovered_root_whose_directory_became_a_link_leaving_the_linted_directory_is_refused_unread()
+{
+    use aoa_lint::ClosureBudget;
+
+    let dir = TempDir::new().expect("tempdir");
+    let base = dir.path().canonicalize().expect("canonical");
+    let repo = base.join("repo");
+    write(&repo, "AGENTS.md", "# Root\n");
+    let outside = write(&base, "outside/CLAUDE.md", DUPLICATED_HEADING);
+    let discovered = repo.join("docs/CLAUDE.md");
+    std::os::unix::fs::symlink(base.join("outside"), repo.join("docs")).expect("swap docs");
+    assert_eq!(
+        fs::read_to_string(&discovered).expect("the link reaches the outside file"),
+        DUPLICATED_HEADING
+    );
+
+    let refused = lint_context_roots(&[], std::slice::from_ref(&discovered), &repo, "o200k_base");
+    let named = lint_context_roots(std::slice::from_ref(&discovered), &[], &repo, "o200k_base")
+        .expect("a root the caller named is read as named");
+
+    assert!(
+        matches!(
+            &refused,
+            Err(LintError::Budget(aoa_budget::BudgetError::OutsideBoundary { path, boundary }))
+                if path == &discovered && boundary == &repo
+        ),
+        "{refused:?}"
+    );
+    let named_roots: Vec<&ClosureBudget> = named.closures.iter().collect();
+    assert_eq!(named_roots[0].root, discovered);
+    assert_eq!(named.budget.files.len(), 1);
+    assert!(named
+        .findings
+        .iter()
+        .any(|finding| finding.category == SmellCategory::Duplication));
+    assert_eq!(
+        fs::read_to_string(&outside).expect("outside file untouched"),
+        DUPLICATED_HEADING
+    );
 }

@@ -92,8 +92,9 @@ struct SuppressionView {
 /// from the composed budget report.
 pub fn run(args: &LintArgs) -> Result<i32> {
     let dir = linted_directory(args.root.as_deref());
-    let roots = context_roots(args.root.as_deref(), dir)?;
-    let report = aoa_lint::lint_context_roots(&roots, dir, &args.tokenizer)
+    let named: Vec<PathBuf> = args.root.iter().map(|root| normalize_path(root)).collect();
+    let discovered = discovered_roots(&named, dir)?;
+    let report = aoa_lint::lint_context_roots(&named, &discovered, dir, &args.tokenizer)
         .context("failed to lint context")?;
 
     let changed: Option<BTreeSet<PathBuf>> = if args.changed.is_empty() {
@@ -135,7 +136,7 @@ pub fn run(args: &LintArgs) -> Result<i32> {
     };
 
     let view = LintView {
-        roots,
+        roots: named.into_iter().chain(discovered).collect(),
         budget,
         findings,
         suppressed,
@@ -155,27 +156,19 @@ fn linted_directory(root: Option<&Path>) -> &Path {
         .unwrap_or(Path::new("."))
 }
 
-fn context_roots(root: Option<&Path>, dir: &Path) -> Result<Vec<PathBuf>> {
-    let nested = aoa_lint::discover_context_roots(dir)
-        .with_context(|| format!("failed to find context files under {}", dir.display()))?;
-
-    let explicit = root.map(normalize_path);
-    let roots: Vec<PathBuf> = explicit
-        .iter()
-        .cloned()
-        .chain(
-            nested
-                .into_iter()
-                .filter(|path| explicit.as_ref() != Some(path)),
-        )
+fn discovered_roots(named: &[PathBuf], dir: &Path) -> Result<Vec<PathBuf>> {
+    let discovered: Vec<PathBuf> = aoa_lint::discover_context_roots(dir)
+        .with_context(|| format!("failed to find context files under {}", dir.display()))?
+        .into_iter()
+        .filter(|path| !named.contains(path))
         .collect();
-    if roots.is_empty() {
+    if named.is_empty() && discovered.is_empty() {
         bail!(
             "no AGENTS.md or CLAUDE.md found under {}; pass --root to name a context file",
             dir.display()
         );
     }
-    Ok(roots)
+    Ok(discovered)
 }
 
 fn render_human(view: &LintView) -> String {

@@ -216,6 +216,16 @@ impl Boundary {
     }
 
     #[cfg(unix)]
+    pub(crate) fn hold_root(&self, named: PathBuf) -> io::Result<Directory> {
+        Directory::hold(&self.directory, named)
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn hold_root(&self, named: PathBuf) -> io::Result<Directory> {
+        Directory::hold(named)
+    }
+
+    #[cfg(unix)]
     pub(crate) fn open_member(&self, resolved: &Path) -> io::Result<File> {
         let (directory, name) = match self.beneath(resolved)?.as_os_str().is_empty() {
             true => (self.directory.try_clone()?, OsString::from(".")),

@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use aoa_budget::{
-    count_budget, normalize_path, resolve_closure_within, BudgetReport, Closure, Config,
-    FileBudget, UnreadLink,
+    count_budget, normalize_path, resolve_closure_within, resolve_contained_closure, BudgetReport,
+    Closure, Config, FileBudget, UnreadLink,
 };
 
 use crate::detectors::{self, LintedFile};
@@ -26,15 +26,16 @@ pub fn lint_context(root: &Path, target_tokenizer: &str) -> Result<LintReport, L
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    lint_context_roots(&[root.to_path_buf()], boundary, target_tokenizer)
+    lint_context_roots(&[root.to_path_buf()], &[], boundary, target_tokenizer)
 }
 
 pub fn lint_context_roots(
-    roots: &[PathBuf],
+    named: &[PathBuf],
+    discovered: &[PathBuf],
     boundary: &Path,
     target_tokenizer: &str,
 ) -> Result<LintReport, LintError> {
-    let (merged, members) = resolve_members(roots, boundary)?;
+    let (merged, members) = resolve_members(named, discovered, boundary)?;
     let budget = count_budget(
         &merged,
         target_tokenizer,
@@ -75,16 +76,28 @@ struct Member {
 }
 
 fn resolve_members(
-    roots: &[PathBuf],
+    named: &[PathBuf],
+    discovered: &[PathBuf],
     boundary: &Path,
 ) -> Result<(Closure, Vec<Member>), LintError> {
-    let first = roots.first().ok_or(LintError::NoRoots)?;
+    let first = named
+        .first()
+        .or(discovered.first())
+        .ok_or(LintError::NoRoots)?;
     let mut seen = BTreeSet::new();
     let mut files = Vec::new();
     let mut absent = BTreeSet::new();
-    let mut members = Vec::with_capacity(roots.len());
-    for root in roots {
-        let closure = resolve_closure_within(root, boundary)?;
+    let mut members = Vec::with_capacity(named.len() + discovered.len());
+    let closures = named
+        .iter()
+        .map(|root| resolve_closure_within(root, boundary))
+        .chain(
+            discovered
+                .iter()
+                .map(|root| resolve_contained_closure(root, boundary)),
+        );
+    for closure in closures {
+        let closure = closure?;
         members.push(Member {
             root: closure.root,
             paths: closure.files.iter().map(|file| file.path.clone()).collect(),

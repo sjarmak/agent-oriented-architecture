@@ -34,6 +34,7 @@ pub use closure::{
     resolve_closure, resolve_closure_within, resolve_contained_closure, Closure, ContextFile,
     Enclosure, UnreadLink, UnreadReason, MAX_CONTEXT_FILE_BYTES,
 };
+pub use directory::{Directory, Entry, EntryKind, Opened};
 pub use error::BudgetError;
 pub use fix::{fix_oversized, FixOutcome};
 pub use path::normalize_path;
