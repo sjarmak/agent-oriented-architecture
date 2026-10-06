@@ -2,9 +2,15 @@ use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::hash::{BuildHasher, Hasher, RandomState};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 const FRESH_NAME_ATTEMPTS: usize = 32;
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{name:?} does not name one entry of a directory")]
+pub struct NotAnEntryName {
+    pub name: OsString,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
@@ -67,6 +73,27 @@ fn random() -> u64 {
     RandomState::new().build_hasher().finish()
 }
 
+fn one_entry_name(name: &OsStr) -> io::Result<&OsStr> {
+    let mut components = Path::new(name).components();
+    let one_normal = matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(_)), None)
+    );
+    let separated = name
+        .as_encoded_bytes()
+        .iter()
+        .any(|byte| std::path::is_separator(char::from(*byte)));
+    if one_normal && !separated {
+        return Ok(name);
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        NotAnEntryName {
+            name: name.to_os_string(),
+        },
+    ))
+}
+
 #[cfg(unix)]
 impl Directory {
     pub(crate) fn hold(traversed: &std::os::fd::OwnedFd, path: PathBuf) -> io::Result<Self> {
@@ -85,7 +112,8 @@ impl Directory {
         Ok(File::from(fd))
     }
 
-    pub fn open_member(&self, name: &OsStr) -> io::Result<File> {
+    pub(crate) fn open_member(&self, name: &OsStr) -> io::Result<File> {
+        let name = one_entry_name(name)?;
         let flags = crate::boundary::descend::MEMBER;
         let fd = rustix::fs::openat(&self.fd, name, flags, rustix::fs::Mode::empty())?;
         Ok(File::from(fd))
@@ -94,6 +122,7 @@ impl Directory {
     pub fn open_entry(&self, name: &OsStr) -> io::Result<Opened> {
         use rustix::io::Errno;
 
+        let name = one_entry_name(name)?;
         let flags = crate::boundary::descend::MEMBER;
         match rustix::fs::openat(&self.fd, name, flags, rustix::fs::Mode::empty()) {
             Ok(fd) => Ok(Opened::File(File::from(fd))),
@@ -106,6 +135,7 @@ impl Directory {
     pub fn descend(&self, name: &OsStr) -> io::Result<Self> {
         use rustix::fs::OFlags;
 
+        let name = one_entry_name(name)?;
         let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
         let fd = rustix::fs::openat(&self.fd, name, flags, rustix::fs::Mode::empty())?;
         Ok(Self {
@@ -227,12 +257,12 @@ impl Directory {
             .open(self.naming(name))
     }
 
-    pub fn open_member(&self, name: &OsStr) -> io::Result<File> {
-        File::open(self.naming(name))
+    pub(crate) fn open_member(&self, name: &OsStr) -> io::Result<File> {
+        File::open(self.naming(one_entry_name(name)?))
     }
 
     pub fn open_entry(&self, name: &OsStr) -> io::Result<Opened> {
-        let path = self.naming(name);
+        let path = self.naming(one_entry_name(name)?);
         match std::fs::symlink_metadata(&path) {
             Ok(found) if found.is_symlink() => Ok(Opened::Link),
             Ok(_) => File::open(path).map(Opened::File),
@@ -242,7 +272,7 @@ impl Directory {
     }
 
     pub fn descend(&self, name: &OsStr) -> io::Result<Self> {
-        Self::hold(self.naming(name))
+        Self::hold(self.naming(one_entry_name(name)?))
     }
 
     pub fn entries(&self) -> io::Result<Vec<Entry>> {
@@ -371,6 +401,71 @@ mod tests {
                 kind: EntryKind::Other
             }]
         );
+    }
+
+    #[test]
+    fn a_name_that_is_not_one_entry_is_refused_before_anything_opens() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(base.join("repo/docs")).unwrap();
+        std::fs::write(base.join("repo/docs/inside.md"), "inside\n").unwrap();
+        std::fs::create_dir(base.join("outside")).unwrap();
+        std::fs::write(base.join("outside/planted.md"), "outside\n").unwrap();
+        std::os::unix::fs::symlink(base.join("outside"), base.join("repo/link")).unwrap();
+        let repo = held(&base.join("repo"));
+        let absolute = base.join("outside").into_os_string();
+        let names: [&OsStr; 10] = [
+            OsStr::new(""),
+            OsStr::new("."),
+            OsStr::new(".."),
+            OsStr::new("docs/"),
+            OsStr::new("docs/inside.md"),
+            OsStr::new("./docs"),
+            OsStr::new("../outside"),
+            OsStr::new("link/planted.md"),
+            OsStr::new("/"),
+            &absolute,
+        ];
+
+        for name in names {
+            let refused = [
+                repo.open_entry(name).err(),
+                repo.open_member(name).err(),
+                repo.descend(name).err(),
+            ];
+            for refused in refused {
+                let refused = refused.unwrap_or_else(|| panic!("{name:?} was accepted"));
+                assert_eq!(refused.kind(), io::ErrorKind::InvalidInput, "{name:?}");
+                assert_eq!(
+                    refused
+                        .get_ref()
+                        .and_then(|inner| inner.downcast_ref::<NotAnEntryName>()),
+                    Some(&NotAnEntryName {
+                        name: name.to_os_string()
+                    }),
+                    "{name:?}"
+                );
+            }
+        }
+        assert!(matches!(
+            repo.open_entry(OsStr::new("link")).unwrap(),
+            Opened::Link
+        ));
+        assert_eq!(
+            repo.descend(OsStr::new("docs")).unwrap().path(),
+            base.join("repo/docs")
+        );
+        let mut text = String::new();
+        std::io::Read::read_to_string(
+            &mut repo
+                .descend(OsStr::new("docs"))
+                .unwrap()
+                .open_member(OsStr::new("inside.md"))
+                .unwrap(),
+            &mut text,
+        )
+        .unwrap();
+        assert_eq!(text, "inside\n");
     }
 
     #[test]
