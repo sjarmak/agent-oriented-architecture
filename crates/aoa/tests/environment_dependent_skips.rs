@@ -129,6 +129,11 @@ const CLASSIFIED: &[Classified] = &[
         ignored: 0,
     },
     Classified {
+        path: "crates/aoa-path-trust/src/root.rs",
+        notices: 1,
+        ignored: 0,
+    },
+    Classified {
         path: "crates/aoa-scip-graph/tests/walk_scope.rs",
         notices: 1,
         ignored: 0,

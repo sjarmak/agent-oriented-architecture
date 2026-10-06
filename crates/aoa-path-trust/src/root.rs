@@ -891,4 +891,38 @@ mod tests {
             .expect_err("a symlinked marker is never a trust root");
         assert!(err.to_string().contains("symlinked marker"), "{err}");
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_a_backlink_it_may_not_read_rather_than_reading_it_as_absent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_fixture, candidate) = candidate_fixture();
+        let git_dir = candidate.join("admin/worktrees/fixture");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let backlink = git_dir.join("gitdir");
+        std::fs::write(
+            &backlink,
+            candidate.join(".git").to_string_lossy().as_bytes(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&backlink, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if File::open(&backlink).is_ok() {
+            eprintln!(
+                "SKIP (docs/adr/0004-environment-dependent-test-skips.md): this process opens a \
+                 mode-000 file, so it cannot be denied the read"
+            );
+            return;
+        }
+
+        let refusal = linked_worktree_points_back(&candidate, &git_dir).unwrap_err();
+        assert!(
+            matches!(
+                refusal,
+                RepositoryRootError::Backlink { ref source, .. }
+                    if source.kind() == std::io::ErrorKind::PermissionDenied
+            ),
+            "{refusal}"
+        );
+    }
 }

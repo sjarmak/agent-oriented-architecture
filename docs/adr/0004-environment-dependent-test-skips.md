@@ -88,7 +88,10 @@ than an accident:
   case, and the second did until aoa-2woex. These are the
   first classified sites inside a `src/` tree; the registry walks every `.rs`
   file under `crates/`, so a unit test is counted the same way as an
-  integration test.
+  integration test. `crates/aoa-path-trust/src/root.rs` holds one more of the
+  same shape:
+  `refuses_a_backlink_it_may_not_read_rather_than_reading_it_as_absent` needs
+  the kernel to refuse opening a mode-000 worktree back-pointer (aoa-o4zz7).
 
 - `crates/aoa-budget/tests/fix_replace.rs` holds two notices. The first is the
   same root-user case as the group above: the tests that expect a mode-444 file
