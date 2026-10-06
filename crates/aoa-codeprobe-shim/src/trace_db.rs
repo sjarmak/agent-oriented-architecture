@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use aoa_path_trust::{open_regular_file_nofollow, PathTrustError};
 use rusqlite::{Connection, OpenFlags};
@@ -11,6 +12,8 @@ use crate::parse::parse_transcript_file;
 use crate::spans::{Limits, ShimResult, SpanBuilder};
 
 pub const MAX_TRACE_DB_BYTES: u64 = 1024 * 1024 * 1024;
+
+pub const MAX_TOOL_INPUT_BYTES: u64 = 16 * 1024 * 1024;
 
 const SCHEMA_VERSION: i64 = 1;
 
@@ -72,16 +75,34 @@ pub struct ParsedTrial {
     pub source: TraceSource,
 }
 
+pub struct LocatedTrial<'a> {
+    pub reader: &'a TraceDbReader,
+    pub trial: TraceDbTrial,
+}
+
 pub fn parse_trial(
     transcript: &Path,
     trace_db: Option<&TraceDbTrial>,
 ) -> Result<ParsedTrial, ShimError> {
-    parse_trial_locating(transcript, || Ok(trace_db.cloned()))
+    let mut opened = None;
+    let opened = &mut opened;
+    parse_trial_locating(transcript, move || {
+        let Some(trial) = trace_db else {
+            return Ok(None);
+        };
+        let Some(reader) = TraceDbReader::open_if_present(&trial.path)? else {
+            return Ok(None);
+        };
+        Ok(Some(LocatedTrial {
+            reader: opened.insert(reader),
+            trial: trial.clone(),
+        }))
+    })
 }
 
-pub fn parse_trial_locating<E: From<ShimError>>(
+pub fn parse_trial_locating<'a, E: From<ShimError>>(
     transcript: &Path,
-    locate_trace_db: impl FnOnce() -> Result<Option<TraceDbTrial>, E>,
+    locate_trace_db: impl FnOnce() -> Result<Option<LocatedTrial<'a>>, E>,
 ) -> Result<ParsedTrial, E> {
     let transcript_err = match parse_transcript_file(transcript) {
         Ok(shim) => {
@@ -93,35 +114,96 @@ pub fn parse_trial_locating<E: From<ShimError>>(
         Err(err @ ShimError::NoAgentEvents { .. }) => err,
         Err(err) => return Err(err.into()),
     };
-    let Some(trial) = locate_trace_db()? else {
+    let Some(located) = locate_trace_db()? else {
         return Err(transcript_err.into());
     };
-    match parse_trace_db(&trial) {
-        Ok(shim) => Ok(ParsedTrial {
-            shim,
-            source: TraceSource::TraceDb,
-        }),
-        Err(ShimError::TraceDb(err)) if matches!(*err, TraceDbError::Absent { .. }) => {
-            Err(transcript_err.into())
-        }
-        Err(err) => Err(err.into()),
-    }
+    let shim = located.reader.parse(&located.trial)?;
+    Ok(ParsedTrial {
+        shim,
+        source: TraceSource::TraceDb,
+    })
 }
 
 pub fn parse_trace_db(trial: &TraceDbTrial) -> Result<ShimResult, ShimError> {
-    parse_trace_db_bounded(trial, MAX_TRACE_DB_BYTES, Limits::DEFAULT)
+    TraceDbReader::open(&trial.path)?.parse(trial)
 }
 
-pub(crate) fn parse_trace_db_bounded(
+#[cfg(test)]
+fn parse_trace_db_bounded(
     trial: &TraceDbTrial,
     max_bytes: u64,
     limits: Limits,
 ) -> Result<ShimResult, ShimError> {
-    let copy = PrivateCopy::of(&trial.path, max_bytes)?;
-    let conn = open_read_only(&copy.db_path(), &trial.path)?;
-    check_schema(&conn, &trial.path)?;
-    let events = load_events(&conn, trial, limits.max_spans)?;
-    build_trace(trial, &events, limits)
+    TraceDbReader::open_bounded(&trial.path, max_bytes)?.parse_bounded(
+        trial,
+        limits,
+        MAX_TOOL_INPUT_BYTES,
+    )
+}
+
+pub struct TraceDbReader {
+    source: PathBuf,
+    conn: Connection,
+    _copy: PrivateCopy,
+}
+
+impl std::fmt::Debug for TraceDbReader {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TraceDbReader")
+            .field("source", &self.source)
+            .finish_non_exhaustive()
+    }
+}
+
+impl TraceDbReader {
+    pub fn open(source: &Path) -> Result<Self, ShimError> {
+        Self::open_bounded(source, MAX_TRACE_DB_BYTES)
+    }
+
+    pub fn open_if_present(source: &Path) -> Result<Option<Self>, ShimError> {
+        match Self::open(source) {
+            Ok(reader) => Ok(Some(reader)),
+            Err(ShimError::TraceDb(err)) if matches!(*err, TraceDbError::Absent { .. }) => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub(crate) fn open_bounded(source: &Path, max_bytes: u64) -> Result<Self, ShimError> {
+        let copy = PrivateCopy::of(source, max_bytes)?;
+        let conn = open_read_only(&copy.db_path(), source)?;
+        check_schema(&conn, source)?;
+        Ok(Self {
+            source: source.to_path_buf(),
+            conn,
+            _copy: copy,
+        })
+    }
+
+    pub fn source(&self) -> &Path {
+        &self.source
+    }
+
+    pub fn parse(&self, trial: &TraceDbTrial) -> Result<ShimResult, ShimError> {
+        self.parse_bounded(trial, Limits::DEFAULT, MAX_TOOL_INPUT_BYTES)
+    }
+
+    pub(crate) fn parse_bounded(
+        &self,
+        trial: &TraceDbTrial,
+        limits: Limits,
+        max_field_bytes: u64,
+    ) -> Result<ShimResult, ShimError> {
+        if trial.path != self.source {
+            return Err(TraceDbError::OtherDatabase {
+                opened: self.source.clone(),
+                requested: trial.path.clone(),
+            }
+            .into());
+        }
+        let events = load_events(&self.conn, trial, limits.max_spans, max_field_bytes)?;
+        build_trace(trial, &events, limits, max_field_bytes)
+    }
 }
 
 struct PrivateCopy {
@@ -137,12 +219,8 @@ impl PrivateCopy {
         };
         let wal = wal_path(source);
         let wal_file = open_source(&wal)?;
-        let db_len = length_of(&db, source)?;
-        let wal_len = match &wal_file {
-            Some(file) => length_of(file, &wal)?,
-            None => 0,
-        };
-        if db_len.saturating_add(wal_len) > max_bytes {
+        let before = SourceIdentity::of(&db, source, wal_file.as_ref(), &wal)?;
+        if before.total_len() > max_bytes {
             return Err(TraceDbError::TooLarge {
                 path: source.to_path_buf(),
                 max: max_bytes,
@@ -153,8 +231,8 @@ impl PrivateCopy {
             source: err,
         })?;
         let copy = Self { dir };
-        let copied = copy_capped(db, source, &copy.db_path(), max_bytes, max_bytes)?;
-        if let Some(wal_file) = wal_file {
+        let copied = copy_capped(&db, source, &copy.db_path(), max_bytes, max_bytes)?;
+        if let Some(wal_file) = &wal_file {
             copy_capped(
                 wal_file,
                 &wal,
@@ -163,11 +241,81 @@ impl PrivateCopy {
                 max_bytes,
             )?;
         }
+        let after = SourceIdentity::of(&db, source, wal_file.as_ref(), &wal)?;
+        if let Some(what) = before.difference_from(&after, open_source(&wal)?.is_some()) {
+            return Err(TraceDbError::ChangedDuringCopy {
+                path: source.to_path_buf(),
+                what,
+            });
+        }
         Ok(copy)
     }
 
     fn db_path(&self) -> PathBuf {
         self.dir.path().join("trace.db")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileIdentity {
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
+impl FileIdentity {
+    fn of(file: &File, path: &Path) -> Result<Self, TraceDbError> {
+        let meta = file.metadata().map_err(|err| read_error(path, err))?;
+        Ok(Self {
+            len: meta.len(),
+            modified: meta.modified().ok(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SourceIdentity {
+    db: FileIdentity,
+    wal: Option<FileIdentity>,
+}
+
+impl SourceIdentity {
+    fn of(
+        db: &File,
+        db_path: &Path,
+        wal: Option<&File>,
+        wal_path: &Path,
+    ) -> Result<Self, TraceDbError> {
+        Ok(Self {
+            db: FileIdentity::of(db, db_path)?,
+            wal: wal
+                .map(|file| FileIdentity::of(file, wal_path))
+                .transpose()?,
+        })
+    }
+
+    fn total_len(&self) -> u64 {
+        self.db
+            .len
+            .saturating_add(self.wal.map_or(0, |wal| wal.len))
+    }
+
+    fn difference_from(&self, after: &Self, wal_present_now: bool) -> Option<&'static str> {
+        if self.db.len != after.db.len {
+            return Some("the database changed size");
+        }
+        if self.db.modified != after.db.modified {
+            return Some("the database was modified");
+        }
+        match (self.wal, after.wal) {
+            (Some(before), Some(after)) if before.len != after.len => {
+                Some("the write-ahead log changed size")
+            }
+            (Some(before), Some(after)) if before.modified != after.modified => {
+                Some("the write-ahead log was modified")
+            }
+            (None, _) if wal_present_now => Some("a write-ahead log appeared"),
+            _ => None,
+        }
     }
 }
 
@@ -187,12 +335,6 @@ fn open_source(path: &Path) -> Result<Option<File>, TraceDbError> {
     })
 }
 
-fn length_of(file: &File, path: &Path) -> Result<u64, TraceDbError> {
-    file.metadata()
-        .map(|meta| meta.len())
-        .map_err(|err| read_error(path, err))
-}
-
 fn read_error(path: &Path, source: std::io::Error) -> TraceDbError {
     TraceDbError::Read {
         path: path.to_path_buf(),
@@ -201,7 +343,7 @@ fn read_error(path: &Path, source: std::io::Error) -> TraceDbError {
 }
 
 fn copy_capped(
-    source_file: File,
+    source_file: &File,
     source: &Path,
     destination: &Path,
     budget: u64,
@@ -363,22 +505,27 @@ struct EventRow {
     event_type: String,
     tool_name: Option<String>,
     tool_input: Option<String>,
+    tool_input_len: Option<i64>,
 }
 
 fn load_events(
     conn: &Connection,
     trial: &TraceDbTrial,
     max_rows: usize,
+    max_field_bytes: u64,
 ) -> Result<Vec<EventRow>, ShimError> {
     let limit = i64::try_from(max_rows.saturating_add(1)).unwrap_or(i64::MAX);
+    let field_cap = i64::try_from(max_field_bytes).unwrap_or(i64::MAX);
     let rows = conn
         .prepare(
-            "SELECT run_id, event_seq, event_type, tool_name, tool_input FROM events \
+            "SELECT run_id, event_seq, event_type, tool_name, \
+             CASE WHEN length(CAST(tool_input AS BLOB)) > ?4 THEN NULL ELSE tool_input END, \
+             length(CAST(tool_input AS BLOB)) FROM events \
              WHERE config = ?1 AND task_id = ?2 ORDER BY event_seq LIMIT ?3",
         )
         .and_then(|mut stmt| {
             stmt.query_map(
-                rusqlite::params![&trial.config, &trial.task_id, limit],
+                rusqlite::params![&trial.config, &trial.task_id, limit, field_cap],
                 |row| {
                     Ok(EventRow {
                         run_id: row.get(0)?,
@@ -386,6 +533,7 @@ fn load_events(
                         event_type: row.get(2)?,
                         tool_name: row.get(3)?,
                         tool_input: row.get(4)?,
+                        tool_input_len: row.get(5)?,
                     })
                 },
             )?
@@ -405,6 +553,7 @@ fn build_trace(
     trial: &TraceDbTrial,
     events: &[EventRow],
     limits: Limits,
+    max_field_bytes: u64,
 ) -> Result<ShimResult, ShimError> {
     if events.is_empty() {
         return Err(TraceDbError::NoEvents {
@@ -443,6 +592,21 @@ fn build_trace(
                     .tool_name
                     .as_deref()
                     .ok_or_else(|| malformed(event, "tool_use row has no tool_name".to_string()))?;
+                if let Some(len) = event.tool_input_len.filter(|len| *len > 0) {
+                    let len = u64::try_from(len).unwrap_or(u64::MAX);
+                    if len > max_field_bytes {
+                        return Err(TraceDbError::OversizedField {
+                            path: trial.path.clone(),
+                            config: trial.config.clone(),
+                            task_id: trial.task_id.clone(),
+                            event_seq: event.event_seq,
+                            field: "tool_input",
+                            len,
+                            max: max_field_bytes,
+                        }
+                        .into());
+                    }
+                }
                 let raw = event.tool_input.as_deref().ok_or_else(|| {
                     malformed(event, "tool_use row has no tool_input".to_string())
                 })?;
@@ -616,11 +780,100 @@ mod tests {
         std::fs::write(&wal, [0u8; 16]).expect("wal");
 
         let file = File::open(&wal).expect("open wal");
-        let err = copy_capped(file, &wal, &dir.path().join("copy"), 8, 32).unwrap_err();
+        let err = copy_capped(&file, &wal, &dir.path().join("copy"), 8, 32).unwrap_err();
 
         assert!(
             matches!(err, TraceDbError::TooLarge { max: 32, .. }),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn a_tool_input_exactly_at_the_field_cap_is_read_and_one_byte_over_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let input = r#"{"file_path":"src/lib.py"}"#;
+        let trial = fixture(dir.path(), &[("tool_use", "Read", input)]);
+        let cap = u64::try_from(input.len()).expect("fits");
+        let reader = TraceDbReader::open(&trial.path).expect("opens");
+
+        reader
+            .parse_bounded(&trial, Limits::DEFAULT, cap)
+            .expect("a field exactly at the cap is read");
+        let err = reader
+            .parse_bounded(&trial, Limits::DEFAULT, cap - 1)
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                ShimError::TraceDb(ref inner)
+                    if matches!(**inner, TraceDbError::OversizedField { event_seq: 0, len, max, .. }
+                        if len == cap && max == cap - 1)
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_source_that_changes_under_the_copy_is_named_by_what_changed() {
+        let at = |len, secs| FileIdentity {
+            len,
+            modified: Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs)),
+        };
+        let before = SourceIdentity {
+            db: at(10, 1),
+            wal: Some(at(4, 1)),
+        };
+        assert_eq!(before.difference_from(&before, true), None);
+        assert_eq!(before.total_len(), 14);
+        assert_eq!(
+            before.difference_from(
+                &SourceIdentity {
+                    db: at(12, 1),
+                    ..before
+                },
+                true
+            ),
+            Some("the database changed size")
+        );
+        assert_eq!(
+            before.difference_from(
+                &SourceIdentity {
+                    db: at(10, 2),
+                    ..before
+                },
+                true
+            ),
+            Some("the database was modified")
+        );
+        assert_eq!(
+            before.difference_from(
+                &SourceIdentity {
+                    wal: Some(at(8, 1)),
+                    ..before
+                },
+                true
+            ),
+            Some("the write-ahead log changed size")
+        );
+        assert_eq!(
+            before.difference_from(
+                &SourceIdentity {
+                    wal: Some(at(4, 3)),
+                    ..before
+                },
+                true
+            ),
+            Some("the write-ahead log was modified")
+        );
+        let without_wal = SourceIdentity {
+            db: at(10, 1),
+            wal: None,
+        };
+        assert_eq!(without_wal.difference_from(&without_wal, false), None);
+        assert_eq!(
+            without_wal.difference_from(&without_wal, true),
+            Some("a write-ahead log appeared")
         );
     }
 
@@ -651,12 +904,12 @@ mod tests {
         let trial = fixture(dir.path(), &rows);
         let conn = open_read_only(&trial.path, &trial.path).expect("open");
 
-        let capped = load_events(&conn, &trial, 3).map(|rows| rows.len());
+        let capped = load_events(&conn, &trial, 3, MAX_TOOL_INPUT_BYTES).map(|rows| rows.len());
         assert!(
             matches!(capped, Err(ShimError::TooManySpans { max: 3 })),
             "nine rows under a cap of three must fail"
         );
-        let within = load_events(&conn, &trial, 8).map(|rows| rows.len());
+        let within = load_events(&conn, &trial, 8, MAX_TOOL_INPUT_BYTES).map(|rows| rows.len());
         assert!(matches!(within, Ok(8)), "eight rows under a cap of eight");
     }
 }

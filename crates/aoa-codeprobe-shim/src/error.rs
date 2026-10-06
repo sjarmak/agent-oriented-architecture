@@ -120,6 +120,15 @@ pub enum TraceDbError {
     #[error("trace database {path} and its write-ahead log exceed {max} byte cap (DoS guard)")]
     TooLarge { path: PathBuf, max: u64 },
 
+    #[error(
+        "trace database {path} changed while it was being copied ({what}): \
+         codeprobe may still be writing it, and a torn copy is not scored"
+    )]
+    ChangedDuringCopy { path: PathBuf, what: &'static str },
+
+    #[error("trace database reader holds {opened} but was asked for a trial in {requested}")]
+    OtherDatabase { opened: PathBuf, requested: PathBuf },
+
     #[error("trace database {path}: {source}")]
     Sqlite {
         path: PathBuf,
@@ -140,6 +149,20 @@ pub enum TraceDbError {
         task_id: String,
         event_seq: i64,
         detail: String,
+    },
+
+    #[error(
+        "trace database {path}: event {event_seq} for config {config:?} task {task_id:?} \
+         carries a {field} of {len} bytes, over the {max} byte cap"
+    )]
+    OversizedField {
+        path: PathBuf,
+        config: String,
+        task_id: String,
+        event_seq: i64,
+        field: &'static str,
+        len: u64,
+        max: u64,
     },
 
     #[error(

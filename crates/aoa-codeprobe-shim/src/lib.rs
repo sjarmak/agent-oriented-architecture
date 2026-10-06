@@ -63,6 +63,6 @@ pub use parse::{parse_transcript, parse_transcript_file, read_capped, read_cappe
 pub use reconstructed::GenericLogBackend;
 pub use spans::ShimResult;
 pub use trace_db::{
-    parse_trace_db, parse_trial, parse_trial_locating, ParsedTrial, TraceDbTrial, TraceSource,
-    MAX_TRACE_DB_BYTES, TRACE_DB_SCHEMA,
+    parse_trace_db, parse_trial, parse_trial_locating, LocatedTrial, ParsedTrial, TraceDbReader,
+    TraceDbTrial, TraceSource, MAX_TOOL_INPUT_BYTES, MAX_TRACE_DB_BYTES, TRACE_DB_SCHEMA,
 };

@@ -2,8 +2,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use aoa_codeprobe_shim::{
-    parse_trace_db, parse_trial, parse_trial_locating, ShimError, TraceDbError, TraceDbTrial,
-    TraceSource, TRACE_DB_SCHEMA,
+    parse_trace_db, parse_trial, parse_trial_locating, LocatedTrial, ShimError, TraceDbError,
+    TraceDbReader, TraceDbTrial, TraceSource, MAX_TOOL_INPUT_BYTES, TRACE_DB_SCHEMA,
 };
 use aoa_trace::{validate_trace_value, SpanSource, SpanType};
 use rusqlite::{params, Connection};
@@ -1025,12 +1025,18 @@ fn parse_trial_locating_asks_once_for_an_answer_only_transcript_and_carries_the_
     let transcript = transcript(&dir, ANSWER_ONLY);
     let trial = fixture(&dir, &busy_rows());
 
-    let parsed =
-        parse_trial_locating::<ShimError>(&transcript, || Ok(Some(trial))).expect("parses");
+    let reader = TraceDbReader::open(&trial.path).expect("opens");
+    let parsed = parse_trial_locating::<ShimError>(&transcript, || {
+        Ok(Some(LocatedTrial {
+            reader: &reader,
+            trial,
+        }))
+    })
+    .expect("parses");
     assert_eq!(parsed.source, TraceSource::TraceDb);
 
     let err = parse_trial_locating(&transcript, || {
-        Err::<Option<TraceDbTrial>, _>(Located::Nowhere)
+        Err::<Option<LocatedTrial<'_>>, _>(Located::Nowhere)
     })
     .unwrap_err();
     assert!(matches!(err, Located::Nowhere), "{err:?}");
@@ -1067,4 +1073,145 @@ fn a_trace_source_has_one_spelling_on_the_wire_and_another_for_people() {
     );
     assert_eq!(TraceSource::StreamJson.as_str(), "stream-json");
     assert_eq!(TraceSource::TraceDb.as_str(), "trace.db");
+}
+
+fn other_task(event_seq: i64, tool_input: &'static str) -> Row<'static> {
+    Row {
+        task_id: "task-002",
+        ..tool_use(event_seq, "Read", tool_input)
+    }
+}
+
+#[test]
+fn one_reader_serves_every_trial_of_a_run_from_the_copy_it_took_when_opened() {
+    let dir = TempDir::new().expect("tempdir");
+    let first = fixture(
+        &dir,
+        &[
+            tool_use(0, "Read", r#"{"file_path":"src/lib.py"}"#),
+            other_task(0, r#"{"file_path":"src/other.py"}"#),
+        ],
+    );
+    let second = TraceDbTrial {
+        task_id: "task-002".to_string(),
+        ..first.clone()
+    };
+    let before = names_in(dir.path());
+
+    let reader = TraceDbReader::open(&first.path).expect("opens");
+    let conn = Connection::open(&first.path).expect("reopen the source for writing");
+    insert(
+        &conn,
+        &tool_use(1, "Read", r#"{"file_path":"written-later.py"}"#),
+    );
+    conn.execute("DELETE FROM events WHERE task_id = 'task-002'", [])
+        .expect("delete the second task");
+    drop(conn);
+
+    let parsed_first = reader.parse(&first).expect("first trial");
+    let parsed_second = reader.parse(&second).expect("second trial");
+    assert_eq!(reader.source(), first.path.as_path());
+
+    let paths = |result: &aoa_codeprobe_shim::ShimResult| -> Vec<String> {
+        result
+            .trace
+            .spans
+            .iter()
+            .filter(|s| s.span_type == SpanType::FileRead)
+            .map(|s| target(s, "path").to_string())
+            .collect()
+    };
+    assert_eq!(
+        paths(&parsed_first),
+        vec!["src/lib.py"],
+        "a row written after the reader opened is not in its copy"
+    );
+    assert_eq!(
+        paths(&parsed_second),
+        vec!["src/other.py"],
+        "a row deleted after the reader opened is still in its copy"
+    );
+    assert_eq!(
+        names_in(dir.path()),
+        before,
+        "serving two trials leaves nothing beside the source"
+    );
+}
+
+#[test]
+fn a_reader_refuses_a_trial_from_another_database() {
+    let dir = TempDir::new().expect("tempdir");
+    let trial = fixture(&dir, &busy_rows());
+    let reader = TraceDbReader::open(&trial.path).expect("opens");
+    let elsewhere = TraceDbTrial {
+        path: dir.path().join("other").join("trace.db"),
+        ..trial.clone()
+    };
+
+    let err = trace_db_err(reader.parse(&elsewhere).unwrap_err());
+
+    assert!(
+        matches!(
+            &err,
+            TraceDbError::OtherDatabase { opened, requested }
+                if opened == &trial.path && requested == &elsewhere.path
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn an_absent_database_opens_as_none_and_a_present_one_as_a_reader() {
+    let dir = TempDir::new().expect("tempdir");
+    let absent = dir.path().join("trace.db");
+    assert!(TraceDbReader::open_if_present(&absent)
+        .expect("absent is not an error here")
+        .is_none());
+
+    let trial = fixture(&dir, &busy_rows());
+    let reader = TraceDbReader::open_if_present(&trial.path)
+        .expect("opens")
+        .expect("present");
+    assert_eq!(reader.source(), trial.path.as_path());
+}
+
+#[test]
+fn a_broken_database_is_reported_when_the_reader_opens_not_per_trial() {
+    let dir = TempDir::new().expect("tempdir");
+    let path = dir.path().join("trace.db");
+    std::fs::write(&path, b"this is not a database").expect("write");
+
+    let err = trace_db_err(TraceDbReader::open(&path).unwrap_err());
+
+    assert!(matches!(err, TraceDbError::Sqlite { .. }), "{err}");
+}
+
+#[test]
+fn a_tool_input_over_the_field_cap_is_refused_naming_the_event() {
+    let dir = TempDir::new().expect("tempdir");
+    let cap = usize::try_from(MAX_TOOL_INPUT_BYTES).expect("cap fits");
+    let padding = "x".repeat(cap - r#"{"file_path":"src/lib.py","pad":""}"#.len() + 1);
+    let oversized = format!(r#"{{"file_path":"src/lib.py","pad":"{padding}"}}"#);
+    assert_eq!(oversized.len(), cap + 1);
+    let trial = fixture(
+        &dir,
+        &[
+            tool_use(0, "Read", r#"{"file_path":"src/lib.py"}"#),
+            Row {
+                tool_input: Some(&oversized),
+                ..tool_use(1, "Read", "")
+            },
+        ],
+    );
+
+    let err = trace_db_err(parse_trace_db(&trial).unwrap_err());
+
+    assert!(
+        matches!(
+            &err,
+            TraceDbError::OversizedField { event_seq: 1, field: "tool_input", len, max, .. }
+                if *len == MAX_TOOL_INPUT_BYTES + 1 && *max == MAX_TOOL_INPUT_BYTES
+        ),
+        "{err}"
+    );
 }

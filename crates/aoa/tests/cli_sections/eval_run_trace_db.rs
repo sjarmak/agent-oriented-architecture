@@ -95,6 +95,42 @@ fn eval_run_reads_an_answer_only_trial_from_the_run_trace_db() {
 }
 
 #[test]
+fn eval_run_scores_every_answer_only_trial_of_a_run_from_one_trace_db() {
+    let dir = TempDir::new().expect("tempdir");
+    let run = answer_only_run(&dir);
+    write_trial(&run, "third-task", ANSWER_ONLY);
+    let mut rows = Vec::new();
+    for task in ["busy-task", "silent-task", "third-task"] {
+        rows.push(("run-a", task, 0, "Read", r#"{"file_path":"src/lib.py"}"#));
+        rows.push(("run-a", task, 1, "Grep", r#"{"pattern":"parse"}"#));
+    }
+    trace_db(dir.path().join("runs").as_path(), &rows);
+
+    let report = eval_run_traces::eval_run_json(&run, &[]);
+
+    assert_eq!(report["record_count"], 3, "{report}");
+    assert_eq!(report["error_count"], 0, "{report}");
+    for task in ["busy-task", "silent-task", "third-task"] {
+        let record = eval_run_traces::record(&report, task);
+        assert_eq!(record["trace_source"], "trace_db");
+        assert_eq!(eval_run_traces::count_of(&record["spans"], "file.read"), 1);
+        assert_eq!(
+            eval_run_traces::count_of(&record["spans"], "retrieval.search"),
+            1
+        );
+    }
+    assert_eq!(
+        std::fs::read_dir(dir.path().join("runs"))
+            .expect("list runs")
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.path().is_dir())
+            .count(),
+        1,
+        "nothing is left beside the run after three trials read the database"
+    );
+}
+
+#[test]
 fn eval_run_human_names_the_trace_source() {
     let dir = TempDir::new().expect("tempdir");
     let run = answer_only_run(&dir);

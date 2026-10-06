@@ -49,7 +49,9 @@ use aoa_bench::{
     discover_tasks_isolating_names, load_task, scoring_path, trace_db_location, transcript_path,
     TraceDbLocation, TrialScoring,
 };
-use aoa_codeprobe_shim::{parse_trial_locating, TraceDbTrial, TraceSource};
+use aoa_codeprobe_shim::{
+    parse_trial_locating, LocatedTrial, TraceDbReader, TraceDbTrial, TraceSource,
+};
 use aoa_construct::{BehavioralSignal, InsufficientDataNote};
 use aoa_domain::{HeldOutProvenance, RunResult, TaskOutcome};
 use aoa_gap::{compute_gap, GapOutcome};
@@ -306,7 +308,12 @@ fn detect_partition(args: &EvalRunArgs) -> Option<SubtreePartition> {
 
 struct TraceDbLookup<'a> {
     run_dir: &'a Path,
-    located: Option<Option<TraceDbLocation>>,
+    located: Option<Option<LocatedTraceDb>>,
+}
+
+struct LocatedTraceDb {
+    location: TraceDbLocation,
+    reader: TraceDbReader,
 }
 
 impl<'a> TraceDbLookup<'a> {
@@ -317,16 +324,29 @@ impl<'a> TraceDbLookup<'a> {
         }
     }
 
-    fn trial_for(&mut self, task_id: &str) -> Result<Option<TraceDbTrial>> {
-        let location = match &self.located {
-            Some(location) => location,
-            None => self.located.insert(trace_db_location(self.run_dir)?),
+    fn trial_for(&mut self, task_id: &str) -> Result<Option<LocatedTrial<'_>>> {
+        let located = match &mut self.located {
+            Some(located) => located,
+            slot @ None => slot.insert(Self::locate(self.run_dir)?),
         };
-        Ok(location.as_ref().map(|location| TraceDbTrial {
-            path: location.path.clone(),
-            config: location.config.clone(),
-            task_id: task_id.to_string(),
+        Ok(located.as_ref().map(|db| LocatedTrial {
+            reader: &db.reader,
+            trial: TraceDbTrial {
+                path: db.location.path.clone(),
+                config: db.location.config.clone(),
+                task_id: task_id.to_string(),
+            },
         }))
+    }
+
+    fn locate(run_dir: &Path) -> Result<Option<LocatedTraceDb>> {
+        let Some(location) = trace_db_location(run_dir)? else {
+            return Ok(None);
+        };
+        let Some(reader) = TraceDbReader::open_if_present(&location.path)? else {
+            return Ok(None);
+        };
+        Ok(Some(LocatedTraceDb { location, reader }))
     }
 }
 
@@ -340,7 +360,7 @@ fn process_task(
     traces_written: &mut usize,
 ) -> Result<TaskRecord> {
     let transcript = transcript_path(&args.codeprobe_run, task_id);
-    let parsed = parse_trial_locating(&transcript, || trace_db.trial_for(task_id))
+    let parsed = parse_trial_locating(&transcript, move || trace_db.trial_for(task_id))
         .with_context(|| format!("trace-shim failed on {}", transcript.display()))?;
     let trace_source = parsed.source;
     let shim = parsed.shim;

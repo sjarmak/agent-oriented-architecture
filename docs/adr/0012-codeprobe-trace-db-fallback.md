@@ -121,12 +121,19 @@ contributes no edits to `F_edit`. Each record names its source in
 - No read of a codeprobe run leaves a sidecar behind, and a run archived
   read-only is still scorable.
 - The private copy costs the database's size in temporary space and in time,
-  bounded by the cap.
-- A copy taken while codeprobe is still writing may be torn between the
-  database file and its log. SQLite reports such a copy as malformed or reads
-  the frames that were complete, and either outcome fails or scores one
-  trial, never the run. Reading a run that is still being written is not a
-  supported use.
+  bounded by the cap, once per `eval run`: `TraceDbReader` takes the copy when
+  the first answer-only trial needs it and serves every later trial of the run
+  from it (aoa-7pkom item 1). A one-shot `parse_trace_db` still copies per call.
+- A copy taken while codeprobe is still writing is refused, not scored: the
+  reader records the size and modification time of the database and its log
+  before copying and again after, and a difference, or a log that appeared
+  during the copy, is `ChangedDuringCopy`. A writer that lands between two
+  identical stats is not caught; reading a run that is still being written is
+  not a supported use.
+- A single `tool_input` is capped at `MAX_TOOL_INPUT_BYTES`; a row over it is
+  `OversizedField` naming the event. The cap bounds the bytes this reader
+  copies out of SQLite and hands to the JSON parser, not what SQLite itself
+  reads from the page.
 - The row bound counts every event row for the trial, including rows that
   produce no span, so a trial near the span cap can fail on rows that would
   not have become spans.
