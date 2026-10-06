@@ -194,16 +194,29 @@ fn config_value(repo: &Path, git_dir: &Path, query: &[&str]) -> Result<ConfigVal
 struct GitAnswer {
     status: ExitStatus,
     stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+impl GitAnswer {
+    fn refusal(&self, asked: &str) -> String {
+        let said = String::from_utf8_lossy(&self.stderr);
+        let said = said.trim();
+        if said.is_empty() {
+            format!("{asked} exited with {}", self.status)
+        } else {
+            format!("{asked} exited with {}: {said}", self.status)
+        }
+    }
 }
 
 fn answer_within_deadline(command: &mut Command, repo: &Path) -> Result<GitAnswer, GitTrouble> {
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|source| unasked("git could not be started", &source))?;
-    let Some(pipe) = child.stdout.take() else {
+    let (Some(answer_pipe), Some(refusal_pipe)) = (child.stdout.take(), child.stderr.take()) else {
         return Err(GitTrouble::Unasked(
             "git was started without a pipe to answer on".to_string(),
         ));
@@ -215,9 +228,12 @@ fn answer_within_deadline(command: &mut Command, repo: &Path) -> Result<GitAnswe
             seconds: GIT_DEADLINE.as_secs(),
         })
     };
-    let mut answering = match Answering::start(pipe) {
-        Ok(answering) => answering,
-        Err(source) => {
+    let (mut answering, mut refusing) = match (
+        Answering::start(answer_pipe),
+        Answering::start(refusal_pipe),
+    ) {
+        (Ok(answering), Ok(refusing)) => (answering, refusing),
+        (Err(source), _) | (_, Err(source)) => {
             let _ = child.kill();
             let _ = child.wait();
             return Err(unread(source));
@@ -225,7 +241,10 @@ fn answer_within_deadline(command: &mut Command, repo: &Path) -> Result<GitAnswe
     };
     let started = Instant::now();
     loop {
-        let waited = match answering.take_written(started + GIT_DEADLINE) {
+        let waited = match answering
+            .take_written(started + GIT_DEADLINE)
+            .and_then(|()| refusing.take_written(started + GIT_DEADLINE))
+        {
             Ok(()) => child
                 .try_wait()
                 .map_err(|source| unasked("git could not be waited for", &source)),
@@ -234,10 +253,17 @@ fn answer_within_deadline(command: &mut Command, repo: &Path) -> Result<GitAnswe
         match waited {
             Ok(Some(status)) => {
                 let remaining = GIT_DEADLINE.saturating_sub(started.elapsed());
-                return match answering.finish(remaining) {
-                    Ok(Some(stdout)) => Ok(GitAnswer { status, stdout }),
-                    Ok(None) => Err(unresponsive()),
-                    Err(source) => Err(unread(source)),
+                let stdout = answering.finish(remaining);
+                let remaining = GIT_DEADLINE.saturating_sub(started.elapsed());
+                let stderr = refusing.finish(remaining);
+                return match (stdout, stderr) {
+                    (Ok(Some(stdout)), Ok(Some(stderr))) => Ok(GitAnswer {
+                        status,
+                        stdout,
+                        stderr,
+                    }),
+                    (Err(source), _) | (_, Err(source)) => Err(unread(source)),
+                    _ => Err(unresponsive()),
                 };
             }
             Ok(None) if started.elapsed() < GIT_DEADLINE => std::thread::sleep(POLL_INTERVAL),
@@ -286,13 +312,13 @@ fn git_hook_location(repo: &Path) -> Result<Option<HookLocation>, GitTrouble> {
         ]),
         repo,
     )?;
+    if !answer.status.success() {
+        return Err(GitTrouble::Unasked(answer.refusal("git rev-parse")));
+    }
     Ok(reported_hook_location(repo, &answer))
 }
 
 fn reported_hook_location(repo: &Path, answer: &GitAnswer) -> Option<HookLocation> {
-    if !answer.status.success() {
-        return None;
-    }
     let reported = std::str::from_utf8(&answer.stdout).ok()?;
     let mut lines = reported.lines();
     let (inside_work_tree, common_dir, git_dir, hook) =
@@ -889,6 +915,58 @@ mod tests {
 
         assert!(answer.status.success());
         assert_eq!(answer.stdout.len(), ANSWER_BYTES);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn what_a_command_says_on_both_pipes_is_read_whole() {
+        let repo = tempfile::tempdir().unwrap();
+
+        let answer = answer_within_deadline(
+            Command::new("sh").args([
+                "-c",
+                "head -c 300000 /dev/zero | tr '\\0' x >&2; echo answered; echo refused >&2; exit 3",
+            ]),
+            repo.path(),
+        )
+        .unwrap();
+
+        assert_eq!(answer.status.code(), Some(3));
+        assert_eq!(answer.stdout, b"answered\n");
+        assert_eq!(answer.stderr.len(), 300_000 + "refused\n".len());
+        assert!(answer.stderr.ends_with(b"refused\n"));
+        let refusal = answer.refusal("the command");
+        assert!(
+            refusal.starts_with("the command exited with exit status: 3: xxx"),
+            "{refusal}"
+        );
+        assert!(refusal.ends_with("xrefused"), "{refusal}");
+    }
+
+    #[test]
+    fn a_repository_git_refuses_to_read_is_a_missing_plane_with_gits_reason() {
+        let repo = tempfile::tempdir().unwrap();
+        let repo = repo.path().canonicalize().unwrap();
+        let elsewhere = repo.join("elsewhere");
+        std::fs::write(
+            repo.join(".git"),
+            format!("gitdir: {}\n", elsewhere.display()),
+        )
+        .unwrap();
+
+        let plane = installed_pre_commit_hook(&repo);
+
+        let Err(GitTrouble::Unasked(reason)) = plane else {
+            panic!("{plane:?}");
+        };
+        assert!(reason.starts_with("git rev-parse exited with "), "{reason}");
+        assert!(reason.contains("not a git repository"), "{reason}");
+        let missing = missing_planes(&repo).unwrap();
+        let pre_commit = missing
+            .iter()
+            .find(|missing| missing.plane == EnforcementPlane::PreCommit)
+            .unwrap();
+        assert_eq!(pre_commit.reason.as_deref(), Some(reason.as_str()));
     }
 
     #[test]

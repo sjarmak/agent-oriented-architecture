@@ -1,5 +1,4 @@
-use std::io;
-use std::process::ChildStdout;
+use std::io::{self, Read};
 use std::time::{Duration, Instant};
 
 pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(5);
@@ -8,14 +7,14 @@ pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(5);
 const PASS_LIMIT: usize = 16 * 1024;
 
 #[cfg(unix)]
-pub(crate) struct Answering {
-    pipe: ChildStdout,
+pub(crate) struct Answering<P> {
+    pipe: P,
     written: Vec<u8>,
 }
 
 #[cfg(unix)]
-impl Answering {
-    pub(crate) fn start(pipe: ChildStdout) -> io::Result<Self> {
+impl<P: Read + std::os::fd::AsFd> Answering<P> {
+    pub(crate) fn start(pipe: P) -> io::Result<Self> {
         let flags = rustix::fs::fcntl_getfl(&pipe)?;
         rustix::fs::fcntl_setfl(&pipe, flags | rustix::fs::OFlags::NONBLOCK)?;
         Ok(Self {
@@ -42,8 +41,6 @@ impl Answering {
     }
 
     fn read_a_pass(&mut self, until: Instant) -> io::Result<bool> {
-        use std::io::Read;
-
         let mut chunk = [0_u8; 4096];
         let mut taken = 0;
         while taken < PASS_LIMIT && Instant::now() < until {
@@ -70,9 +67,7 @@ pub(crate) struct Answering {
 
 #[cfg(not(unix))]
 impl Answering {
-    pub(crate) fn start(mut pipe: ChildStdout) -> io::Result<Self> {
-        use std::io::Read;
-
+    pub(crate) fn start<P: Read + Send + 'static>(mut pipe: P) -> io::Result<Self> {
         let (send, read) = std::sync::mpsc::channel();
         std::thread::Builder::new().spawn(move || {
             let mut written = Vec::new();
@@ -105,7 +100,7 @@ mod tests {
 
     const LONG_ENOUGH_TO_FILL_THE_PIPE: Duration = Duration::from_millis(300);
 
-    fn a_producer_that_never_stops() -> (Child, Answering) {
+    fn a_producer_that_never_stops() -> (Child, Answering<std::process::ChildStdout>) {
         let mut child = Command::new("yes")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
