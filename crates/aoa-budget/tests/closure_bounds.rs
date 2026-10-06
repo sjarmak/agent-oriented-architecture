@@ -822,9 +822,10 @@ fn held_closure_after_swapping_the_boundary_for_a_link(
     fs::rename(&repo, base.join("elsewhere")).unwrap();
     std::os::unix::fs::symlink(base.join("outside"), &repo).unwrap();
 
-    let closure = enclosure
-        .resolve_held(&root, &held, std::ffi::OsStr::new("AGENTS.md"))
+    let text = enclosure
+        .read_held(&root, &held, std::ffi::OsStr::new("AGENTS.md"))
         .unwrap();
+    let closure = enclosure.resolve_read(&root, &text).unwrap();
     (dir, repo, closure)
 }
 

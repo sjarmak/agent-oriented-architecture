@@ -1,9 +1,8 @@
 use std::collections::BTreeMap;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::fs::Metadata;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use aoa_budget::{
     normalize_path, BudgetError, Closure, Directory, Enclosure, Entry, EntryKind, Opened,
@@ -22,8 +21,7 @@ pub struct LintedDirectory {
 
 pub struct DiscoveredRoot {
     path: PathBuf,
-    directory: Arc<Directory>,
-    name: OsString,
+    text: String,
 }
 
 impl DiscoveredRoot {
@@ -51,8 +49,7 @@ impl LintedDirectory {
     }
 
     pub(crate) fn resolve_discovered(&self, root: &DiscoveredRoot) -> Result<Closure, BudgetError> {
-        self.enclosure
-            .resolve_held(&root.path, &root.directory, &root.name)
+        self.enclosure.resolve_read(&root.path, &root.text)
     }
 
     fn discover_checking(&self, checked: &dyn Fn(&Path)) -> Result<Vec<DiscoveredRoot>, LintError> {
@@ -76,10 +73,10 @@ impl LintedDirectory {
                     walking.push(entries_of(child)?);
                 }
                 EntryKind::File if is_context_root_name(&path) && rules.admit(&path, false) => {
+                    let text = self.enclosure.read_held(&path, directory, &entry.name)?;
                     roots.push(DiscoveredRoot {
                         path: normalize_path(&path),
-                        directory: Arc::clone(directory),
-                        name: entry.name,
+                        text,
                     });
                 }
                 EntryKind::Directory | EntryKind::File | EntryKind::Other => {}
@@ -89,13 +86,13 @@ impl LintedDirectory {
     }
 }
 
-type Walking = (Arc<Directory>, std::vec::IntoIter<Entry>);
+type Walking = (Directory, std::vec::IntoIter<Entry>);
 
 fn entries_of(directory: Directory) -> Result<Walking, LintError> {
     let entries = directory
         .entries()
         .map_err(|source| walk_failed(directory.path(), source))?;
-    Ok((Arc::new(directory), entries.into_iter()))
+    Ok((directory, entries.into_iter()))
 }
 
 fn walk_failed(path: &Path, source: io::Error) -> LintError {
@@ -335,5 +332,33 @@ mod tests {
         assert!(docs.is_symlink());
         assert!(docs.join("AGENTS.md").is_file());
         assert_eq!(roots, [docs.join("CLAUDE.md")]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn discovered_roots_hold_no_descriptor_on_the_directories_that_contain_them() {
+        let base = tempfile::tempdir().unwrap();
+        let repo = base.path().canonicalize().unwrap();
+        for index in 0..64 {
+            let package = repo.join(format!("package-{index}"));
+            std::fs::create_dir(&package).unwrap();
+            std::fs::write(package.join("CLAUDE.md"), "").unwrap();
+        }
+        let linted = LintedDirectory::hold(&repo).unwrap();
+        let held_before = descriptors_under(&repo);
+
+        let roots = linted.discover().unwrap();
+
+        assert_eq!(descriptors_under(&repo), held_before);
+        assert_eq!(roots.len(), 64);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn descriptors_under(dir: &Path) -> usize {
+        std::fs::read_dir("/proc/self/fd")
+            .unwrap()
+            .filter_map(|entry| std::fs::read_link(entry.unwrap().path()).ok())
+            .filter(|target| target.starts_with(dir))
+            .count()
     }
 }

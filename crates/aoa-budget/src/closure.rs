@@ -149,13 +149,17 @@ impl Enclosure {
             })
     }
 
-    pub fn resolve_held(
+    pub fn read_held(
         &self,
-        root: &Path,
+        path: &Path,
         directory: &Directory,
         name: &OsStr,
-    ) -> Result<Closure, BudgetError> {
-        resolve_closure_held(root, &self.boundary, directory, name)
+    ) -> Result<String, BudgetError> {
+        read_regular_file(directory.open_member(name)).map_err(|failure| failure.into_error(path))
+    }
+
+    pub fn resolve_read(&self, root: &Path, text: &str) -> Result<Closure, BudgetError> {
+        resolve(normalize_path(root), &self.boundary, RootRead::Read(text))
     }
 
     pub fn open_file(&self, path: &Path) -> Result<Option<File>, BudgetError> {
@@ -193,6 +197,7 @@ enum RootRead<'a> {
         directory: &'a Directory,
         name: &'a OsStr,
     },
+    Read(&'a str),
 }
 
 fn resolve(
@@ -213,12 +218,15 @@ fn resolve(
             continue;
         }
         let text = if path == root {
-            let opened = match &root_read {
-                RootRead::FollowingLinks => open_following_links(&path),
-                RootRead::Beneath(resolved) => boundary.open_member(resolved),
-                RootRead::Held { directory, name } => directory.open_member(name),
-            };
-            let text = read_regular_file(opened).map_err(|failure| failure.into_error(&path))?;
+            let text = match &root_read {
+                RootRead::FollowingLinks => read_regular_file(open_following_links(&path)),
+                RootRead::Beneath(resolved) => read_regular_file(boundary.open_member(resolved)),
+                RootRead::Held { directory, name } => {
+                    read_regular_file(directory.open_member(name))
+                }
+                RootRead::Read(text) => Ok((*text).to_owned()),
+            }
+            .map_err(|failure| failure.into_error(&path))?;
             let reached = boundary.reach(&path).map_err(|source| BudgetError::Io {
                 path: path.clone(),
                 source,
