@@ -245,6 +245,16 @@ pub(super) struct GitCommandRejection {
     stderr: String,
 }
 
+impl GitCommandRejection {
+    pub(super) fn new(field: &'static str, status: ExitStatus, stderr: &[u8]) -> Self {
+        Self {
+            field,
+            status,
+            stderr: String::from_utf8_lossy(stderr).trim_end().to_owned(),
+        }
+    }
+}
+
 #[derive(Debug)]
 enum GitCandidateRejection {
     Command(GitCommandRejection),
@@ -322,13 +332,11 @@ fn git_resolved_path(
             source,
         })?;
     if !output.status.success() {
-        return Ok(Err(GitCommandRejection {
+        return Ok(Err(GitCommandRejection::new(
             field,
-            status: output.status,
-            stderr: String::from_utf8_lossy(&output.stderr)
-                .trim_end()
-                .to_owned(),
-        }));
+            output.status,
+            &output.stderr,
+        )));
     }
 
     let reported = git_reported_path(&output.stdout, field)?;
@@ -366,11 +374,17 @@ pub fn linked_worktree_points_back(
             source,
         })?;
     if raw.len() as u64 > MAX_BACKLINK_BYTES {
-        return Ok(false);
+        return Err(RepositoryRootError::Backlink {
+            path: backlink_path,
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("longer than {MAX_BACKLINK_BYTES} bytes"),
+            ),
+        });
     }
     let backlink = std::str::from_utf8(&raw)
         .map_err(|_| RepositoryRootError::NonUtf8Backlink {
-            path: backlink_path,
+            path: backlink_path.clone(),
         })?
         .trim_end();
     let backlink = Path::new(backlink);
@@ -379,12 +393,27 @@ pub fn linked_worktree_points_back(
     } else {
         git_dir.join(backlink)
     };
-    let (Ok(resolved_backlink), Ok(canonical_candidate)) =
-        (backlink.canonicalize(), candidate.canonicalize())
-    else {
-        return Ok(false);
-    };
-    Ok(resolved_backlink == canonical_candidate.join(".git"))
+    let canonical_candidate =
+        candidate
+            .canonicalize()
+            .map_err(|source| RepositoryRootError::Unresolvable {
+                path: candidate.to_path_buf(),
+                source,
+            })?;
+    match backlink.canonicalize() {
+        Ok(resolved_backlink) => Ok(resolved_backlink == canonical_candidate.join(".git")),
+        Err(absent) if absent.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(source) => Err(RepositoryRootError::Backlink {
+            path: backlink_path,
+            source: std::io::Error::new(
+                source.kind(),
+                format!(
+                    "the path it names, {}, could not be resolved: {source}",
+                    backlink.display()
+                ),
+            ),
+        }),
+    }
 }
 
 fn open_regular_file(path: &Path) -> std::io::Result<File> {
@@ -511,11 +540,7 @@ mod tests {
             .output()
             .unwrap()
             .status;
-        Err(GitCommandRejection {
-            field,
-            status,
-            stderr: stderr.to_string(),
-        })
+        Err(GitCommandRejection::new(field, status, stderr.as_bytes()))
     }
 
     #[test]
@@ -674,6 +699,83 @@ mod tests {
             ],
         );
         assert!(message.contains("backlink"), "{message}");
+    }
+
+    fn backlink_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let (fixture, candidate) = candidate_fixture();
+        let git_dir = candidate.join("admin/worktrees/fixture");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        std::fs::write(candidate.join(".git"), "gitdir: ignored\n").unwrap();
+        (fixture, candidate, git_dir)
+    }
+
+    #[test]
+    fn a_backlink_naming_a_path_that_does_not_exist_is_a_mismatch() {
+        let (_fixture, candidate, git_dir) = backlink_fixture();
+        std::fs::write(
+            git_dir.join("gitdir"),
+            format!("{}\n", candidate.join("gone/.git").display()),
+        )
+        .unwrap();
+
+        assert!(!linked_worktree_points_back(&candidate, &git_dir).unwrap());
+    }
+
+    #[test]
+    fn an_oversized_backlink_is_refused_rather_than_read_as_a_mismatch() {
+        let (_fixture, candidate, git_dir) = backlink_fixture();
+        let backlink = git_dir.join("gitdir");
+        std::fs::write(&backlink, "x".repeat(4097)).unwrap();
+
+        let refusal = linked_worktree_points_back(&candidate, &git_dir).unwrap_err();
+
+        let RepositoryRootError::Backlink { path, source } = &refusal else {
+            panic!("{refusal}");
+        };
+        assert_eq!(path, &backlink);
+        assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
+        assert!(refusal.to_string().contains("4096 bytes"), "{refusal}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_backlink_whose_path_cannot_be_resolved_is_an_error_naming_that_path() {
+        let (_fixture, candidate, git_dir) = backlink_fixture();
+        let looped = candidate.join("looped");
+        std::os::unix::fs::symlink("looped", &looped).unwrap();
+        let backlink = git_dir.join("gitdir");
+        std::fs::write(&backlink, format!("{}\n", looped.join(".git").display())).unwrap();
+
+        let refusal = linked_worktree_points_back(&candidate, &git_dir).unwrap_err();
+
+        let RepositoryRootError::Backlink { path, source } = &refusal else {
+            panic!("{refusal}");
+        };
+        assert_eq!(path, &backlink);
+        assert_eq!(format!("{:?}", source.kind()), "FilesystemLoop");
+        let message = refusal.to_string();
+        assert!(
+            message.contains(&looped.join(".git").display().to_string()),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_candidate_that_cannot_be_resolved_is_an_error_not_a_mismatch() {
+        let (_fixture, candidate, git_dir) = backlink_fixture();
+        std::fs::write(
+            git_dir.join("gitdir"),
+            format!("{}\n", candidate.join(".git").display()),
+        )
+        .unwrap();
+        let gone = candidate.join("gone");
+
+        let refusal = linked_worktree_points_back(&gone, &git_dir).unwrap_err();
+
+        assert!(
+            matches!(&refusal, RepositoryRootError::Unresolvable { path, .. } if path == &gone),
+            "{refusal}"
+        );
     }
 
     #[cfg(unix)]

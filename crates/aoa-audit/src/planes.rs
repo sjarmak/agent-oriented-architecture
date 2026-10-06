@@ -115,7 +115,7 @@ fn names_worktree(git_dir: &Path, common_dir: &Path, repo: &Path) -> Result<bool
         {
             false
         }
-        Err(_) => return Ok(false),
+        Err(trouble) => return Err(GitTrouble::Unasked(trouble.to_string())),
     };
     Ok(
         match config_value(repo, git_dir, &["--get", "core.worktree"])? {

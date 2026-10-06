@@ -99,16 +99,18 @@ pub(super) fn submodule_rejection(
         }));
     }
 
-    let Some(configured) = configured_worktree(git_dir)? else {
-        return Ok(Some(SubmoduleRejection::WorktreeUnstated {
-            git_dir: git_dir.to_path_buf(),
-        }));
+    let configured = match configured_worktree(git_dir)? {
+        ConfiguredWorktree::Stated(configured) => configured,
+        ConfiguredWorktree::Unstated => {
+            return Ok(Some(SubmoduleRejection::WorktreeUnstated {
+                git_dir: git_dir.to_path_buf(),
+            }));
+        }
+        ConfiguredWorktree::Unreadable(rejection) => {
+            return Ok(Some(SubmoduleRejection::Command(rejection)));
+        }
     };
-    let points_back = git_dir
-        .join(&configured)
-        .canonicalize()
-        .is_ok_and(|worktree| worktree == candidate);
-    if points_back {
+    if configured_worktree_is(git_dir, &configured, candidate)? {
         Ok(None)
     } else {
         Ok(Some(SubmoduleRejection::WorktreeMismatch {
@@ -116,6 +118,22 @@ pub(super) fn submodule_rejection(
             candidate: candidate.to_path_buf(),
             configured,
         }))
+    }
+}
+
+fn configured_worktree_is(
+    git_dir: &Path,
+    configured: &str,
+    candidate: &Path,
+) -> Result<bool, RepositoryRootError> {
+    let named = git_dir.join(configured);
+    match named.canonicalize() {
+        Ok(worktree) => Ok(worktree == candidate),
+        Err(absent) if absent.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(source) => Err(RepositoryRootError::Unresolvable {
+            path: named,
+            source,
+        }),
     }
 }
 
@@ -128,7 +146,15 @@ fn enclosing_repository_root(candidate: &Path) -> Result<PathBuf, RepositoryRoot
     }
 }
 
-fn configured_worktree(git_dir: &Path) -> Result<Option<String>, RepositoryRootError> {
+enum ConfiguredWorktree {
+    Stated(String),
+    Unstated,
+    Unreadable(GitCommandRejection),
+}
+
+const GIT_CONFIG_KEY_UNSET: i32 = 1;
+
+fn configured_worktree(git_dir: &Path) -> Result<ConfiguredWorktree, RepositoryRootError> {
     let output = git_free_of_inherited_state()
         .arg("-C")
         .arg(git_dir)
@@ -140,8 +166,91 @@ fn configured_worktree(git_dir: &Path) -> Result<Option<String>, RepositoryRootE
             candidate: git_dir.to_path_buf(),
             source,
         })?;
-    if !output.status.success() {
-        return Ok(None);
+    if output.status.code() == Some(GIT_CONFIG_KEY_UNSET) {
+        return Ok(ConfiguredWorktree::Unstated);
     }
-    git_reported_path(&output.stdout, CORE_WORKTREE).map(|worktree| Some(worktree.to_owned()))
+    if !output.status.success() {
+        return Ok(ConfiguredWorktree::Unreadable(GitCommandRejection::new(
+            CORE_WORKTREE,
+            output.status,
+            &output.stderr,
+        )));
+    }
+    git_reported_path(&output.stdout, CORE_WORKTREE)
+        .map(|worktree| ConfiguredWorktree::Stated(worktree.to_owned()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn git_dir_with_config(config: &str) -> (tempfile::TempDir, PathBuf) {
+        let fixture = tempfile::tempdir().unwrap();
+        let git_dir = fixture.path().canonicalize().unwrap().join("modules/sub");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        std::fs::write(git_dir.join("config"), config).unwrap();
+        (fixture, git_dir)
+    }
+
+    #[test]
+    fn a_config_that_states_the_worktree_reports_it() {
+        let (_fixture, git_dir) = git_dir_with_config("[core]\n\tworktree = ../../../sub\n");
+
+        let configured = configured_worktree(&git_dir).unwrap();
+
+        assert!(
+            matches!(&configured, ConfiguredWorktree::Stated(worktree) if worktree == "../../../sub"),
+        );
+    }
+
+    #[test]
+    fn a_config_without_the_key_is_unstated() {
+        let (_fixture, git_dir) = git_dir_with_config("[core]\n\tbare = false\n");
+
+        assert!(matches!(
+            configured_worktree(&git_dir).unwrap(),
+            ConfiguredWorktree::Unstated
+        ));
+    }
+
+    #[test]
+    fn a_config_git_cannot_read_is_a_command_rejection_not_an_unstated_worktree() {
+        let (_fixture, git_dir) = git_dir_with_config("[[[\n");
+
+        let configured = configured_worktree(&git_dir).unwrap();
+
+        let ConfiguredWorktree::Unreadable(rejection) = configured else {
+            panic!("a malformed config must be reported as a rejection");
+        };
+        let message = rejection.to_string();
+        assert!(message.contains(CORE_WORKTREE), "{message}");
+        assert!(message.contains("bad config"), "{message}");
+    }
+
+    #[test]
+    fn a_configured_worktree_that_does_not_exist_is_a_mismatch() {
+        let (_fixture, git_dir) = git_dir_with_config("");
+        let candidate = git_dir.parent().unwrap().to_path_buf();
+
+        assert!(!configured_worktree_is(&git_dir, "../gone", &candidate).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_configured_worktree_that_cannot_be_resolved_is_an_error_naming_the_path() {
+        let (_fixture, git_dir) = git_dir_with_config("");
+        let modules = git_dir.parent().unwrap();
+        std::os::unix::fs::symlink("looped", modules.join("looped")).unwrap();
+
+        let refusal = configured_worktree_is(&git_dir, "../looped", modules).unwrap_err();
+
+        let RepositoryRootError::Unresolvable { path, source } = &refusal else {
+            panic!("{refusal}");
+        };
+        assert_eq!(path, &git_dir.join("../looped"));
+        assert_eq!(
+            source.raw_os_error(),
+            Some(rustix::io::Errno::LOOP.raw_os_error())
+        );
+    }
 }
