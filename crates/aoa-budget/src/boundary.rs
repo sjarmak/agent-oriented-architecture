@@ -217,8 +217,13 @@ impl Boundary {
 
     #[cfg(unix)]
     pub(crate) fn open_member(&self, resolved: &Path) -> io::Result<File> {
-        let (parent, name) = self.split(resolved)?;
-        let directory = self.descend(&parent)?;
+        let (directory, name) = match self.beneath(resolved)?.as_os_str().is_empty() {
+            true => (self.directory.try_clone()?, OsString::from(".")),
+            false => {
+                let (parent, name) = self.split(resolved)?;
+                (self.descend(&parent)?, name)
+            }
+        };
         let flags = descend::MEMBER;
         let fd = rustix::fs::openat(&directory, name, flags, rustix::fs::Mode::empty())?;
         Ok(File::from(fd))

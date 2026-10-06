@@ -400,6 +400,24 @@ fn a_link_to_a_pipe_is_reported_and_a_directory_is_skipped_without_being_read() 
 
 #[cfg(unix)]
 #[test]
+fn a_link_to_the_boundary_directory_itself_is_skipped_like_any_directory() {
+    let dir = TempDir::new().unwrap();
+    let root = write(
+        dir.path(),
+        "repo/AGENTS.md",
+        "[here](.) [around](sub/..) [rules](sub/rules.md)\n",
+    );
+    write(dir.path(), "repo/sub/rules.md", "rules\n");
+
+    let closure = resolve_closure_within(&root, &dir.path().join("repo")).unwrap();
+
+    assert!(closure.unread.is_empty(), "{:?}", closure.unread);
+    assert_eq!(closure.files.len(), 2);
+    assert!(closure.outside_boundary.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
 fn a_link_to_a_socket_is_reported_as_not_a_regular_file() {
     let dir = TempDir::new().unwrap();
     let root = write(dir.path(), "AGENTS.md", "[socket](socket.md)\n");
