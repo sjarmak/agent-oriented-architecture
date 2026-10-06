@@ -131,7 +131,7 @@ model {
       }
       codeprobeShim = component 'aoa-codeprobe-shim' {
         #built
-        description 'Parses a codeprobe `claude -p --output-format stream-json` transcript into a native trace'
+        description 'Parses a codeprobe trial into a native trace: the `claude -p --output-format stream-json` transcript, or the run-wide `trace.db` when the transcript holds only the final answer'
         link ../crates/aoa-codeprobe-shim 'crates/aoa-codeprobe-shim/'
       }
       observeShim = component 'aoa-observe-shim' {
@@ -266,7 +266,7 @@ model {
 
   // Substrate — normalize whatever produced the run, index the repo.
   aoa.substrate.observeShim -> repoUnderTest 'reads live .aoa/traces session logs'
-  aoa.substrate.codeprobeShim -> codeprobe 'parses recorded claude -p stream-json transcripts'
+  aoa.substrate.codeprobeShim -> codeprobe 'parses recorded claude -p stream-json transcripts and reads the run-wide trace.db read-only'
   aoa.substrate.scipGraph -> repoUnderTest 'indexes via SCIP, or AST / line-scan when SCIP is unavailable'
   aoa.substrate.observeShim -> aoa.substrate.trace 'normalizes into the native trace schema'
   aoa.substrate.observeShim -> aoa.substrate.codeprobeShim 'shares the capped-read primitives and the TraceBackend conformance contract'

@@ -46,7 +46,7 @@ mod task;
 pub use bridge::{EditLocalityAnchors, EditLocalityError};
 pub use codeprobe_run::{
     aggregate_provenance, discover_tasks, discover_tasks_isolating_names, leg_pass, scoring_path,
-    transcript_path, DualLegs, TrialScoring,
+    trace_db_location, transcript_path, DualLegs, TraceDbLocation, TrialScoring,
 };
 pub use error::BenchError;
 pub use exposure::{

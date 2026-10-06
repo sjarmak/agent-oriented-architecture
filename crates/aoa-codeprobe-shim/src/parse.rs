@@ -3,39 +3,15 @@
 use std::io::Read;
 use std::path::Path;
 
-use aoa_trace::{Span, SpanSource, SpanType, Trace};
 use serde_json::{Map, Value};
 
 use crate::error::ShimError;
-use crate::mapping::{classify, Mapping};
+use crate::spans::{Limits, ShimResult, SpanBuilder};
 
 /// Largest transcript accepted from disk. A long verbose agent run is a few tens
 /// of MiB; this leaves generous headroom while bounding the bytes held in memory
 /// from an attacker-controlled file.
 const MAX_TRANSCRIPT_BYTES: u64 = 64 * 1024 * 1024;
-
-/// Largest span count a single transcript may produce. Well above any real run
-/// (a 64 MiB transcript of minimal tool_use blocks tops out near ~1.3M spans);
-/// hitting this means the input is pathological and parsing fails loud.
-pub(crate) const MAX_SPANS: usize = 200_000;
-
-/// Largest number of warnings retained. Warnings are lossy diagnostics, so the
-/// cap drops extras behind a sentinel rather than erroring — this bounds the
-/// amplification of a file made entirely of tiny non-JSON lines.
-const MAX_WARNINGS: usize = 10_000;
-
-/// Outcome of parsing one transcript.
-///
-/// `trace` is built with a strictly increasing `seq`, the invariant
-/// `validate_trace` checks (asserted by the crate's integration tests).
-/// `warnings` records every non-fatal event the parser chose not to turn into a
-/// span — chiefly unmapped tool names — so unknown tools are logged, never
-/// silently swallowed.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ShimResult {
-    pub trace: Trace,
-    pub warnings: Vec<String>,
-}
 
 /// Parse a codeprobe `agent_output.txt` transcript at `path`.
 ///
@@ -152,10 +128,15 @@ fn decode_utf8(raw: Vec<u8>, path: &Path) -> Result<String, ShimError> {
 /// Blank and non-JSON lines are skipped (matching codeprobe's reader). All
 /// emitted spans have `source = native`.
 ///
+/// Returns [`ShimError::NoAgentEvents`] when no line is an `assistant` or
+/// `user` event: the current codeprobe writes only the agent's extracted final
+/// answer to `agent_output.txt`, and such a file observes no agent action. See
+/// [`crate::parse_trial`] for the reader that falls back to `trace.db` then.
+///
 /// Returns [`ShimError::TooManySpans`] if the transcript would produce more than
-/// [`MAX_SPANS`] spans: a silently truncated trace would corrupt the locality
+/// the 200 000-span cap: a silently truncated trace would corrupt the locality
 /// metrics computed from it, so the bound fails loud. Warnings, being lossy
-/// diagnostics, are capped behind a sentinel instead (see [`MAX_WARNINGS`]).
+/// diagnostics, are capped behind a sentinel instead.
 ///
 /// # Secrets
 ///
@@ -164,35 +145,14 @@ fn decode_utf8(raw: Vec<u8>, path: &Path) -> Result<String, ShimError> {
 /// paths. Callers MUST pass a codeprobe-sanitized transcript — codeprobe strips
 /// secrets upstream when it writes `agent_output.txt`. An unsanitized transcript
 /// (e.g. a `Bash` command with an inline token) would carry that secret straight
-/// into the emitted [`Trace`], so do not feed raw, un-sanitized agent output here.
+/// into the emitted [`Trace`](aoa_trace::Trace), so do not feed raw,
+/// un-sanitized agent output here.
 pub fn parse_transcript(raw: &str) -> Result<ShimResult, ShimError> {
     parse_transcript_bounded(raw, Limits::DEFAULT)
 }
 
-/// Resource bounds applied while parsing, factored out so tests can exercise the
-/// caps with tiny values instead of materializing a multi-MiB transcript.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Limits {
-    max_spans: usize,
-    max_warnings: usize,
-}
-
-impl Limits {
-    const DEFAULT: Self = Self {
-        max_spans: MAX_SPANS,
-        max_warnings: MAX_WARNINGS,
-    };
-}
-
 pub(crate) fn parse_transcript_bounded(raw: &str, limits: Limits) -> Result<ShimResult, ShimError> {
-    let mut spans: Vec<Span> = Vec::new();
-    let mut warnings: Vec<String> = Vec::new();
-    // Maps a tool_use id to the index of the span it produced, so a later
-    // tool_result can reclassify it (e.g. write.attempt -> write.blocked).
-    let mut span_index_by_tool_id: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
-    let mut seq: u64 = 0;
-    let mut saw_write = false;
+    let mut builder = SpanBuilder::new(limits);
     let mut lines: usize = 0;
     let mut saw_agent_event = false;
 
@@ -205,11 +165,7 @@ pub(crate) fn parse_transcript_bounded(raw: &str, limits: Limits) -> Result<Shim
         let event: Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(_) => {
-                record_warning(
-                    &mut warnings,
-                    limits.max_warnings,
-                    format!("skipped non-JSON line: {}", truncate(line)),
-                );
+                builder.warn(format!("skipped non-JSON line: {}", truncate(line)));
                 continue;
             }
         };
@@ -224,64 +180,10 @@ pub(crate) fn parse_transcript_bounded(raw: &str, limits: Limits) -> Result<Shim
                     let name = block.get("name").and_then(Value::as_str).unwrap_or("");
                     let empty = Value::Object(Map::new());
                     let input = block.get("input").unwrap_or(&empty);
-
-                    match classify(name, input) {
-                        Mapping::Span {
-                            span_type,
-                            target_key,
-                            target_fields,
-                        } => {
-                            let target = resolve_target(name, target_fields, input);
-                            let mut attributes = Map::new();
-                            if let Some(t) = target {
-                                attributes.insert(target_key.to_string(), Value::String(t));
-                            }
-                            attributes.insert("tool".to_string(), Value::String(name.to_string()));
-
-                            if span_type == SpanType::WriteAttempt {
-                                saw_write = true;
-                            }
-                            if spans.len() >= limits.max_spans {
-                                return Err(ShimError::TooManySpans {
-                                    max: limits.max_spans,
-                                });
-                            }
-                            if let Some(id) = block.get("id").and_then(Value::as_str) {
-                                span_index_by_tool_id.insert(id.to_string(), spans.len());
-                            }
-                            spans.push(Span {
-                                span_type,
-                                source: SpanSource::Native,
-                                seq,
-                                attributes,
-                            });
-                            seq += 1;
-                        }
-                        Mapping::Unknown => {
-                            record_warning(
-                                &mut warnings,
-                                limits.max_warnings,
-                                format!("unmapped tool '{name}' (no span emitted)"),
-                            );
-                        }
-                    }
+                    let id = block.get("id").and_then(Value::as_str);
+                    builder.tool_use(id, name, input)?;
                 }
             }
-            // A tool result settles the outcome of the write it correlates to.
-            // Until one arrives the span stays `write.attempt`, so a transcript
-            // truncated mid-call leaves an unresolved attempt rather than
-            // fabricating either outcome.
-            //
-            // An errored result maps to `write.blocked` rather than
-            // `write.failed` on purpose. A reconstructed transcript exposes only
-            // the `is_error` boolean; separating a policy denial from an
-            // execution error would mean classifying the human-readable message
-            // beside it (the fixtures carry "Permission denied ... blocked by
-            // policy" as prose), and reading meaning out of prose is exactly
-            // what this parser must not do. The narrower distinction is
-            // available on the hook path, where the host reports each outcome as
-            // its own event. Both provenances agree on what matters here:
-            // neither `write.blocked` nor `write.failed` is a landed edit.
             Some("user") => {
                 saw_agent_event = true;
                 for block in content_blocks(&event) {
@@ -291,23 +193,11 @@ pub(crate) fn parse_transcript_bounded(raw: &str, limits: Limits) -> Result<Shim
                     let Some(id) = block.get("tool_use_id").and_then(Value::as_str) else {
                         continue;
                     };
-                    let Some(&idx) = span_index_by_tool_id.get(id) else {
-                        continue;
-                    };
-                    // Only an unresolved attempt is settled here; a span that
-                    // already carries an outcome is never re-decided.
-                    if spans[idx].span_type != SpanType::WriteAttempt {
-                        continue;
-                    }
                     let errored = block
                         .get("is_error")
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
-                    spans[idx].span_type = if errored {
-                        SpanType::WriteBlocked
-                    } else {
-                        SpanType::WriteCommitted
-                    };
+                    builder.tool_result(id, errored);
                 }
             }
             _ => {}
@@ -318,31 +208,7 @@ pub(crate) fn parse_transcript_bounded(raw: &str, limits: Limits) -> Result<Shim
         return Err(ShimError::NoAgentEvents { lines });
     }
 
-    if !saw_write {
-        spans.push(Span {
-            span_type: SpanType::Abstain,
-            source: SpanSource::Native,
-            seq,
-            attributes: Map::new(),
-        });
-    }
-
-    Ok(ShimResult {
-        trace: Trace { spans },
-        warnings,
-    })
-}
-
-/// Append `msg` to `warnings`, capping growth at `max`. The entry that reaches
-/// the cap becomes a sentinel so the truncation is visible, never silent.
-fn record_warning(warnings: &mut Vec<String>, max: usize, msg: String) {
-    if warnings.len() < max {
-        warnings.push(msg);
-    } else if warnings.len() == max {
-        warnings.push(format!(
-            "warning cap reached: further warnings suppressed (>{max})"
-        ));
-    }
+    Ok(builder.finish())
 }
 
 /// Pull the `content` array from an event's `message` object.
@@ -354,21 +220,6 @@ fn content_blocks(event: &Value) -> impl Iterator<Item = &Value> {
         .map(|a| a.as_slice())
         .unwrap_or(&[])
         .iter()
-}
-
-/// Resolve a span's target string.
-///
-/// MCP tools have no input field for their target; the tool name itself is the
-/// meaningful target, so it is used directly. All other tools read the first
-/// present of `fields` from the tool `input`.
-fn resolve_target(name: &str, fields: &[&str], input: &Value) -> Option<String> {
-    if name.starts_with("mcp__") {
-        return Some(name.to_string());
-    }
-    fields
-        .iter()
-        .find_map(|k| input.get(*k).and_then(Value::as_str))
-        .map(str::to_owned)
 }
 
 fn truncate(s: &str) -> String {
@@ -384,6 +235,7 @@ fn truncate(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aoa_trace::SpanType;
 
     /// One `assistant` event carrying a single `Read` tool_use → one span.
     fn read_event() -> String {

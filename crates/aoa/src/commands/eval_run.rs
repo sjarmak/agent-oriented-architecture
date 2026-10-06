@@ -4,10 +4,14 @@
 //! This command does NOT orchestrate an agent — codeprobe does. It consumes the
 //! per-trial artifacts codeprobe persists under
 //! `<run_dir>/<task_id>/{agent_output.txt, scoring.json}` (codeprobe
-//! `core/executor.py::_save_task_artifacts`). For each task it runs the
-//! trace-shim over the transcript, builds (or degrades) a symbol graph, joins
-//! the task oracle, and computes the four process metrics plus the
-//! reward-hacking gap.
+//! `core/executor.py::_save_task_artifacts`) and the run-wide
+//! `<run_dir>/../trace.db` its telemetry adapter ingests every trial's tool
+//! calls into. For each task it runs the trace-shim over the transcript, or
+//! over the trial's `trace.db` rows when the transcript holds only the agent's
+//! final answer (current codeprobe writes nothing else there), builds (or
+//! degrades) a symbol graph, joins the task oracle, and computes the four
+//! process metrics plus the reward-hacking gap. Each record names which source
+//! its trace came from in `trace_source`.
 //!
 //! # Honest degradation (MVP boundaries)
 //!
@@ -16,7 +20,9 @@
 //!   trace — the writes the transcript confirms actually landed. A prose-only
 //!   trial has no writes, so edit-locality is degenerate — never fabricated.
 //!   Attempted, failed, denied, and blocked writes stay in the trace but are
-//!   not edits, so none of them inflates `F_edit`.
+//!   not edits, so none of them inflates `F_edit`. `trace.db` records no tool
+//!   results, so a trial read from it keeps every write at `write.attempt` and
+//!   contributes no edits either.
 //! - **the symbol graph** needs an explicit `--scip-index` or `--repo`; absent
 //!   one it degrades to zero weight (R0-ineligible), recorded in
 //!   `graph_degrade_reason` rather than failing silently.
@@ -46,9 +52,10 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 use aoa_bench::{
-    discover_tasks_isolating_names, load_task, scoring_path, transcript_path, TrialScoring,
+    discover_tasks_isolating_names, load_task, scoring_path, trace_db_location, transcript_path,
+    TraceDbLocation, TrialScoring,
 };
-use aoa_codeprobe_shim::parse_transcript_file;
+use aoa_codeprobe_shim::{parse_trial, TraceDbTrial, TraceSource};
 use aoa_construct::{BehavioralSignal, InsufficientDataNote};
 use aoa_domain::{HeldOutProvenance, RunResult, TaskOutcome};
 use aoa_gap::{compute_gap, GapOutcome};
@@ -138,6 +145,10 @@ struct TaskRecord {
     /// Count of non-fatal shim warnings (e.g. non-JSON transcript lines); a
     /// nonzero value flags a possibly-truncated or corrupt transcript.
     transcript_warnings: usize,
+    /// Which codeprobe artifact the trace was read from: the stream-json
+    /// transcript, or the run's `trace.db` when the transcript carried no
+    /// agent events.
+    trace_source: TraceSource,
     spans: TraceView,
     retrieval_locality: RetrievalLocality,
     invariant_discoverability: InvariantDiscoverability,
@@ -172,6 +183,7 @@ pub fn run(args: &EvalRunArgs) -> Result<i32> {
     let partition = detect_partition(args);
 
     let (task_ids, rejected_names) = discover_tasks_isolating_names(&args.codeprobe_run)?;
+    let trace_db = trace_db_location(&args.codeprobe_run);
 
     if let Some(dir) = &args.emit_traces {
         std::fs::create_dir_all(dir)
@@ -191,6 +203,7 @@ pub fn run(args: &EvalRunArgs) -> Result<i32> {
         match process_task(
             &task_id,
             args,
+            trace_db.as_ref(),
             &indexed,
             partition.as_ref(),
             &mut traces_written,
@@ -304,13 +317,21 @@ fn detect_partition(args: &EvalRunArgs) -> Option<SubtreePartition> {
 fn process_task(
     task_id: &str,
     args: &EvalRunArgs,
+    trace_db: Option<&TraceDbLocation>,
     indexed: &IndexedRepo,
     partition: Option<&SubtreePartition>,
     traces_written: &mut usize,
 ) -> Result<TaskRecord> {
     let transcript = transcript_path(&args.codeprobe_run, task_id);
-    let shim = parse_transcript_file(&transcript)
+    let trial = trace_db.map(|location| TraceDbTrial {
+        path: location.path.clone(),
+        config: location.config.clone(),
+        task_id: task_id.to_string(),
+    });
+    let parsed = parse_trial(&transcript, trial.as_ref())
         .with_context(|| format!("trace-shim failed on {}", transcript.display()))?;
+    let trace_source = parsed.source;
+    let shim = parsed.shim;
     let trace = shim.trace;
     // A nonzero warning count flags a possibly-truncated/corrupt transcript; it
     // is surfaced on the record rather than dropped.
@@ -431,6 +452,7 @@ fn process_task(
         repo_eligible_for_r0: quality.eligible_for_r0(),
         graph_degrade_reason: indexed.degrade_reason.clone(),
         transcript_warnings,
+        trace_source,
         spans,
         retrieval_locality: compute_retrieval_locality(input)?,
         invariant_discoverability: compute_invariant_discoverability(input),
@@ -528,9 +550,10 @@ fn render_human(report: &EvalRunReport) -> String {
         );
         let _ = writeln!(
             out,
-            "    spans: {} ({})",
+            "    spans: {} ({}) via {}",
             r.spans.total,
-            span_summary(&r.spans)
+            span_summary(&r.spans),
+            r.trace_source.as_str()
         );
         // Per-subtree rows (aoa-d6t.26): indented under their task record.
         for row in r.subtree_metrics.iter().flatten() {

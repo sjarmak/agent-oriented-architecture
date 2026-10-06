@@ -196,6 +196,28 @@ impl DualLegs {
 
 const SCORING_FILE: &str = "scoring.json";
 const TRANSCRIPT_FILE: &str = "agent_output.txt";
+const TRACE_DB_FILE: &str = "trace.db";
+
+/// Where codeprobe's run-wide trace database is for a run, and the `config`
+/// key that selects the run's trials inside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceDbLocation {
+    pub path: PathBuf,
+    pub config: String,
+}
+
+/// Locate the trace database a run's trials were ingested into.
+///
+/// codeprobe writes one `trace.db` per runs directory, beside the per-config
+/// directories, and keys each event by the config label, which is also the
+/// config directory's name. A run dir is one config directory, so the database
+/// is its sibling and the config is its name. `None` when `run_dir` has no
+/// parent or no UTF-8 name (`/`, `.`, `..`): no database could be joined to it.
+pub fn trace_db_location(run_dir: &Path) -> Option<TraceDbLocation> {
+    let config = run_dir.file_name()?.to_str()?.to_string();
+    let path = run_dir.parent()?.join(TRACE_DB_FILE);
+    Some(TraceDbLocation { path, config })
+}
 
 /// A trial's directory. The run-dir layout lives here, not in callers.
 ///
@@ -386,6 +408,34 @@ pub fn aggregate_provenance(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trace_db_sits_beside_the_config_directory_and_is_keyed_by_its_name() {
+        let location = trace_db_location(Path::new("/runs/.codeprobe/runs/baseline"))
+            .expect("a config directory locates its database");
+        assert_eq!(
+            location,
+            TraceDbLocation {
+                path: PathBuf::from("/runs/.codeprobe/runs/trace.db"),
+                config: "baseline".to_string(),
+            }
+        );
+        assert_eq!(
+            trace_db_location(Path::new("runs/baseline/")).map(|l| l.config),
+            Some("baseline".to_string())
+        );
+    }
+
+    #[test]
+    fn a_run_dir_without_a_name_locates_no_trace_db() {
+        for degenerate in ["/", ".", "..", "runs/.."] {
+            assert_eq!(
+                trace_db_location(Path::new(degenerate)),
+                None,
+                "{degenerate}"
+            );
+        }
+    }
 
     /// Pins the unknown-field tolerance documented on `TrialScoring`, so the
     /// decision fails CI rather than only asserting itself in prose.

@@ -1,6 +1,6 @@
 [package]
 name = "aoa-codeprobe-shim"
-description = "Parses a codeprobe per-trial stream-json transcript (claude -p --output-format stream-json --verbose) into a native 8-span AOA trace, preserving tool-call order and targets"
+description = "Parses a codeprobe trial into a native 8-span AOA trace, preserving tool-call order and targets: the stream-json transcript (claude -p --output-format stream-json --verbose) when it carries agent events, else the run's trace.db"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,3 +11,7 @@ aoa-trace = { path = "../aoa-trace" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
+
+[dev-dependencies]
+tempfile = "3.10.1"

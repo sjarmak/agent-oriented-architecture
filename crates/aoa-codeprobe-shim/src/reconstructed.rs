@@ -38,7 +38,7 @@ use serde_json::{Map, Value};
 
 use crate::backend::{TraceBackend, CONTRACT_VERSION};
 use crate::error::ShimError;
-use crate::parse::{ShimResult, MAX_SPANS};
+use crate::spans::{ShimResult, MAX_SPANS};
 
 /// The reconstructed-provenance example backend (see module docs).
 #[derive(Debug, Clone, Copy, Default)]

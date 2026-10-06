@@ -1,6 +1,6 @@
 use super::*;
 
-const READ_AND_EDIT_TRANSCRIPT: &str = concat!(
+pub(super) const READ_AND_EDIT_TRANSCRIPT: &str = concat!(
     r#"{"type":"system","subtype":"init","tools":["Read","Edit"]}"#,
     "\n",
     r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"src/lib.py"}}]}}"#,
@@ -63,7 +63,7 @@ fn two_trial_run(dir: &TempDir) -> PathBuf {
     run
 }
 
-fn record<'a>(report: &'a Value, task_id: &str) -> &'a Value {
+pub(super) fn record<'a>(report: &'a Value, task_id: &str) -> &'a Value {
     report["records"]
         .as_array()
         .expect("records array")
@@ -72,7 +72,7 @@ fn record<'a>(report: &'a Value, task_id: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("no record for {task_id}"))
 }
 
-fn count_of(spans: &Value, span_type: &str) -> u64 {
+pub(super) fn count_of(spans: &Value, span_type: &str) -> u64 {
     spans["counts"]
         .as_array()
         .expect("counts array")
@@ -81,7 +81,7 @@ fn count_of(spans: &Value, span_type: &str) -> u64 {
         .map_or(0, |c| c["count"].as_u64().expect("count"))
 }
 
-fn eval_run_json(run: &Path, extra: &[&std::ffi::OsStr]) -> Value {
+pub(super) fn eval_run_json(run: &Path, extra: &[&std::ffi::OsStr]) -> Value {
     let output = aoa()
         .args(["eval", "run", "--json", "--codeprobe-run"])
         .arg(run)

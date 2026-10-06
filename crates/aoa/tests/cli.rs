@@ -61,6 +61,8 @@ mod enforce_relative_target;
 mod eval_run;
 #[path = "cli_sections/eval_run_graph_coverage.rs"]
 mod eval_run_graph_coverage;
+#[path = "cli_sections/eval_run_trace_db.rs"]
+mod eval_run_trace_db;
 #[path = "cli_sections/eval_run_traces.rs"]
 mod eval_run_traces;
 #[path = "cli_sections/experiment.rs"]

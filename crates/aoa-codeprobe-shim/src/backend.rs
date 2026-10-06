@@ -29,7 +29,8 @@
 use aoa_trace::{validate_trace_value, SpanSource};
 
 use crate::error::ShimError;
-use crate::parse::{parse_transcript, ShimResult};
+use crate::parse::parse_transcript;
+use crate::spans::ShimResult;
 
 /// Version of the cross-agent trace conformance contract.
 ///
