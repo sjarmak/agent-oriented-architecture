@@ -1,3 +1,5 @@
+use std::ffi::OsStr;
+use std::fs::File;
 use std::path::{Component, Path, PathBuf};
 
 use super::{validate_single_component, PathTrustError};
@@ -64,7 +66,7 @@ pub fn read_regular_file_nofollow(
 
     let path = directory.join(name);
     validate_single_component(name).map_err(|_| PathTrustError::unsafe_path(&path))?;
-    let Some(mut file) = open_regular_file_nofollow(directory, name, &path)? else {
+    let Some(mut file) = open_regular_file_nofollow(&path)? else {
         return Ok(None);
     };
     let mut contents = String::new();
@@ -73,22 +75,36 @@ pub fn read_regular_file_nofollow(
     Ok(Some(contents))
 }
 
+pub fn open_regular_file_nofollow(path: &Path) -> Result<Option<File>, PathTrustError> {
+    let (Some(directory), Some(name)) = (path.parent(), path.file_name().and_then(OsStr::to_str))
+    else {
+        return Err(PathTrustError::unsafe_path(path));
+    };
+    validate_single_component(name).map_err(|_| PathTrustError::unsafe_path(path))?;
+    let directory = if directory.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        directory
+    };
+    open_regular_file_in(directory, name, path)
+}
+
 #[cfg(unix)]
-fn open_regular_file_nofollow(
+fn open_regular_file_in(
     directory: &Path,
     name: &str,
     path: &Path,
-) -> Result<Option<std::fs::File>, PathTrustError> {
+) -> Result<Option<File>, PathTrustError> {
     let parent = super::dirfd::open_trust_root(directory)?;
     super::dirfd::open_regular_file_at(&parent, name, path)
 }
 
 #[cfg(not(unix))]
-fn open_regular_file_nofollow(
+fn open_regular_file_in(
     _directory: &Path,
     _name: &str,
     path: &Path,
-) -> Result<Option<std::fs::File>, PathTrustError> {
+) -> Result<Option<File>, PathTrustError> {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -102,7 +118,7 @@ fn open_regular_file_nofollow(
             path: path.to_path_buf(),
         });
     }
-    std::fs::File::open(path)
+    File::open(path)
         .map(Some)
         .map_err(|source| PathTrustError::io(path, source))
 }
@@ -194,6 +210,48 @@ mod tests {
             matches!(result, Err(PathTrustError::Io { .. })),
             "an unreadable file must not read as absent: {result:?}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opens_a_fifo_without_blocking_and_refuses_it_as_not_a_regular_file() {
+        let root = tempfile::tempdir().expect("create root");
+        let fifo = root.path().join("trace.db");
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            &fifo,
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::RWXU,
+            0,
+        )
+        .expect("create fifo");
+
+        let result = open_regular_file_nofollow(&fifo);
+
+        assert!(
+            matches!(&result, Err(PathTrustError::NotRegularFile { path }) if path == &fifo),
+            "a fifo with no writer must be refused, not waited on: {result:?}"
+        );
+    }
+
+    #[test]
+    fn opens_a_bare_file_name_relative_to_the_working_directory() {
+        let result = open_regular_file_nofollow(Path::new("Cargo.toml"));
+        assert!(
+            matches!(result, Ok(Some(_))),
+            "a name with no directory is looked up in `.`: {result:?}"
+        );
+    }
+
+    #[test]
+    fn refuses_a_path_with_no_file_name() {
+        for path in ["/", ".", "..", ""] {
+            let result = open_regular_file_nofollow(Path::new(path));
+            assert!(
+                matches!(result, Err(PathTrustError::UnsafePath { .. })),
+                "{path:?}: {result:?}"
+            );
+        }
     }
 
     #[test]
