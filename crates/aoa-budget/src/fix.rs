@@ -52,47 +52,20 @@ fn fix_placing(
     let original = root_text(resolve_contained_closure(path, boundary)?, path)?;
     let encoder = target_encoder(target)?;
 
-    let (archive_name, archive_path, archive_found) = contained_archive(path, boundary)?;
+    let (archive_name, archive_path) = free_archive_name(path)?;
 
     let summary = summarize_under(&original, ceiling, &archive_name, |t| {
         count_tokens(&encoder, t)
     });
 
-    let (read_from, links) = file_behind(path, boundary)?;
-    let archive_trouble = |source| BudgetError::Io {
-        path: archive_path.clone(),
-        source,
-    };
-    if let Some(found) = &archive_found {
-        if is_the_file_at(found, &read_from).map_err(archive_trouble)? {
-            return Err(BudgetError::ArchiveIsRoot {
-                path: path.to_path_buf(),
-                archive: archive_path,
-            });
-        }
-        for link in &links {
-            if is_the_file_at(found, link).map_err(archive_trouble)? {
-                return Err(BudgetError::RootThroughArchive {
-                    path: path.to_path_buf(),
-                    archive: archive_path,
-                });
-            }
-        }
-    }
+    let read_from = file_behind(path, boundary)?;
     let root_standing = Standing::of_writable(&read_from)
         .and_then(|standing| standing.ok_or_else(|| std::io::ErrorKind::NotFound.into()))
         .map_err(|source| BudgetError::Io {
             path: path.to_path_buf(),
             source,
         })?;
-    let archive_standing = archive_found
-        .as_deref()
-        .map(Standing::of_writable)
-        .transpose()
-        .map_err(archive_trouble)?
-        .flatten()
-        .unwrap_or_else(|| root_standing.of_a_new_file());
-    let archive = Replacement::prepare(&archive_path, &original, &archive_standing)
+    let archive = Replacement::prepare(&archive_path, &original, &root_standing.of_a_new_file())
         .map_err(|unplaced| unplaced.at(&archive_path))?;
     let root = match Replacement::prepare(&read_from, &summary, &root_standing) {
         Ok(root) => root,
@@ -131,19 +104,17 @@ fn root_text(closure: Closure, path: &Path) -> Result<String, BudgetError> {
         })
 }
 
-fn file_behind(path: &Path, boundary: &Path) -> Result<(PathBuf, Vec<PathBuf>), BudgetError> {
+fn file_behind(path: &Path, boundary: &Path) -> Result<PathBuf, BudgetError> {
     let opened = Boundary::open(boundary).map_err(|source| BudgetError::Io {
         path: boundary.to_path_buf(),
         source,
     })?;
-    let (reached, links) = opened
-        .reach_through(path)
-        .map_err(|source| BudgetError::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
+    let reached = opened.reach(path).map_err(|source| BudgetError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
     match reached {
-        Reached::Member { resolved, .. } => Ok((resolved, links)),
+        Reached::Member { resolved, .. } => Ok(resolved),
         Reached::Outside => Err(BudgetError::OutsideBoundary {
             path: path.to_path_buf(),
             boundary: boundary.to_path_buf(),
@@ -155,24 +126,7 @@ fn file_behind(path: &Path, boundary: &Path) -> Result<(PathBuf, Vec<PathBuf>), 
     }
 }
 
-#[cfg(unix)]
-fn is_the_file_at(entry: &Path, file: &Path) -> std::io::Result<bool> {
-    use std::os::unix::fs::MetadataExt;
-
-    let identity =
-        |path: &Path| std::fs::symlink_metadata(path).map(|found| (found.dev(), found.ino()));
-    Ok(identity(entry)? == identity(file)?)
-}
-
-#[cfg(not(unix))]
-fn is_the_file_at(entry: &Path, file: &Path) -> std::io::Result<bool> {
-    Ok(std::fs::canonicalize(entry)? == std::fs::canonicalize(file)?)
-}
-
-fn contained_archive(
-    path: &Path,
-    boundary: &Path,
-) -> Result<(String, PathBuf, Option<PathBuf>), BudgetError> {
+fn free_archive_name(path: &Path) -> Result<(String, PathBuf), BudgetError> {
     let stem = path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -180,23 +134,18 @@ fn contained_archive(
     let dir = path.parent().unwrap_or(Path::new("."));
     let archive_name = format!("{stem}.archive.md");
     let archive_path = dir.join(&archive_name);
-    let opened = Boundary::open(boundary).map_err(|source| BudgetError::Io {
-        path: boundary.to_path_buf(),
-        source,
-    })?;
-    let reached = opened
-        .reach(&archive_path)
-        .map_err(|source| BudgetError::Io {
-            path: archive_path.clone(),
-            source,
-        })?;
-    match reached {
-        Reached::Outside => Err(BudgetError::OutsideBoundary {
-            path: archive_path,
-            boundary: boundary.to_path_buf(),
+    match std::fs::symlink_metadata(&archive_path) {
+        Ok(_) => Err(BudgetError::ArchiveExists {
+            path: path.to_path_buf(),
+            archive: archive_path,
         }),
-        Reached::Absent { .. } | Reached::Looping { .. } => Ok((archive_name, archive_path, None)),
-        Reached::Member { entry, .. } => Ok((archive_name, archive_path, Some(entry))),
+        Err(absent) if absent.kind() == std::io::ErrorKind::NotFound => {
+            Ok((archive_name, archive_path))
+        }
+        Err(source) => Err(BudgetError::Io {
+            path: archive_path,
+            source,
+        }),
     }
 }
 
@@ -245,8 +194,6 @@ mod tests {
 
     use super::*;
 
-    const EARLIER_ARCHIVES: [Option<&str>; 2] = [None, Some("an earlier archive\n")];
-
     struct Tree {
         dir: tempfile::TempDir,
         root: PathBuf,
@@ -257,14 +204,11 @@ mod tests {
         "A paragraph of guidance that every package must follow.\n\n".repeat(200)
     }
 
-    fn tree(earlier_archive: Option<&str>) -> Tree {
+    fn tree() -> Tree {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("big.md");
         std::fs::write(&root, oversized_body()).unwrap();
         let archive = dir.path().join("big.archive.md");
-        if let Some(earlier) = earlier_archive {
-            std::fs::write(&archive, earlier).unwrap();
-        }
         Tree { dir, root, archive }
     }
 
@@ -289,9 +233,8 @@ mod tests {
         path.file_name().is_some_and(|found| found == name)
     }
 
-    fn assert_nothing_was_lost_and_a_rerun_converges(
+    fn assert_nothing_was_lost_and_a_rerun_is_refused(
         tree: &Tree,
-        earlier_archive: Option<&str>,
         interrupted: Result<FixOutcome, BudgetError>,
         stopped_at: &str,
     ) {
@@ -304,89 +247,66 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&tree.archive).unwrap(), body);
         assert_eq!(names_in(tree.dir.path()), ["big.archive.md", "big.md"]);
 
-        let uninterrupted = tree_fixed_in_one_run(earlier_archive);
-        fix(tree, &Placing::REAL).unwrap();
+        let rerun = fix(tree, &Placing::REAL);
 
-        assert_eq!(
-            std::fs::read_to_string(&tree.root).unwrap(),
-            std::fs::read_to_string(&uninterrupted.root).unwrap()
+        assert!(
+            matches!(
+                &rerun,
+                Err(BudgetError::ArchiveExists { path, archive })
+                    if path == &tree.root && archive == &tree.archive
+            ),
+            "{rerun:?}"
         );
+        assert_eq!(std::fs::read_to_string(&tree.root).unwrap(), body);
         assert_eq!(std::fs::read_to_string(&tree.archive).unwrap(), body);
-        assert_eq!(
-            std::fs::read_to_string(&uninterrupted.archive).unwrap(),
-            body
-        );
-        assert_eq!(
-            names_in(tree.dir.path()),
-            names_in(uninterrupted.dir.path())
-        );
-    }
-
-    fn tree_fixed_in_one_run(earlier_archive: Option<&str>) -> Tree {
-        let uninterrupted = tree(earlier_archive);
-        fix(&uninterrupted, &Placing::REAL).unwrap();
-        uninterrupted
+        assert_eq!(names_in(tree.dir.path()), ["big.archive.md", "big.md"]);
     }
 
     #[test]
-    fn a_root_that_cannot_be_placed_after_its_archive_loses_nothing_and_a_rerun_converges() {
-        for earlier_archive in EARLIER_ARCHIVES {
-            let tree = tree(earlier_archive);
-            let failing_the_root = Placing {
-                rename: &|fresh, to| {
-                    if is_named(to, "big.md") {
-                        return Err(PersistError {
-                            error: refused(),
-                            file: fresh,
-                        });
-                    }
-                    (Placing::REAL.rename)(fresh, to)
-                },
-                sync_directory: Placing::REAL.sync_directory,
-            };
+    fn a_root_that_cannot_be_placed_after_its_archive_loses_nothing_and_a_rerun_is_refused() {
+        let tree = tree();
+        let failing_the_root = Placing {
+            rename: &|fresh, to| {
+                if is_named(to, "big.md") {
+                    return Err(PersistError {
+                        error: refused(),
+                        file: fresh,
+                    });
+                }
+                (Placing::REAL.rename)(fresh, to)
+            },
+            sync_directory: Placing::REAL.sync_directory,
+        };
 
-            let interrupted = fix(&tree, &failing_the_root);
+        let interrupted = fix(&tree, &failing_the_root);
 
-            assert_nothing_was_lost_and_a_rerun_converges(
-                &tree,
-                earlier_archive,
-                interrupted,
-                "big.md",
-            );
-        }
+        assert_nothing_was_lost_and_a_rerun_is_refused(&tree, interrupted, "big.md");
     }
 
     #[test]
-    fn an_archive_directory_that_cannot_be_synced_loses_nothing_and_a_rerun_converges() {
-        for earlier_archive in EARLIER_ARCHIVES {
-            let tree = tree(earlier_archive);
-            let synced = Cell::new(0);
-            let failing_the_first_sync = Placing {
-                rename: Placing::REAL.rename,
-                sync_directory: &|dir| {
-                    synced.set(synced.get() + 1);
-                    if synced.get() == 1 {
-                        return Err(refused());
-                    }
-                    (Placing::REAL.sync_directory)(dir)
-                },
-            };
+    fn an_archive_directory_that_cannot_be_synced_loses_nothing_and_a_rerun_is_refused() {
+        let tree = tree();
+        let synced = Cell::new(0);
+        let failing_the_first_sync = Placing {
+            rename: Placing::REAL.rename,
+            sync_directory: &|dir| {
+                synced.set(synced.get() + 1);
+                if synced.get() == 1 {
+                    return Err(refused());
+                }
+                (Placing::REAL.sync_directory)(dir)
+            },
+        };
 
-            let interrupted = fix(&tree, &failing_the_first_sync);
+        let interrupted = fix(&tree, &failing_the_first_sync);
 
-            assert_eq!(synced.get(), 1);
-            assert_nothing_was_lost_and_a_rerun_converges(
-                &tree,
-                earlier_archive,
-                interrupted,
-                "big.archive.md",
-            );
-        }
+        assert_eq!(synced.get(), 1);
+        assert_nothing_was_lost_and_a_rerun_is_refused(&tree, interrupted, "big.archive.md");
     }
 
     #[test]
     fn a_prepared_root_that_cannot_be_withdrawn_is_named_when_the_archive_is_refused() {
-        let tree = tree(None);
+        let tree = tree();
         let stranded = Cell::new(None);
         let refusing_the_archive = Placing {
             rename: &|fresh, _to| {
@@ -437,7 +357,7 @@ mod tests {
 
     #[test]
     fn two_temporary_files_that_cannot_be_withdrawn_are_both_named_when_the_archive_is_refused() {
-        let tree = tree(None);
+        let tree = tree();
         let stranded = Cell::new(None);
         let stranding_both = Placing {
             rename: &|fresh, _to| {

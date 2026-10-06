@@ -20,7 +20,7 @@ duplicates one is already built.
 | [0007](0007-git-environment-and-config-for-subprocesses.md) | A git subprocess inherits only what can make git refuse, loudly: the shared strip, why the resolver inherits machine config, and why the data readers do not | Accepted |
 | [0008](0008-path-trust-crate.md) | `aoa-path-trust` owns the filesystem and git trust primitives; `aoa-trace` owns the trace format and nothing else | Accepted |
 | [0009](0009-nested-policy-only-tightens.md) | A nested repository's policy may only tighten: a write is refused if any enclosing governed repository's policy refuses it | Accepted |
-| [0010](0010-fix-oversized-two-file-replacement.md) | `fix_oversized` replaces two files with two renames, archive first: the window between them is accepted and loses no content | Accepted |
+| [0010](0010-fix-oversized-two-file-replacement.md) | `fix_oversized` replaces two files with two renames, archive first: the window between them is accepted and loses no content, and an archive that already stands refuses the run | Accepted |
 
 ## What belongs here
 

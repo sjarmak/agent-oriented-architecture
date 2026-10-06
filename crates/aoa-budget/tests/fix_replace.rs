@@ -44,24 +44,6 @@ fn seal_against_writing(path: &Path) -> bool {
 }
 
 #[test]
-fn fix_leaves_an_archive_that_already_stands_with_its_own_mode() {
-    let dir = tempfile::tempdir().unwrap();
-    let body = oversized_body();
-    let root = dir.path().join("big.md");
-    std::fs::write(&root, &body).unwrap();
-    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o644)).unwrap();
-    let archive = dir.path().join("big.archive.md");
-    std::fs::write(&archive, "an earlier archive\n").unwrap();
-    std::fs::set_permissions(&archive, std::fs::Permissions::from_mode(0o600)).unwrap();
-
-    fix_oversized(&root, dir.path(), 200, "gpt-4o").unwrap();
-
-    assert_eq!(std::fs::read_to_string(&archive).unwrap(), body);
-    assert_eq!(mode(&archive), 0o600);
-    assert_eq!(mode(&root), 0o644);
-}
-
-#[test]
 fn fix_refuses_a_root_the_process_may_not_write_and_changes_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let body = oversized_body();
@@ -87,18 +69,18 @@ fn fix_refuses_a_root_the_process_may_not_write_and_changes_nothing() {
 }
 
 #[test]
-fn fix_refuses_an_archive_the_process_may_not_write_before_it_touches_the_root() {
+fn fix_refuses_an_archive_the_process_may_not_create_before_it_touches_the_root() {
     let dir = tempfile::tempdir().unwrap();
     let body = oversized_body();
     let root = dir.path().join("big.md");
     std::fs::write(&root, &body).unwrap();
     let archive = dir.path().join("big.archive.md");
-    std::fs::write(&archive, "an earlier archive\n").unwrap();
-    if !seal_against_writing(&archive) {
+    if !seal_against_writing(dir.path()) {
         return;
     }
 
     let refused = fix_oversized(&root, dir.path(), 200, "gpt-4o");
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
 
     assert!(
         matches!(
@@ -109,11 +91,7 @@ fn fix_refuses_an_archive_the_process_may_not_write_before_it_touches_the_root()
         "{refused:?}"
     );
     assert_eq!(std::fs::read_to_string(&root).unwrap(), body);
-    assert_eq!(
-        std::fs::read_to_string(&archive).unwrap(),
-        "an earlier archive\n"
-    );
-    assert_eq!(names_in(dir.path()), ["big.archive.md", "big.md"]);
+    assert_eq!(names_in(dir.path()), ["big.md"]);
 }
 
 #[test]
@@ -125,8 +103,6 @@ fn fix_changes_nothing_when_the_file_behind_a_linked_root_cannot_be_replaced() {
     std::fs::write(held.join("real.md"), &body).unwrap();
     let root = dir.path().join("big.md");
     symlink("held/real.md", &root).unwrap();
-    let archive = dir.path().join("big.archive.md");
-    std::fs::write(&archive, "an earlier archive\n").unwrap();
     if !seal_against_writing(&held) {
         return;
     }
@@ -143,22 +119,16 @@ fn fix_changes_nothing_when_the_file_behind_a_linked_root_cannot_be_replaced() {
         "{refused:?}"
     );
     assert_eq!(std::fs::read_to_string(held.join("real.md")).unwrap(), body);
-    assert_eq!(
-        std::fs::read_to_string(&archive).unwrap(),
-        "an earlier archive\n"
-    );
-    assert_eq!(names_in(dir.path()), ["big.archive.md", "big.md", "held"]);
+    assert_eq!(names_in(dir.path()), ["big.md", "held"]);
     assert_eq!(names_in(&held), ["real.md"]);
 }
 
 #[cfg(target_os = "linux")]
 #[test]
-fn fix_carries_the_extended_attributes_of_each_file_it_replaces() {
+fn fix_carries_the_extended_attributes_of_the_root_it_replaces() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("big.md");
     std::fs::write(&root, oversized_body()).unwrap();
-    let archive = dir.path().join("big.archive.md");
-    std::fs::write(&archive, "an earlier archive\n").unwrap();
     let label = |path: &Path, value: &[u8]| {
         rustix::fs::setxattr(
             path,
@@ -174,7 +144,6 @@ fn fix_carries_the_extended_attributes_of_each_file_it_replaces() {
         );
         return;
     }
-    label(&archive, b"archive").unwrap();
     let labelled = |path: &Path| {
         let mut value = [0u8; 16];
         let filled = rustix::fs::getxattr(path, "user.aoa.label", &mut value[..]).unwrap();
@@ -184,7 +153,6 @@ fn fix_carries_the_extended_attributes_of_each_file_it_replaces() {
     fix_oversized(&root, dir.path(), 200, "gpt-4o").unwrap();
 
     assert_eq!(labelled(&root), b"root");
-    assert_eq!(labelled(&archive), b"archive");
 }
 
 #[test]
@@ -203,7 +171,7 @@ fn fix_refuses_a_root_whose_link_chain_passes_through_its_archive_name() {
     assert!(
         matches!(
             &refused,
-            Err(BudgetError::RootThroughArchive { path, archive: named })
+            Err(BudgetError::ArchiveExists { path, archive: named })
                 if path == &root && named == &archive
         ),
         "{refused:?}"
@@ -235,7 +203,7 @@ fn fix_refuses_a_root_that_steps_through_its_archive_name_as_a_directory() {
     let refused = fix_oversized(&root, dir.path(), 200, "gpt-4o");
 
     assert!(
-        matches!(&refused, Err(BudgetError::RootThroughArchive { path, .. }) if path == &root),
+        matches!(&refused, Err(BudgetError::ArchiveExists { path, .. }) if path == &root),
         "{refused:?}"
     );
     assert_eq!(std::fs::read_to_string(&held).unwrap(), body);

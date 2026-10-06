@@ -19,11 +19,8 @@ pub enum BudgetError {
     #[error("context file {path} resolves outside {boundary}")]
     OutsideBoundary { path: PathBuf, boundary: PathBuf },
 
-    #[error("context file {path} is the same file as {archive}, the name its archive would take")]
-    ArchiveIsRoot { path: PathBuf, archive: PathBuf },
-
-    #[error("context file {path} is reached through {archive}, the name its archive would take")]
-    RootThroughArchive { path: PathBuf, archive: PathBuf },
+    #[error("refusing to archive context file {path}: {archive} already exists")]
+    ArchiveExists { path: PathBuf, archive: PathBuf },
 
     #[error("failed to replace {path}, and {}", left_behind(.left))]
     TempFileLeftBehind {
