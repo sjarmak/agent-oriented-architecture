@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use aoa_path_trust::PathTrustError;
 use aoa_trace::SpanSource;
 
 /// Errors produced while reading or parsing a codeprobe transcript.
@@ -100,6 +101,13 @@ pub enum TraceDbError {
         path: PathBuf,
         #[source]
         source: std::io::Error,
+    },
+
+    #[error("refusing to read trace database {path}: {source}")]
+    Refused {
+        path: PathBuf,
+        #[source]
+        source: PathTrustError,
     },
 
     #[error("failed to copy trace database {path} into a private directory for reading: {source}")]

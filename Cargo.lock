@@ -156,6 +156,7 @@ dependencies = [
 name = "aoa-codeprobe-shim"
 version = "0.1.0"
 dependencies = [
+ "aoa-path-trust",
  "aoa-trace",
  "rusqlite",
  "serde",

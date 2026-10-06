@@ -514,9 +514,12 @@ fn a_database_without_the_tables_is_refused() {
         (
             "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at REAL NOT NULL); \
              INSERT INTO schema_migrations VALUES (1, 0.0);",
-            "no events table",
+            "\"events\"",
         ),
-        ("CREATE TABLE unrelated (x INTEGER);", "no schema_migrations table"),
+        (
+            "CREATE TABLE unrelated (x INTEGER);",
+            "\"schema_migrations\"",
+        ),
     ] {
         let dir = TempDir::new().expect("tempdir");
         let path = dir.path().join("trace.db");
@@ -528,10 +531,234 @@ fn a_database_without_the_tables_is_refused() {
         let err = trace_db_err(parse_trace_db(&trial(path)).unwrap_err());
 
         assert!(
-            matches!(&err, TraceDbError::Schema { detail, .. } if detail == expected),
+            matches!(&err, TraceDbError::Schema { detail, .. }
+                if detail.contains("missing") && detail.contains(expected)),
             "{expected}: {err}"
         );
     }
+}
+
+const CODEPROBE_STORE_DDL: [&str; 5] = [
+    "CREATE TABLE IF NOT EXISTS events (
+    run_id        TEXT    NOT NULL,
+    config        TEXT    NOT NULL,
+    task_id       TEXT    NOT NULL,
+    event_seq     INTEGER NOT NULL,
+    ts            REAL    NOT NULL,
+    event_type    TEXT    NOT NULL,
+    tool_name     TEXT,
+    tool_input    TEXT,
+    tool_output   TEXT,
+    duration_ms   INTEGER,
+    input_tokens  INTEGER,
+    output_tokens INTEGER,
+    bytes_written INTEGER NOT NULL,
+    PRIMARY KEY (run_id, config, task_id, event_seq)
+)
+",
+    "CREATE TABLE IF NOT EXISTS schema_migrations (
+    version    INTEGER PRIMARY KEY,
+    applied_at REAL    NOT NULL
+)
+",
+    "CREATE INDEX IF NOT EXISTS idx_events_config_task ON events (config, task_id)",
+    "CREATE INDEX IF NOT EXISTS idx_events_tool_name   ON events (tool_name)",
+    "CREATE INDEX IF NOT EXISTS idx_events_ts          ON events (ts)",
+];
+
+#[test]
+fn a_database_built_by_codeprobes_own_store_ddl_is_accepted() {
+    let dir = TempDir::new().expect("tempdir");
+    let path = dir.path().join("trace.db");
+    let conn = Connection::open(&path).expect("create");
+    conn.execute_batch("PRAGMA journal_mode=WAL;").expect("wal");
+    for statement in CODEPROBE_STORE_DDL {
+        conn.execute(statement, []).expect("store.py ddl");
+    }
+    conn.execute(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+        params![1, 1_700_000_000.5],
+    )
+    .expect("record the schema version the way store.py does");
+    insert(&conn, &tool_use(0, "Read", r#"{"file_path":"src/lib.py"}"#));
+    drop(conn);
+
+    let result = parse_trace_db(&trial(path)).expect("the writer's own schema is accepted");
+
+    assert_eq!(result.trace.spans[0].span_type, SpanType::FileRead);
+}
+
+fn rebuild_events(conn: &Connection, columns: &str) {
+    conn.execute_batch(&format!(
+        "DROP TABLE events; CREATE TABLE events ({columns}, \
+         PRIMARY KEY (run_id, config, task_id, event_seq)); \
+         CREATE INDEX idx_events_config_task ON events (config, task_id); \
+         CREATE INDEX idx_events_tool_name ON events (tool_name); \
+         CREATE INDEX idx_events_ts ON events (ts);"
+    ))
+    .expect("rebuild events");
+}
+
+const EVENTS_COLUMNS_WITH_CONFIG: &str = "run_id TEXT NOT NULL, config {config}, \
+    task_id TEXT NOT NULL, event_seq INTEGER NOT NULL, ts REAL NOT NULL, \
+    event_type TEXT NOT NULL, tool_name TEXT, tool_input TEXT, tool_output TEXT, \
+    duration_ms INTEGER, input_tokens INTEGER, output_tokens INTEGER, \
+    bytes_written INTEGER NOT NULL";
+
+#[test]
+fn a_collation_on_config_is_refused_instead_of_selecting_another_configs_rows() {
+    let dir = TempDir::new().expect("tempdir");
+    let (path, conn) = open_fixture(&dir);
+    rebuild_events(
+        &conn,
+        &EVENTS_COLUMNS_WITH_CONFIG.replace("{config}", "TEXT NOT NULL COLLATE NOCASE"),
+    );
+    insert(
+        &conn,
+        &Row {
+            config: "BASELINE",
+            ..tool_use(0, "Read", r#"{"file_path":"not-this-trial.py"}"#)
+        },
+    );
+    drop(conn);
+
+    let err = trace_db_err(parse_trace_db(&trial(path)).unwrap_err());
+
+    assert!(
+        matches!(&err, TraceDbError::Schema { detail, .. } if detail.contains("COLLATE NOCASE")),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_generated_column_is_refused() {
+    let dir = TempDir::new().expect("tempdir");
+    let (path, conn) = open_fixture(&dir);
+    rebuild_events(
+        &conn,
+        &format!(
+            "{}, is_error INTEGER GENERATED ALWAYS AS (0) VIRTUAL",
+            EVENTS_COLUMNS_WITH_CONFIG.replace("{config}", "TEXT NOT NULL")
+        ),
+    );
+    insert(&conn, &tool_use(0, "Read", r#"{"file_path":"a"}"#));
+    drop(conn);
+
+    let err = trace_db_err(parse_trace_db(&trial(path)).unwrap_err());
+
+    assert!(
+        matches!(&err, TraceDbError::Schema { detail, .. } if detail.contains("GENERATED ALWAYS")),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_missing_or_extra_index_is_refused() {
+    for (ddl, expected) in [
+        (
+            "DROP INDEX idx_events_ts;",
+            "missing [(\"index\", \"idx_events_ts\"",
+        ),
+        (
+            "CREATE INDEX idx_events_run ON events (run_id);",
+            "unexpected [(\"index\", \"idx_events_run\"",
+        ),
+    ] {
+        let dir = TempDir::new().expect("tempdir");
+        let (path, conn) = open_fixture(&dir);
+        conn.execute_batch(ddl).expect("change the indexes");
+        insert(&conn, &tool_use(0, "Read", r#"{"file_path":"a"}"#));
+        drop(conn);
+
+        let err = trace_db_err(parse_trace_db(&trial(path)).unwrap_err());
+
+        assert!(
+            matches!(&err, TraceDbError::Schema { detail, .. } if detail.contains(expected)),
+            "{expected}: {err}"
+        );
+    }
+}
+
+#[test]
+fn schema_versions_past_the_first_two_are_left_out_of_the_error() {
+    let dir = TempDir::new().expect("tempdir");
+    let (path, conn) = open_fixture(&dir);
+    for version in 2..=40 {
+        conn.execute("INSERT INTO schema_migrations VALUES (?1, 0.0)", [version])
+            .expect("bump");
+    }
+    insert(&conn, &tool_use(0, "Read", r#"{"file_path":"a"}"#));
+    drop(conn);
+
+    let err = trace_db_err(parse_trace_db(&trial(path)).unwrap_err());
+
+    assert!(
+        matches!(&err, TraceDbError::Schema { detail, .. }
+            if detail.contains("[1, 2]") && !detail.contains("40")),
+        "{err}"
+    );
+}
+
+fn refused(err: &TraceDbError) -> Option<&aoa_path_trust::PathTrustError> {
+    match err {
+        TraceDbError::Refused { source, .. } => Some(source),
+        _ => None,
+    }
+}
+
+#[test]
+fn a_symlinked_database_is_refused_and_its_target_left_alone() {
+    let real = TempDir::new().expect("tempdir");
+    let real_trial = fixture(&real, &busy_rows());
+    let before = std::fs::read(&real_trial.path).expect("read target bytes");
+    let dir = TempDir::new().expect("tempdir");
+    let link = dir.path().join("trace.db");
+    std::os::unix::fs::symlink(&real_trial.path, &link).expect("plant link");
+
+    let err = trace_db_err(parse_trace_db(&trial(link.clone())).unwrap_err());
+
+    assert!(
+        matches!(refused(&err), Some(aoa_path_trust::PathTrustError::UnsafePath { path }) if path == &link),
+        "{err}"
+    );
+    assert_eq!(names_in(dir.path()), ["trace.db"]);
+    assert_eq!(std::fs::read(&real_trial.path).expect("re-read"), before);
+}
+
+#[test]
+fn a_symlinked_write_ahead_log_is_refused() {
+    let dir = TempDir::new().expect("tempdir");
+    let trial = fixture(&dir, &busy_rows());
+    let elsewhere = TempDir::new().expect("tempdir");
+    let decoy = elsewhere.path().join("decoy-wal");
+    std::fs::write(&decoy, [0u8; 32]).expect("write decoy");
+    let wal = dir.path().join("trace.db-wal");
+    std::os::unix::fs::symlink(&decoy, &wal).expect("plant link");
+
+    let err = trace_db_err(parse_trace_db(&trial).unwrap_err());
+
+    assert!(
+        matches!(refused(&err), Some(aoa_path_trust::PathTrustError::UnsafePath { path }) if path == &wal),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_fifo_at_the_database_path_is_refused_without_waiting_for_a_writer() {
+    let dir = TempDir::new().expect("tempdir");
+    let fifo = dir.path().join("trace.db");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("run mkfifo");
+    assert!(made.success(), "mkfifo failed: {made}");
+
+    let err = trace_db_err(parse_trace_db(&trial(fifo.clone())).unwrap_err());
+
+    assert!(
+        matches!(refused(&err), Some(aoa_path_trust::PathTrustError::NotRegularFile { path }) if path == &fifo),
+        "{err}"
+    );
 }
 
 #[test]

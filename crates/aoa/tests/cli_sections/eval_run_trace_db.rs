@@ -292,10 +292,12 @@ fn eval_run_fails_loud_on_a_trace_db_of_another_schema() {
     assert_eq!(parsed["record_count"], 0);
     assert_eq!(parsed["error_count"], 2);
     let error = parsed["errors"][0]["error"].as_str().expect("error string");
-    assert!(
-        error.contains("schema_migrations holds versions [2]"),
-        "{error}"
-    );
+    for expected in [
+        "differ from the accepted schema",
+        "unexpected [(\"table\", \"events\", \"events\", Some(\"CREATE TABLE events(run_id TEXT)\"))]",
+    ] {
+        assert!(error.contains(expected), "error must name {expected}: {error}");
+    }
 }
 
 #[test]

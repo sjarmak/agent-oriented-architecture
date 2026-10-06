@@ -2,6 +2,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use aoa_path_trust::{open_regular_file_nofollow, PathTrustError};
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 
@@ -41,48 +42,6 @@ CREATE INDEX idx_events_tool_name   ON events (tool_name);
 CREATE INDEX idx_events_ts          ON events (ts);
 INSERT INTO schema_migrations (version, applied_at) VALUES (1, 0.0);
 ";
-
-struct Column {
-    name: &'static str,
-    declared_type: &'static str,
-    not_null: bool,
-    primary_key_ordinal: i64,
-}
-
-const fn column(
-    name: &'static str,
-    declared_type: &'static str,
-    not_null: bool,
-    primary_key_ordinal: i64,
-) -> Column {
-    Column {
-        name,
-        declared_type,
-        not_null,
-        primary_key_ordinal,
-    }
-}
-
-const EVENTS_COLUMNS: [Column; 13] = [
-    column("run_id", "TEXT", true, 1),
-    column("config", "TEXT", true, 2),
-    column("task_id", "TEXT", true, 3),
-    column("event_seq", "INTEGER", true, 4),
-    column("ts", "REAL", true, 0),
-    column("event_type", "TEXT", true, 0),
-    column("tool_name", "TEXT", false, 0),
-    column("tool_input", "TEXT", false, 0),
-    column("tool_output", "TEXT", false, 0),
-    column("duration_ms", "INTEGER", false, 0),
-    column("input_tokens", "INTEGER", false, 0),
-    column("output_tokens", "INTEGER", false, 0),
-    column("bytes_written", "INTEGER", true, 0),
-];
-
-const SCHEMA_MIGRATIONS_COLUMNS: [Column; 2] = [
-    column("version", "INTEGER", false, 1),
-    column("applied_at", "REAL", true, 0),
-];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraceDbTrial {
@@ -164,22 +123,19 @@ struct PrivateCopy {
 
 impl PrivateCopy {
     fn of(source: &Path, max_bytes: u64) -> Result<Self, TraceDbError> {
+        let Some(db) = open_source(source)? else {
+            return Err(TraceDbError::Absent {
+                path: source.to_path_buf(),
+            });
+        };
         let wal = wal_path(source);
-        let db_len = match std::fs::metadata(source) {
-            Ok(meta) => meta.len(),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return Err(TraceDbError::Absent {
-                    path: source.to_path_buf(),
-                })
-            }
-            Err(err) => return Err(read_error(source, err)),
+        let wal_file = open_source(&wal)?;
+        let db_len = length_of(&db, source)?;
+        let wal_len = match &wal_file {
+            Some(file) => length_of(file, &wal)?,
+            None => 0,
         };
-        let wal_len = match std::fs::metadata(&wal) {
-            Ok(meta) => Some(meta.len()),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-            Err(err) => return Err(read_error(&wal, err)),
-        };
-        if db_len.saturating_add(wal_len.unwrap_or(0)) > max_bytes {
+        if db_len.saturating_add(wal_len) > max_bytes {
             return Err(TraceDbError::TooLarge {
                 path: source.to_path_buf(),
                 max: max_bytes,
@@ -190,9 +146,10 @@ impl PrivateCopy {
             source: err,
         })?;
         let copy = Self { dir };
-        let copied = copy_capped(source, &copy.db_path(), max_bytes, max_bytes)?;
-        if wal_len.is_some() {
+        let copied = copy_capped(db, source, &copy.db_path(), max_bytes, max_bytes)?;
+        if let Some(wal_file) = wal_file {
             copy_capped(
+                wal_file,
                 &wal,
                 &wal_path(&copy.db_path()),
                 max_bytes - copied,
@@ -213,6 +170,22 @@ fn wal_path(db: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
+fn open_source(path: &Path) -> Result<Option<File>, TraceDbError> {
+    open_regular_file_nofollow(path).map_err(|err| match err {
+        PathTrustError::Io { source, .. } => read_error(path, source),
+        refused => TraceDbError::Refused {
+            path: path.to_path_buf(),
+            source: refused,
+        },
+    })
+}
+
+fn length_of(file: &File, path: &Path) -> Result<u64, TraceDbError> {
+    file.metadata()
+        .map(|meta| meta.len())
+        .map_err(|err| read_error(path, err))
+}
+
 fn read_error(path: &Path, source: std::io::Error) -> TraceDbError {
     TraceDbError::Read {
         path: path.to_path_buf(),
@@ -221,14 +194,13 @@ fn read_error(path: &Path, source: std::io::Error) -> TraceDbError {
 }
 
 fn copy_capped(
+    source_file: File,
     source: &Path,
     destination: &Path,
     budget: u64,
     cap: u64,
 ) -> Result<u64, TraceDbError> {
-    let mut reader = File::open(source)
-        .map_err(|err| read_error(source, err))?
-        .take(budget.saturating_add(1));
+    let mut reader = source_file.take(budget.saturating_add(1));
     let mut writer = File::create(destination).map_err(|err| TraceDbError::Copy {
         path: source.to_path_buf(),
         source: err,
@@ -262,80 +234,79 @@ fn open_read_only(copy: &Path, source: &Path) -> Result<Connection, TraceDbError
 }
 
 fn check_schema(conn: &Connection, path: &Path) -> Result<(), TraceDbError> {
-    check_table(conn, path, "schema_migrations", &SCHEMA_MIGRATIONS_COLUMNS)?;
+    let sqlite_err = |source| TraceDbError::Sqlite {
+        path: path.to_path_buf(),
+        source,
+    };
+    let found = schema_objects(conn).map_err(sqlite_err)?;
+    let expected = Connection::open_in_memory()
+        .and_then(|reference| {
+            reference.execute_batch(TRACE_DB_SCHEMA)?;
+            schema_objects(&reference)
+        })
+        .map_err(sqlite_err)?;
+    if found != expected {
+        let missing: Vec<&SchemaObject> = expected.iter().filter(|o| !found.contains(o)).collect();
+        let unexpected: Vec<&SchemaObject> =
+            found.iter().filter(|o| !expected.contains(o)).collect();
+        return Err(TraceDbError::Schema {
+            path: path.to_path_buf(),
+            detail: format!(
+                "sqlite_master tables and indexes (type, name, table, sql) differ from the \
+                 accepted schema: missing {missing:?}; unexpected {unexpected:?} \
+                 (at most {SCHEMA_OBJECTS_FETCHED} objects read)"
+            ),
+        });
+    }
     let versions: Vec<i64> = conn
-        .prepare("SELECT version FROM schema_migrations ORDER BY version")
+        .prepare("SELECT version FROM schema_migrations ORDER BY version LIMIT 2")
         .and_then(|mut stmt| {
             stmt.query_map([], |row| row.get::<_, i64>(0))?
                 .collect::<Result<Vec<_>, _>>()
         })
-        .map_err(|source| TraceDbError::Sqlite {
-            path: path.to_path_buf(),
-            source,
-        })?;
+        .map_err(sqlite_err)?;
     if versions != [SCHEMA_VERSION] {
         return Err(TraceDbError::Schema {
             path: path.to_path_buf(),
             detail: format!(
-                "schema_migrations holds versions {versions:?}; this reader accepts exactly [{SCHEMA_VERSION}]"
-            ),
-        });
-    }
-    check_table(conn, path, "events", &EVENTS_COLUMNS)
-}
-
-type ColumnShape = (String, String, bool, i64);
-
-fn check_table(
-    conn: &Connection,
-    path: &Path,
-    table: &str,
-    expected: &[Column],
-) -> Result<(), TraceDbError> {
-    let found: Vec<ColumnShape> = conn
-        .prepare("SELECT name, type, \"notnull\", pk FROM pragma_table_info(?1)")
-        .and_then(|mut stmt| {
-            stmt.query_map([table], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)? != 0,
-                    row.get::<_, i64>(3)?,
-                ))
-            })?
-            .collect::<Result<Vec<_>, _>>()
-        })
-        .map_err(|source| TraceDbError::Sqlite {
-            path: path.to_path_buf(),
-            source,
-        })?;
-    if found.is_empty() {
-        return Err(TraceDbError::Schema {
-            path: path.to_path_buf(),
-            detail: format!("no {table} table"),
-        });
-    }
-    let expected: Vec<ColumnShape> = expected
-        .iter()
-        .map(|c| {
-            (
-                c.name.to_string(),
-                c.declared_type.to_string(),
-                c.not_null,
-                c.primary_key_ordinal,
-            )
-        })
-        .collect();
-    if found != expected {
-        return Err(TraceDbError::Schema {
-            path: path.to_path_buf(),
-            detail: format!(
-                "{table} columns (name, type, not null, primary key ordinal) are {found:?}; \
-                 this reader accepts exactly {expected:?}"
+                "schema_migrations holds versions {versions:?} (at most two listed); \
+                 this reader accepts exactly [{SCHEMA_VERSION}]"
             ),
         });
     }
     Ok(())
+}
+
+type SchemaObject = (String, String, String, Option<String>);
+
+const SCHEMA_OBJECTS_FETCHED: i64 = 16;
+
+fn schema_objects(conn: &Connection) -> Result<Vec<SchemaObject>, rusqlite::Error> {
+    conn.prepare(
+        "SELECT type, name, tbl_name, sql FROM sqlite_master \
+         WHERE type IN ('table', 'index') ORDER BY type, name LIMIT ?1",
+    )?
+    .query_map([SCHEMA_OBJECTS_FETCHED], |row| {
+        Ok((
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get::<_, Option<String>>(3)?
+                .map(|sql| normalize_sql(&sql)),
+        ))
+    })?
+    .collect()
+}
+
+fn normalize_sql(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    for token in sql.split_whitespace() {
+        if !out.is_empty() && !out.ends_with(['(', ',']) && !token.starts_with(['(', ')', ',']) {
+            out.push(' ');
+        }
+        out.push_str(token);
+    }
+    out
 }
 
 struct EventRow {
@@ -489,6 +460,32 @@ mod tests {
     }
 
     #[test]
+    fn sql_text_differing_only_in_whitespace_normalizes_to_one_spelling() {
+        let multi_line = normalize_sql(
+            "CREATE TABLE schema_migrations (\n    version    INTEGER PRIMARY KEY,\n    applied_at REAL    NOT NULL\n)",
+        );
+        let one_line = normalize_sql(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at REAL NOT NULL)",
+        );
+        let spaced_out = normalize_sql(
+            "CREATE  TABLE schema_migrations ( version INTEGER PRIMARY KEY ,applied_at REAL NOT NULL )",
+        );
+        assert_eq!(multi_line, one_line);
+        assert_eq!(multi_line, spaced_out);
+        assert_eq!(normalize_sql(&multi_line), multi_line);
+        assert_ne!(
+            one_line,
+            normalize_sql(
+                "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at REAL)"
+            )
+        );
+        assert_ne!(
+            normalize_sql("config TEXT NOT NULL"),
+            normalize_sql("config TEXT NOT NULL COLLATE NOCASE")
+        );
+    }
+
+    #[test]
     fn the_exported_ddl_is_the_schema_the_reader_accepts() {
         let dir = tempfile::tempdir().expect("tempdir");
         let trial = fixture(dir.path(), &[("tool_use", "Read", r#"{"file_path":"a"}"#)]);
@@ -550,7 +547,8 @@ mod tests {
         let wal = dir.path().join("trace.db-wal");
         std::fs::write(&wal, [0u8; 16]).expect("wal");
 
-        let err = copy_capped(&wal, &dir.path().join("copy"), 8, 32).unwrap_err();
+        let file = File::open(&wal).expect("open wal");
+        let err = copy_capped(file, &wal, &dir.path().join("copy"), 8, 32).unwrap_err();
 
         assert!(
             matches!(err, TraceDbError::TooLarge { max: 32, .. }),

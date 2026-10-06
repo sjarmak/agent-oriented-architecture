@@ -115,7 +115,7 @@ model {
 
       pathTrust = component 'aoa-path-trust' {
         #built
-        description 'Single-component name validation, a symlink-refusing join, openat(O_NOFOLLOW | O_DIRECTORY) directory acquisition, the repository-root resolver, and the environment a git subprocess may inherit. No internal dependencies, and no trace or measurement types'
+        description 'Single-component name validation, a symlink-refusing join, openat(O_NOFOLLOW | O_DIRECTORY) directory acquisition, a no-follow non-blocking regular-file open, the repository-root resolver, and the environment a git subprocess may inherit. No internal dependencies, and no trace or measurement types'
         link ../crates/aoa-path-trust 'crates/aoa-path-trust/'
       }
     }
@@ -271,6 +271,7 @@ model {
   aoa.substrate.observeShim -> aoa.substrate.trace 'normalizes into the native trace schema'
   aoa.substrate.observeShim -> aoa.substrate.codeprobeShim 'shares the capped-read primitives and the TraceBackend conformance contract'
   aoa.substrate.codeprobeShim -> aoa.substrate.trace 'normalizes into the native trace schema'
+  aoa.substrate.codeprobeShim -> aoa.trust.pathTrust 'opens trace.db and its write-ahead log without following links, refusing anything but a regular file'
   aoa.substrate.scipGraph -> aoa.substrate.trace 'builds the SymbolGraph and index-quality tier the trace crate declares'
   aoa.substrate.metrics -> aoa.substrate.trace 'reads the 8-span trace and the SymbolGraph declared alongside it'
 
