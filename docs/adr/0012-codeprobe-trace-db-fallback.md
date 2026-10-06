@@ -8,7 +8,11 @@ schema this reader knows. The second round found the reader opening the
 database in place, accepting an `events` table without its primary key,
 capping the database file but not its write-ahead log, loading rows without a
 bound, and deriving no database for a run dir spelled `.`; the project lead
-ruled on 2026-10-06 that each is fixed as recorded here.
+ruled on 2026-10-06 that each is fixed as recorded here. The third round
+(aoa-ehdwx) found the schema check comparing column shapes through
+`pragma_table_info`, which cannot see a collation, a generated column or an
+index; the database and its log opened through links and without `O_NONBLOCK`;
+and the migration rows read without a bound. Each is fixed as recorded here.
 
 ## Context
 
@@ -34,11 +38,17 @@ least one agent event is read from the transcript and reports
 the database, and a transcript that fails for any other reason fails the trial.
 
 The database is never opened in place. `trace.db` and, when present,
-`trace.db-wal` are copied into a private temporary directory and the copy is
-opened with `SQLITE_OPEN_READ_ONLY` and `PRAGMA query_only`. Nothing is
-created beside the source, and a run directory of mode 555 holding a database
-of mode 444 is read and left byte-identical. Copying the write-ahead log is
-what lets uncheckpointed rows be read; SQLite replays it against the copy.
+`trace.db-wal` are each opened through `aoa-path-trust`'s
+`open_regular_file_nofollow`: `openat(O_NOFOLLOW | O_NONBLOCK)` relative to the
+run directory, then `fstat` on the descriptor, so a symbolic link at either
+name is `TraceDbError::Refused` rather than followed (a linked database would
+otherwise be read without the log that sits beside its target), and a FIFO is
+refused rather than waited on. The bytes are copied from those same
+descriptors into a private temporary directory and the copy is opened with
+`SQLITE_OPEN_READ_ONLY` and `PRAGMA query_only`. Nothing is created beside the
+source, and a run directory of mode 555 holding a database of mode 444 is read
+and left byte-identical. Copying the write-ahead log is what lets
+uncheckpointed rows be read; SQLite replays it against the copy.
 
 One byte cap, `MAX_TRACE_DB_BYTES` (1 GiB), covers the database and its
 write-ahead log together, and it is enforced twice: against the two files'
@@ -56,16 +66,28 @@ exports as DDL and the unit tests hold to the check:
   `event_seq`, `ts`, `event_type`, `tool_name`, `tool_input`, `tool_output`,
   `duration_ms`, `input_tokens`, `output_tokens`, `bytes_written`, their
   declared types and nullability, and the composite primary key
-  `(run_id, config, task_id, event_seq)` in that order.
+  `(run_id, config, task_id, event_seq)` in that order;
+- the three indexes codeprobe's `store.py` creates, `idx_events_config_task`,
+  `idx_events_tool_name` and `idx_events_ts`, and the automatic index SQLite
+  keeps for the composite primary key.
 
-Column names, types, nullability and primary-key ordinals are all compared
-through `pragma_table_info`, and any difference is `TraceDbError::Schema`
-naming what was found and what is accepted. A trial is the rows whose `config`
-is the run directory's name and whose `task_id` is the trial's; rows from more
-than one `run_id` are `AmbiguousRun`, and no rows at all is `NoEvents`. Three
-event types are read: `tool_use` becomes a span through the same mapping the
-transcript walk uses, `trace_truncated` is `Truncated`, and anything else is
-`MalformedEvent`.
+The check is one comparison: the `(type, name, tbl_name, sql)` rows of
+`sqlite_master` for tables and indexes must equal the rows SQLite records when
+`TRACE_DB_SCHEMA` is run against an empty database, with each `sql` text
+whitespace-normalized. SQLite stores a `CREATE` statement without the
+`IF NOT EXISTS` codeprobe's `store.py` issues, so a database the writer built is
+accepted, and the integration tests build one from that DDL verbatim. A
+collation, a generated or hidden column, a missing or an extra index, or a
+different primary key all change the stored text or the object set and are
+`TraceDbError::Schema`, which lists the objects missing from and unexpected in
+the database. At most sixteen schema objects and two migration versions are
+read into that message, so a hostile database cannot make the diagnostic
+arbitrarily large. A trial is the rows whose `config` is the run directory's
+name and whose `task_id` is the trial's; rows from more than one `run_id` are
+`AmbiguousRun`, and no rows at all is `NoEvents`. Three event types are read:
+`tool_use` becomes a span through the same mapping the transcript walk uses,
+`result` is codeprobe's final-answer marker and produces nothing,
+`trace_truncated` is `Truncated`, and anything else is `MalformedEvent`.
 
 The run directory is canonicalized before its parent and name are taken, so
 `--codeprobe-run .` inside a config directory, `..` inside a trial, and a
@@ -104,6 +126,10 @@ contributes no edits to `F_edit`. Each record names its source in
 - `crates/aoa-codeprobe-shim/src/trace_db.rs` holds the copy, the open, the
   schema check, the bounded load and the trial build; `src/spans.rs` is the
   span builder both sources feed; `src/error.rs` states `TraceDbError`.
+- `crates/aoa-path-trust/src/nofollow.rs` `open_regular_file_nofollow` is the
+  no-follow, non-blocking, regular-file-only open both files go through; the
+  `aoa-codeprobe-shim -> aoa-path-trust` arrow in `architecture/model.c4` is
+  that dependency.
 - `crates/aoa-bench/src/codeprobe_run.rs` `trace_db_location` resolves the
   database and config from the run directory.
 - `crates/aoa/src/commands/eval_run.rs` tries the transcript, then the
