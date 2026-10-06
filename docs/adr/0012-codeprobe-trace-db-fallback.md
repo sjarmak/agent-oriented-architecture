@@ -53,8 +53,8 @@ exports as DDL and the unit tests hold to the check:
 - `schema_migrations(version INTEGER PRIMARY KEY, applied_at REAL NOT NULL)`
   holding exactly the row `version = 1`;
 - `events` with the thirteen columns `run_id`, `config`, `task_id`,
-  `event_seq`, `ts`, `event_type`, `tool_name`, `tool_input`, `file_path`,
-  `content_length`, `result_length`, `duration_ms`, `bytes_written`, their
+  `event_seq`, `ts`, `event_type`, `tool_name`, `tool_input`, `tool_output`,
+  `duration_ms`, `input_tokens`, `output_tokens`, `bytes_written`, their
   declared types and nullability, and the composite primary key
   `(run_id, config, task_id, event_seq)` in that order.
 

@@ -190,9 +190,14 @@ impl PrivateCopy {
             source: err,
         })?;
         let copy = Self { dir };
-        let copied = copy_capped(source, &copy.db_path(), max_bytes)?;
+        let copied = copy_capped(source, &copy.db_path(), max_bytes, max_bytes)?;
         if wal_len.is_some() {
-            copy_capped(&wal, &wal_path(&copy.db_path()), max_bytes - copied)?;
+            copy_capped(
+                &wal,
+                &wal_path(&copy.db_path()),
+                max_bytes - copied,
+                max_bytes,
+            )?;
         }
         Ok(copy)
     }
@@ -215,7 +220,12 @@ fn read_error(path: &Path, source: std::io::Error) -> TraceDbError {
     }
 }
 
-fn copy_capped(source: &Path, destination: &Path, budget: u64) -> Result<u64, TraceDbError> {
+fn copy_capped(
+    source: &Path,
+    destination: &Path,
+    budget: u64,
+    cap: u64,
+) -> Result<u64, TraceDbError> {
     let mut reader = File::open(source)
         .map_err(|err| read_error(source, err))?
         .take(budget.saturating_add(1));
@@ -230,7 +240,7 @@ fn copy_capped(source: &Path, destination: &Path, budget: u64) -> Result<u64, Tr
     if copied > budget {
         return Err(TraceDbError::TooLarge {
             path: source.to_path_buf(),
-            max: budget,
+            max: cap,
         });
     }
     Ok(copied)
@@ -532,6 +542,20 @@ mod tests {
             .expect("db plus wal within the cap is read");
         assert_eq!(read.trace.spans.len(), 65);
         drop(writer);
+    }
+
+    #[test]
+    fn a_write_ahead_log_that_outgrows_its_budget_names_the_whole_cap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let wal = dir.path().join("trace.db-wal");
+        std::fs::write(&wal, [0u8; 16]).expect("wal");
+
+        let err = copy_capped(&wal, &dir.path().join("copy"), 8, 32).unwrap_err();
+
+        assert!(
+            matches!(err, TraceDbError::TooLarge { max: 32, .. }),
+            "{err}"
+        );
     }
 
     #[test]
