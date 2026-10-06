@@ -2,8 +2,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use aoa_codeprobe_shim::{
-    parse_trace_db, parse_trial, ShimError, TraceDbError, TraceDbTrial, TraceSource,
-    TRACE_DB_SCHEMA,
+    parse_trace_db, parse_trial, parse_trial_locating, ShimError, TraceDbError, TraceDbTrial,
+    TraceSource, TRACE_DB_SCHEMA,
 };
 use aoa_trace::{validate_trace_value, SpanSource, SpanType};
 use rusqlite::{params, Connection};
@@ -1004,4 +1004,53 @@ fn trace_db_file_name_is_what_the_layout_tests_build() {
         trial.path.file_name(),
         Some(Path::new("trace.db").as_os_str())
     );
+}
+
+#[test]
+fn parse_trial_locating_never_asks_where_the_database_is_when_the_transcript_carries_events() {
+    let dir = TempDir::new().expect("tempdir");
+    let transcript = transcript(&dir, WITH_EVENTS);
+
+    let parsed = parse_trial_locating::<ShimError>(&transcript, || {
+        panic!("the locator must not run for a transcript that carries events")
+    })
+    .expect("parses");
+
+    assert_eq!(parsed.source, TraceSource::StreamJson);
+}
+
+#[test]
+fn parse_trial_locating_asks_once_for_an_answer_only_transcript_and_carries_the_locators_error() {
+    let dir = TempDir::new().expect("tempdir");
+    let transcript = transcript(&dir, ANSWER_ONLY);
+    let trial = fixture(&dir, &busy_rows());
+
+    let parsed =
+        parse_trial_locating::<ShimError>(&transcript, || Ok(Some(trial))).expect("parses");
+    assert_eq!(parsed.source, TraceSource::TraceDb);
+
+    let err = parse_trial_locating(&transcript, || {
+        Err::<Option<TraceDbTrial>, _>(Located::Nowhere)
+    })
+    .unwrap_err();
+    assert!(matches!(err, Located::Nowhere), "{err:?}");
+
+    let missing = dir.path().join("absent").join("agent_output.txt");
+    let err = parse_trial_locating(&missing, || Ok::<_, Located>(None)).unwrap_err();
+    assert!(
+        matches!(&err, Located::Shim(ShimError::Read { path, .. }) if path == &missing),
+        "{err:?}"
+    );
+}
+
+#[derive(Debug)]
+enum Located {
+    Shim(ShimError),
+    Nowhere,
+}
+
+impl From<ShimError> for Located {
+    fn from(err: ShimError) -> Self {
+        Located::Shim(err)
+    }
 }

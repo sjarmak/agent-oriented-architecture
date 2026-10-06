@@ -49,7 +49,7 @@ use aoa_bench::{
     discover_tasks_isolating_names, load_task, scoring_path, trace_db_location, transcript_path,
     TraceDbLocation, TrialScoring,
 };
-use aoa_codeprobe_shim::{parse_trial, TraceDbTrial, TraceSource};
+use aoa_codeprobe_shim::{parse_trial_locating, TraceDbTrial, TraceSource};
 use aoa_construct::{BehavioralSignal, InsufficientDataNote};
 use aoa_domain::{HeldOutProvenance, RunResult, TaskOutcome};
 use aoa_gap::{compute_gap, GapOutcome};
@@ -174,7 +174,7 @@ pub fn run(args: &EvalRunArgs) -> Result<i32> {
     let partition = detect_partition(args);
 
     let (task_ids, rejected_names) = discover_tasks_isolating_names(&args.codeprobe_run)?;
-    let trace_db = trace_db_location(&args.codeprobe_run)?;
+    let mut trace_db = TraceDbLookup::new(&args.codeprobe_run);
 
     if let Some(dir) = &args.emit_traces {
         std::fs::create_dir_all(dir)
@@ -194,7 +194,7 @@ pub fn run(args: &EvalRunArgs) -> Result<i32> {
         match process_task(
             &task_id,
             args,
-            trace_db.as_ref(),
+            &mut trace_db,
             &indexed,
             partition.as_ref(),
             &mut traces_written,
@@ -304,22 +304,43 @@ fn detect_partition(args: &EvalRunArgs) -> Option<SubtreePartition> {
     }
 }
 
+struct TraceDbLookup<'a> {
+    run_dir: &'a Path,
+    located: Option<Option<TraceDbLocation>>,
+}
+
+impl<'a> TraceDbLookup<'a> {
+    fn new(run_dir: &'a Path) -> Self {
+        Self {
+            run_dir,
+            located: None,
+        }
+    }
+
+    fn trial_for(&mut self, task_id: &str) -> Result<Option<TraceDbTrial>> {
+        let location = match &self.located {
+            Some(location) => location,
+            None => self.located.insert(trace_db_location(self.run_dir)?),
+        };
+        Ok(location.as_ref().map(|location| TraceDbTrial {
+            path: location.path.clone(),
+            config: location.config.clone(),
+            task_id: task_id.to_string(),
+        }))
+    }
+}
+
 /// Build one task's metric record, or fail loud for this trial.
 fn process_task(
     task_id: &str,
     args: &EvalRunArgs,
-    trace_db: Option<&TraceDbLocation>,
+    trace_db: &mut TraceDbLookup<'_>,
     indexed: &IndexedRepo,
     partition: Option<&SubtreePartition>,
     traces_written: &mut usize,
 ) -> Result<TaskRecord> {
     let transcript = transcript_path(&args.codeprobe_run, task_id);
-    let trial = trace_db.map(|location| TraceDbTrial {
-        path: location.path.clone(),
-        config: location.config.clone(),
-        task_id: task_id.to_string(),
-    });
-    let parsed = parse_trial(&transcript, trial.as_ref())
+    let parsed = parse_trial_locating(&transcript, || trace_db.trial_for(task_id))
         .with_context(|| format!("trace-shim failed on {}", transcript.display()))?;
     let trace_source = parsed.source;
     let shim = parsed.shim;

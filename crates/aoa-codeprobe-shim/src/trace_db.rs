@@ -76,6 +76,13 @@ pub fn parse_trial(
     transcript: &Path,
     trace_db: Option<&TraceDbTrial>,
 ) -> Result<ParsedTrial, ShimError> {
+    parse_trial_locating(transcript, || Ok(trace_db.cloned()))
+}
+
+pub fn parse_trial_locating<E: From<ShimError>>(
+    transcript: &Path,
+    locate_trace_db: impl FnOnce() -> Result<Option<TraceDbTrial>, E>,
+) -> Result<ParsedTrial, E> {
     let transcript_err = match parse_transcript_file(transcript) {
         Ok(shim) => {
             return Ok(ParsedTrial {
@@ -84,20 +91,20 @@ pub fn parse_trial(
             })
         }
         Err(err @ ShimError::NoAgentEvents { .. }) => err,
-        Err(err) => return Err(err),
+        Err(err) => return Err(err.into()),
     };
-    let Some(trial) = trace_db else {
-        return Err(transcript_err);
+    let Some(trial) = locate_trace_db()? else {
+        return Err(transcript_err.into());
     };
-    match parse_trace_db(trial) {
+    match parse_trace_db(&trial) {
         Ok(shim) => Ok(ParsedTrial {
             shim,
             source: TraceSource::TraceDb,
         }),
         Err(ShimError::TraceDb(err)) if matches!(*err, TraceDbError::Absent { .. }) => {
-            Err(transcript_err)
+            Err(transcript_err.into())
         }
-        Err(err) => Err(err),
+        Err(err) => Err(err.into()),
     }
 }
 

@@ -744,3 +744,41 @@ fn eval_run_keeps_dependency_install_code_out_of_the_mutation_surface() {
         shipped
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn eval_run_reads_a_transcript_backed_run_whose_directory_name_is_not_utf8() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let dir = TempDir::new().expect("tempdir");
+    let run = dir
+        .path()
+        .join(std::ffi::OsString::from_vec(b"run-\xff".to_vec()));
+    let good = run.join("native-consensus-001");
+    std::fs::create_dir_all(&good).expect("trial dir");
+    for artifact in ["scoring.json", "agent_output.txt"] {
+        std::fs::copy(
+            run_dir().join("native-consensus-001").join(artifact),
+            good.join(artifact),
+        )
+        .expect("copy artifact");
+    }
+
+    let output = aoa()
+        .args(["eval", "run", "--json", "--codeprobe-run"])
+        .arg(&run)
+        .arg("--tasks")
+        .arg(tasks_dir())
+        .output()
+        .expect("run");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid report JSON");
+    assert_eq!(parsed["record_count"], 1);
+    assert_eq!(parsed["error_count"], 0);
+    assert_eq!(parsed["records"][0]["trace_source"], "stream_json");
+}
