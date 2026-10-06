@@ -46,11 +46,48 @@ const WRITABLE_BY_GROUP_OR_OTHER: u32 = 0o022;
 #[cfg(unix)]
 const STICKY: u32 = 0o1000;
 
-static OPERATOR_TRUST_CONFIG: OnceLock<Result<Vec<u8>, String>> = OnceLock::new();
+static OPERATOR_TRUST_CONFIG: OnceLock<Vec<u8>> = OnceLock::new();
+
+pub(crate) struct OperatorTrust {
+    config: NamedTempFile,
+}
+
+impl OperatorTrust {
+    pub(crate) fn establish() -> Result<Self, String> {
+        let temporary_directory = std::env::temp_dir();
+        refuse_replaceable_directory(&temporary_directory)?;
+        let trust_config = memoized(&OPERATOR_TRUST_CONFIG, || {
+            operator_trust_config(&temporary_directory)
+        })?;
+        let mut config = tempfile::Builder::new()
+            .prefix("aoa-git-trust-")
+            .tempfile_in(&temporary_directory)
+            .map_err(|e| format!("failed to create the git trust config: {e}"))?;
+        config
+            .write_all(trust_config)
+            .and_then(|()| config.flush())
+            .map_err(|e| format!("failed to write the git trust config: {e}"))?;
+        Ok(Self { config })
+    }
+
+    pub(crate) fn git(&self) -> Command {
+        let mut command = git_free_of_inherited_state();
+        command
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", self.config.path());
+        command
+    }
+
+    pub(crate) fn close(self) -> Result<(), String> {
+        self.config
+            .close()
+            .map_err(|e| format!("failed to remove the git trust config: {e}"))
+    }
+}
 
 pub(crate) struct RepositoryDataGit {
     pub(crate) command: Command,
-    operator_trust: NamedTempFile,
+    operator_trust: OperatorTrust,
 }
 
 impl RepositoryDataGit {
@@ -64,36 +101,34 @@ impl RepositoryDataGit {
 
     fn run<T>(self, label: &str, run: fn(Command, &str) -> Result<T, String>) -> Result<T, String> {
         let outcome = run(self.command, label);
-        self.operator_trust
+        let closed = self
+            .operator_trust
             .close()
-            .map_err(|e| format!("failed to remove the git trust config for `{label}`: {e}"))?;
-        outcome
+            .map_err(|e| format!("{e} for `{label}`"));
+        let outcome = outcome?;
+        closed?;
+        Ok(outcome)
     }
 }
 
 pub(crate) fn reading_repository_data() -> Result<RepositoryDataGit, String> {
-    let temporary_directory = std::env::temp_dir();
-    refuse_replaceable_directory(&temporary_directory)?;
-    let trust_config = OPERATOR_TRUST_CONFIG
-        .get_or_init(|| operator_trust_config(&temporary_directory))
-        .as_ref()
-        .map_err(Clone::clone)?;
-    let mut operator_trust = tempfile::Builder::new()
-        .prefix("aoa-git-trust-")
-        .tempfile_in(&temporary_directory)
-        .map_err(|e| format!("failed to create the git trust config: {e}"))?;
-    operator_trust
-        .write_all(trust_config)
-        .and_then(|()| operator_trust.flush())
-        .map_err(|e| format!("failed to write the git trust config: {e}"))?;
-    let mut command = git_free_of_inherited_state();
-    command
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", operator_trust.path());
+    let operator_trust = OperatorTrust::establish()?;
+    let command = operator_trust.git();
     Ok(RepositoryDataGit {
         command,
         operator_trust,
     })
+}
+
+fn memoized(
+    cell: &OnceLock<Vec<u8>>,
+    compute: impl FnOnce() -> Result<Vec<u8>, String>,
+) -> Result<&Vec<u8>, String> {
+    if let Some(value) = cell.get() {
+        return Ok(value);
+    }
+    let value = compute()?;
+    Ok(cell.get_or_init(|| value))
 }
 
 fn refuse_relative_config_locations() -> Result<(), String> {
@@ -340,6 +375,63 @@ mod tests {
         ]);
         let output = spawn(cmd, "git config --file").expect("git runs");
         assert_eq!(output.status.code(), Some(KEY_NOT_SET_EXIT));
+    }
+
+    #[test]
+    fn a_git_failure_is_reported_even_when_the_trust_config_is_already_gone() {
+        let config = NamedTempFile::new().unwrap();
+        std::fs::remove_file(config.path()).unwrap();
+        let mut command = git_free_of_inherited_state();
+        command.arg("--definitely-not-a-real-option");
+
+        let failed = RepositoryDataGit {
+            command,
+            operator_trust: OperatorTrust { config },
+        }
+        .checked("probe");
+
+        let message = failed.unwrap_err();
+        assert!(message.starts_with("`probe` failed:"), "{message}");
+        assert!(!message.contains("trust config"), "{message}");
+    }
+
+    #[test]
+    fn a_trust_config_that_cannot_be_removed_fails_a_run_that_otherwise_succeeded() {
+        let config = NamedTempFile::new().unwrap();
+        std::fs::remove_file(config.path()).unwrap();
+        let mut command = git_free_of_inherited_state();
+        command.arg("--version");
+
+        let failed = RepositoryDataGit {
+            command,
+            operator_trust: OperatorTrust { config },
+        }
+        .checked("git --version");
+
+        let message = failed.unwrap_err();
+        assert!(
+            message.starts_with("failed to remove the git trust config:"),
+            "{message}"
+        );
+        assert!(message.ends_with("for `git --version`"), "{message}");
+    }
+
+    #[test]
+    fn a_failed_trust_config_read_is_retried_and_only_a_successful_one_is_kept() {
+        let cell = OnceLock::new();
+
+        assert_eq!(
+            memoized(&cell, || Err("first".to_string())),
+            Err("first".to_string())
+        );
+        assert_eq!(
+            memoized(&cell, || Ok(b"kept".to_vec())),
+            Ok(&b"kept".to_vec())
+        );
+        assert_eq!(
+            memoized(&cell, || Err("never asked".to_string())),
+            Ok(&b"kept".to_vec())
+        );
     }
 
     #[test]

@@ -144,10 +144,11 @@ struct InferOwnersView {
 /// the majority arithmetic. Default is read-only (prints the reviewable diff);
 /// `--write` writes the proposal to `.github/CODEOWNERS`.
 fn infer_owners_cmd(repo: &Path, write: bool, json: bool) -> Result<i32> {
-    let mut counts = Vec::new();
-    for path in head_blob_paths(repo)? {
-        counts.extend(blame_counts(repo, &path)?);
-    }
+    let trust = git::OperatorTrust::establish().map_err(|e| anyhow!(e))?;
+    let counts = head_blame_counts(&trust, repo);
+    let closed = trust.close();
+    let counts = counts?;
+    closed.map_err(|e| anyhow!(e))?;
     let entries = infer_owners(&counts);
 
     // Writing an ownerless proposal would clobber CODEOWNERS with an empty
@@ -230,14 +231,21 @@ fn render_infer_owners_human(view: &InferOwnersView) -> String {
 /// HEAD is the enumeration source because attribution blames HEAD: the index
 /// would list a merge-conflicted path once per unmerged stage (tripling its
 /// counts) and would include staged-but-uncommitted files HEAD cannot blame.
-fn head_blob_paths(repo: &Path) -> Result<Vec<String>> {
-    let mut git = git::reading_repository_data().map_err(|e| anyhow!(e))?;
-    git.command
+fn head_blame_counts(trust: &git::OperatorTrust, repo: &Path) -> Result<Vec<BlameCount>> {
+    let mut counts = Vec::new();
+    for path in head_blob_paths(trust, repo)? {
+        counts.extend(blame_counts(trust, repo, &path)?);
+    }
+    Ok(counts)
+}
+
+fn head_blob_paths(trust: &git::OperatorTrust, repo: &Path) -> Result<Vec<String>> {
+    let mut command = trust.git();
+    command
         .arg("-C")
         .arg(repo)
         .args(["ls-tree", "-r", "-z", "HEAD"]);
-    let stdout = git
-        .checked(&format!("git ls-tree in {}", repo.display()))
+    let stdout = git::checked(command, &format!("git ls-tree in {}", repo.display()))
         .map_err(|e| anyhow!(e))?;
     // Strict decode: tree paths must be valid UTF-8 — a garbage path fed back
     // into `git blame` would surface as a confusing downstream error, so fail
@@ -260,16 +268,14 @@ fn head_blob_paths(repo: &Path) -> Result<Vec<String>> {
 
 /// Count blamed lines per author for one committed file. Uses
 /// `--line-porcelain` so every line carries its `author-mail` attribution.
-fn blame_counts(repo: &Path, path: &str) -> Result<Vec<BlameCount>> {
-    let mut git = git::reading_repository_data().map_err(|e| anyhow!(e))?;
-    git.command
+fn blame_counts(trust: &git::OperatorTrust, repo: &Path, path: &str) -> Result<Vec<BlameCount>> {
+    let mut command = trust.git();
+    command
         .arg("-C")
         .arg(repo)
         .args(["blame", "--line-porcelain", "HEAD", "--"])
         .arg(path);
-    let stdout = git
-        .checked(&format!("git blame for {path}"))
-        .map_err(|e| anyhow!(e))?;
+    let stdout = git::checked(command, &format!("git blame for {path}")).map_err(|e| anyhow!(e))?;
     // Lossy decode on purpose: `--line-porcelain` emits raw commit bytes, and an
     // author name / mail may be non-UTF-8 (legacy or Latin-1 history). One bad
     // byte must degrade to U+FFFD in a single author key, not abort the run.
