@@ -704,6 +704,105 @@ fn a_long_schema_statement_is_cut_in_the_error() {
 }
 
 #[test]
+fn a_no_break_space_inside_a_column_definition_is_refused() {
+    let dir = TempDir::new().expect("tempdir");
+    let (path, conn) = open_fixture(&dir);
+    rebuild_events(
+        &conn,
+        &EVENTS_COLUMNS_WITH_CONFIG.replace("{config}", "TEXT\u{a0}NOT NULL"),
+    );
+    insert(
+        &conn,
+        &Row {
+            config: "",
+            ..tool_use(0, "Read", r#"{"file_path":"a"}"#)
+        },
+    );
+    drop(conn);
+
+    let err = trace_db_err(parse_trace_db(&trial(path)).unwrap_err());
+
+    assert!(
+        matches!(&err, TraceDbError::Schema { detail, .. }
+            if detail.contains("unexpected") && detail.contains(r"TEXT\u{a0}NOT")),
+        "{err}"
+    );
+}
+
+#[test]
+fn an_extra_trigger_or_view_is_refused() {
+    for (ddl, expected) in [
+        (
+            "CREATE TRIGGER drop_tool_use AFTER INSERT ON events \
+             WHEN NEW.event_type = 'tool_use' \
+             BEGIN DELETE FROM events WHERE rowid = NEW.rowid; END;",
+            "unexpected [(\"trigger\", \"drop_tool_use\", \"events\"",
+        ),
+        (
+            "CREATE VIEW tool_uses AS SELECT * FROM events WHERE event_type = 'tool_use';",
+            "unexpected [(\"view\", \"tool_uses\", \"tool_uses\"",
+        ),
+    ] {
+        let dir = TempDir::new().expect("tempdir");
+        let (path, conn) = open_fixture(&dir);
+        conn.execute_batch(ddl).expect("add the object");
+        insert(&conn, &tool_use(0, "Read", r#"{"file_path":"a"}"#));
+        drop(conn);
+
+        let err = trace_db_err(parse_trace_db(&trial(path)).unwrap_err());
+
+        assert!(
+            matches!(&err, TraceDbError::Schema { detail, .. } if detail.contains(expected)),
+            "{expected}: {err}"
+        );
+    }
+}
+
+#[test]
+fn a_long_table_name_is_cut_in_the_error() {
+    let dir = TempDir::new().expect("tempdir");
+    let (path, conn) = open_fixture(&dir);
+    let name = "t".repeat(64 * 1024);
+    conn.execute_batch(&format!("CREATE TABLE {name} (x INTEGER);"))
+        .expect("create a table with a long name");
+    insert(&conn, &tool_use(0, "Read", r#"{"file_path":"a"}"#));
+    drop(conn);
+
+    let err = trace_db_err(parse_trace_db(&trial(path)).unwrap_err());
+
+    assert!(
+        matches!(&err, TraceDbError::Schema { detail, .. }
+            if detail.len() < 4096
+                && !detail.contains(&name)
+                && detail.contains("... (65536 bytes)")),
+        "{err}"
+    );
+}
+
+#[test]
+fn the_whole_schema_diagnostic_is_bounded() {
+    let dir = TempDir::new().expect("tempdir");
+    let (path, conn) = open_fixture(&dir);
+    for i in 0..12 {
+        let name = format!("v{i}_{}", "n".repeat(2048));
+        conn.execute_batch(&format!("CREATE VIEW {name} AS SELECT 1;"))
+            .expect("create a view with a long name");
+    }
+    insert(&conn, &tool_use(0, "Read", r#"{"file_path":"a"}"#));
+    drop(conn);
+
+    let err = trace_db_err(parse_trace_db(&trial(path)).unwrap_err());
+
+    assert!(
+        matches!(&err, TraceDbError::Schema { detail, .. }
+            if detail.len() <= 8 * 1024 + 64
+                && detail.contains("unexpected")
+                && detail.contains("message cut at 8192 of ")),
+        "{err}"
+    );
+}
+
+#[test]
 fn schema_versions_past_the_first_two_are_left_out_of_the_error() {
     let dir = TempDir::new().expect("tempdir");
     let (path, conn) = open_fixture(&dir);

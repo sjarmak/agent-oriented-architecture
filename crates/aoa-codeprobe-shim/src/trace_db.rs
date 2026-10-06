@@ -256,13 +256,21 @@ fn check_schema(conn: &Connection, path: &Path) -> Result<(), TraceDbError> {
             .filter(|o| !expected.contains(o))
             .map(shown)
             .collect();
+        let detail = format!(
+            "sqlite_master rows (type, name, table, sql) differ from the accepted schema \
+             (at most {SCHEMA_OBJECTS_FETCHED} objects read, each field shown to \
+             {FIELD_SHOWN} bytes, message to {DETAIL_SHOWN} bytes): \
+             missing {missing:?}; unexpected {unexpected:?}"
+        );
         return Err(TraceDbError::Schema {
             path: path.to_path_buf(),
-            detail: format!(
-                "sqlite_master tables and indexes (type, name, table, sql) differ from the \
-                 accepted schema: missing {missing:?}; unexpected {unexpected:?} \
-                 (at most {SCHEMA_OBJECTS_FETCHED} objects read, sql shown to {SQL_SHOWN} bytes)"
-            ),
+            detail: match cut(&detail, DETAIL_SHOWN) {
+                Some(kept) => format!(
+                    "{kept}... (message cut at {DETAIL_SHOWN} of {} bytes)",
+                    detail.len()
+                ),
+                None => detail,
+            },
         });
     }
     let versions: Vec<i64> = conn
@@ -288,24 +296,32 @@ type SchemaObject = (String, String, String, Option<String>);
 
 const SCHEMA_OBJECTS_FETCHED: i64 = 16;
 
-const SQL_SHOWN: usize = 512;
+const FIELD_SHOWN: usize = 512;
 
-fn shown(object: &SchemaObject) -> (&str, &str, &str, Option<String>) {
+const DETAIL_SHOWN: usize = 8 * 1024;
+
+fn shown(object: &SchemaObject) -> (String, String, String, Option<String>) {
     let (kind, name, table, sql) = object;
-    let sql = sql.as_deref().map(|sql| {
-        if sql.len() <= SQL_SHOWN {
-            return sql.to_string();
-        }
-        let cut = sql.floor_char_boundary(SQL_SHOWN);
-        format!("{}... ({} bytes)", &sql[..cut], sql.len())
-    });
-    (kind, name, table, sql)
+    let field = |text: &str| match cut(text, FIELD_SHOWN) {
+        Some(kept) => format!("{kept}... ({} bytes)", text.len()),
+        None => text.to_string(),
+    };
+    (
+        field(kind),
+        field(name),
+        field(table),
+        sql.as_deref().map(field),
+    )
+}
+
+fn cut(text: &str, limit: usize) -> Option<&str> {
+    (text.len() > limit).then(|| &text[..text.floor_char_boundary(limit)])
 }
 
 fn schema_objects(conn: &Connection) -> Result<Vec<SchemaObject>, rusqlite::Error> {
     conn.prepare(
         "SELECT type, name, tbl_name, sql FROM sqlite_master \
-         WHERE type IN ('table', 'index') ORDER BY type, name LIMIT ?1",
+         ORDER BY type, name LIMIT ?1",
     )?
     .query_map([SCHEMA_OBJECTS_FETCHED], |row| {
         Ok((
@@ -319,9 +335,13 @@ fn schema_objects(conn: &Connection) -> Result<Vec<SchemaObject>, rusqlite::Erro
     .collect()
 }
 
+fn is_sqlite_whitespace(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\x0c' | '\r')
+}
+
 fn normalize_sql(sql: &str) -> String {
     let mut out = String::with_capacity(sql.len());
-    for token in sql.split_whitespace() {
+    for token in sql.split(is_sqlite_whitespace).filter(|t| !t.is_empty()) {
         if !out.is_empty() && !out.ends_with(['(', ',']) && !token.starts_with(['(', ')', ',']) {
             out.push(' ');
         }
@@ -504,6 +524,26 @@ mod tests {
             normalize_sql("config TEXT NOT NULL"),
             normalize_sql("config TEXT NOT NULL COLLATE NOCASE")
         );
+    }
+
+    #[test]
+    fn only_the_whitespace_sqlite_tokenizes_as_whitespace_is_collapsed() {
+        assert_eq!(
+            normalize_sql(" \t\n\x0c\rconfig \t\n\x0c\rTEXT \t\n\x0c\rNOT NULL \t\n\x0c\r"),
+            "config TEXT NOT NULL"
+        );
+        assert_eq!(
+            normalize_sql("config TEXT\u{a0}NOT  NULL"),
+            "config TEXT\u{a0}NOT NULL"
+        );
+        assert_ne!(
+            normalize_sql("config TEXT\u{a0}NOT NULL"),
+            normalize_sql("config TEXT NOT NULL")
+        );
+        for other in ['\u{a0}', '\u{85}', '\u{2003}', '\u{3000}', '\x0b'] {
+            let spelled = format!("config{other}TEXT");
+            assert_eq!(normalize_sql(&spelled), spelled, "{other:?}");
+        }
     }
 
     #[test]

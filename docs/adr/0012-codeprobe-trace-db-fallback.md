@@ -12,7 +12,10 @@ ruled on 2026-10-06 that each is fixed as recorded here. The third round
 (aoa-ehdwx) found the schema check comparing column shapes through
 `pragma_table_info`, which cannot see a collation, a generated column or an
 index; the database and its log opened through links and without `O_NONBLOCK`;
-and the migration rows read without a bound. Each is fixed as recorded here.
+and the migration rows read without a bound. The fourth round (aoa-i1o32)
+found the whitespace normalization folding a no-break space into the writer's
+DDL, the comparison skipping triggers and views, and the diagnostic capping
+only each object's `sql`. Each is fixed as recorded here.
 
 ## Context
 
@@ -71,18 +74,27 @@ exports as DDL and the unit tests hold to the check:
   `idx_events_tool_name` and `idx_events_ts`, and the automatic index SQLite
   keeps for the composite primary key.
 
-The check is one comparison: the `(type, name, tbl_name, sql)` rows of
-`sqlite_master` for tables and indexes must equal the rows SQLite records when
-`TRACE_DB_SCHEMA` is run against an empty database, with each `sql` text
-whitespace-normalized. SQLite stores a `CREATE` statement without the
-`IF NOT EXISTS` codeprobe's `store.py` issues, so a database the writer built is
-accepted, and the integration tests build one from that DDL verbatim. A
-collation, a generated or hidden column, a missing or an extra index, or a
-different primary key all change the stored text or the object set and are
-`TraceDbError::Schema`, which lists the objects missing from and unexpected in
-the database. At most sixteen schema objects and two migration versions are
-read into that message, and each object's `sql` is cut at 512 bytes, so a
-hostile database cannot make the diagnostic arbitrarily large. A trial is the
+The check is one comparison: every `(type, name, tbl_name, sql)` row of
+`sqlite_master`, whatever its type, must equal the rows SQLite records when
+`TRACE_DB_SCHEMA` is run against an empty database. Each `sql` text has its
+runs of the characters SQLite's tokenizer skips as whitespace (space, tab,
+newline, form feed, carriage return) collapsed, and every other byte compared
+exactly: a no-break space inside a column definition is part of an identifier
+to SQLite, so `config TEXT\u{a0}NOT NULL` declares a nullable column and must
+not fold into the writer's `config TEXT NOT NULL`. SQLite stores a `CREATE`
+statement without the `IF NOT EXISTS` codeprobe's `store.py` issues, so a
+database the writer built is accepted, and the integration tests build one
+from that DDL verbatim. A collation, a generated or hidden column, a missing or
+an extra index, a different primary key, or any trigger or view all change the
+stored text or the object set and are `TraceDbError::Schema`, which lists the
+objects missing from and unexpected in the database. No object is exempt by
+name: the one `sqlite_`-prefixed object this schema produces, the automatic
+index for the composite primary key, is compared like the rest, and a row
+with such a name planted through `writable_schema` is reported as unexpected
+rather than skipped. At most sixteen schema objects and two migration versions
+are read into that message, each displayed field (type, name, table and `sql`)
+is cut at 512 bytes, and the whole message at 8 KiB, so a hostile database
+cannot make the diagnostic arbitrarily large. A trial is the
 rows whose `config` is the run directory's name and whose `task_id` is the
 trial's; rows from more than one `run_id` are `AmbiguousRun`, and no rows at
 all is `NoEvents`. Three event types are read:
