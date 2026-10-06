@@ -198,25 +198,31 @@ const SCORING_FILE: &str = "scoring.json";
 const TRANSCRIPT_FILE: &str = "agent_output.txt";
 const TRACE_DB_FILE: &str = "trace.db";
 
-/// Where codeprobe's run-wide trace database is for a run, and the `config`
-/// key that selects the run's trials inside it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraceDbLocation {
     pub path: PathBuf,
     pub config: String,
 }
 
-/// Locate the trace database a run's trials were ingested into.
-///
-/// codeprobe writes one `trace.db` per runs directory, beside the per-config
-/// directories, and keys each event by the config label, which is also the
-/// config directory's name. A run dir is one config directory, so the database
-/// is its sibling and the config is its name. `None` when `run_dir` has no
-/// parent or no UTF-8 name (`/`, `.`, `..`): no database could be joined to it.
-pub fn trace_db_location(run_dir: &Path) -> Option<TraceDbLocation> {
-    let config = run_dir.file_name()?.to_str()?.to_string();
-    let path = run_dir.parent()?.join(TRACE_DB_FILE);
-    Some(TraceDbLocation { path, config })
+pub fn trace_db_location(run_dir: &Path) -> Result<Option<TraceDbLocation>, BenchError> {
+    let resolved =
+        std::fs::canonicalize(run_dir).map_err(|source| BenchError::RunDirUnreadable {
+            run_dir: run_dir.to_path_buf(),
+            source,
+        })?;
+    let (Some(name), Some(parent)) = (resolved.file_name(), resolved.parent()) else {
+        return Ok(None);
+    };
+    let config = name
+        .to_str()
+        .ok_or_else(|| BenchError::RunDirNameNotUtf8 {
+            run_dir: resolved.clone(),
+        })?
+        .to_string();
+    Ok(Some(TraceDbLocation {
+        path: parent.join(TRACE_DB_FILE),
+        config,
+    }))
 }
 
 /// A trial's directory. The run-dir layout lives here, not in callers.
@@ -409,32 +415,78 @@ pub fn aggregate_provenance(
 mod tests {
     use super::*;
 
-    #[test]
-    fn trace_db_sits_beside_the_config_directory_and_is_keyed_by_its_name() {
-        let location = trace_db_location(Path::new("/runs/.codeprobe/runs/baseline"))
-            .expect("a config directory locates its database");
-        assert_eq!(
-            location,
-            TraceDbLocation {
-                path: PathBuf::from("/runs/.codeprobe/runs/trace.db"),
-                config: "baseline".to_string(),
-            }
-        );
-        assert_eq!(
-            trace_db_location(Path::new("runs/baseline/")).map(|l| l.config),
-            Some("baseline".to_string())
-        );
+    fn runs_tree() -> (tempfile::TempDir, PathBuf, TraceDbLocation) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runs = std::fs::canonicalize(dir.path())
+            .expect("canonical tempdir")
+            .join("runs");
+        let run = runs.join("baseline");
+        std::fs::create_dir_all(run.join("task-001")).expect("run tree");
+        let expected = TraceDbLocation {
+            path: runs.join("trace.db"),
+            config: "baseline".to_string(),
+        };
+        (dir, run, expected)
     }
 
     #[test]
-    fn a_run_dir_without_a_name_locates_no_trace_db() {
-        for degenerate in ["/", ".", "..", "runs/.."] {
+    fn trace_db_sits_beside_the_config_directory_and_is_keyed_by_its_name() {
+        let (_dir, run, expected) = runs_tree();
+
+        let location = trace_db_location(&run).expect("an existing run dir resolves");
+
+        assert_eq!(location, Some(expected));
+    }
+
+    #[test]
+    fn a_run_dir_spelled_through_dot_or_dot_dot_still_locates_its_trace_db() {
+        let (_dir, run, expected) = runs_tree();
+        let mut through_dot = run.clone().into_os_string();
+        through_dot.push("/.");
+        let through_dot_dot = run.join("task-001").join("..");
+        let mut trailing_dot_dot = run.join("task-001").into_os_string();
+        trailing_dot_dot.push("/../.");
+
+        for spelling in [
+            PathBuf::from(through_dot),
+            through_dot_dot,
+            PathBuf::from(trailing_dot_dot),
+        ] {
             assert_eq!(
-                trace_db_location(Path::new(degenerate)),
-                None,
-                "{degenerate}"
+                trace_db_location(&spelling).expect("resolves"),
+                Some(expected.clone()),
+                "{}",
+                spelling.display()
             );
         }
+    }
+
+    #[test]
+    fn a_run_dir_reached_through_a_link_locates_the_trace_db_beside_the_real_directory() {
+        let (dir, run, expected) = runs_tree();
+        let link = dir.path().join("link-to-run");
+        std::os::unix::fs::symlink(&run, &link).expect("symlink");
+
+        assert_eq!(trace_db_location(&link).expect("resolves"), Some(expected));
+    }
+
+    #[test]
+    fn the_root_directory_locates_no_trace_db() {
+        assert_eq!(trace_db_location(Path::new("/")).expect("resolves"), None);
+    }
+
+    #[test]
+    fn a_run_dir_that_cannot_be_resolved_is_an_error_not_an_absent_database() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("no-such-run");
+
+        let err = trace_db_location(&missing).expect_err("a missing run dir cannot be resolved");
+
+        assert!(
+            matches!(&err, BenchError::RunDirUnreadable { run_dir, source }
+                if run_dir == &missing && source.kind() == std::io::ErrorKind::NotFound),
+            "{err}"
+        );
     }
 
     /// Pins the unknown-field tolerance documented on `TrialScoring`, so the

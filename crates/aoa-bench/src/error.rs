@@ -125,6 +125,13 @@ pub enum BenchError {
         name: OsString,
     },
 
+    #[error(
+        "codeprobe run dir {} has a name that is not valid UTF-8, so it cannot be the \
+         config label codeprobe keys its trace database by",
+        raw_path(.run_dir)
+    )]
+    RunDirNameNotUtf8 { run_dir: PathBuf },
+
     /// The run dir held no recognizable trial subdirectories.
     #[error(
         "no task trials found under {}: expected <task_id>/ subdirs with scoring.json \

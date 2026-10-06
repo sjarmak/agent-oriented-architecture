@@ -4,14 +4,10 @@
 //! This command does NOT orchestrate an agent — codeprobe does. It consumes the
 //! per-trial artifacts codeprobe persists under
 //! `<run_dir>/<task_id>/{agent_output.txt, scoring.json}` (codeprobe
-//! `core/executor.py::_save_task_artifacts`) and the run-wide
-//! `<run_dir>/../trace.db` its telemetry adapter ingests every trial's tool
-//! calls into. For each task it runs the trace-shim over the transcript, or
-//! over the trial's `trace.db` rows when the transcript holds only the agent's
-//! final answer (current codeprobe writes nothing else there), builds (or
-//! degrades) a symbol graph, joins the task oracle, and computes the four
-//! process metrics plus the reward-hacking gap. Each record names which source
-//! its trace came from in `trace_source`.
+//! `core/executor.py::_save_task_artifacts`). For each task it runs the
+//! trace-shim over the transcript, builds (or degrades) a symbol graph, joins
+//! the task oracle, and computes the four process metrics plus the
+//! reward-hacking gap.
 //!
 //! # Honest degradation (MVP boundaries)
 //!
@@ -20,9 +16,7 @@
 //!   trace — the writes the transcript confirms actually landed. A prose-only
 //!   trial has no writes, so edit-locality is degenerate — never fabricated.
 //!   Attempted, failed, denied, and blocked writes stay in the trace but are
-//!   not edits, so none of them inflates `F_edit`. `trace.db` records no tool
-//!   results, so a trial read from it keeps every write at `write.attempt` and
-//!   contributes no edits either.
+//!   not edits, so none of them inflates `F_edit`.
 //! - **the symbol graph** needs an explicit `--scip-index` or `--repo`; absent
 //!   one it degrades to zero weight (R0-ineligible), recorded in
 //!   `graph_degrade_reason` rather than failing silently.
@@ -145,9 +139,6 @@ struct TaskRecord {
     /// Count of non-fatal shim warnings (e.g. non-JSON transcript lines); a
     /// nonzero value flags a possibly-truncated or corrupt transcript.
     transcript_warnings: usize,
-    /// Which codeprobe artifact the trace was read from: the stream-json
-    /// transcript, or the run's `trace.db` when the transcript carried no
-    /// agent events.
     trace_source: TraceSource,
     spans: TraceView,
     retrieval_locality: RetrievalLocality,
@@ -183,7 +174,7 @@ pub fn run(args: &EvalRunArgs) -> Result<i32> {
     let partition = detect_partition(args);
 
     let (task_ids, rejected_names) = discover_tasks_isolating_names(&args.codeprobe_run)?;
-    let trace_db = trace_db_location(&args.codeprobe_run);
+    let trace_db = trace_db_location(&args.codeprobe_run)?;
 
     if let Some(dir) = &args.emit_traces {
         std::fs::create_dir_all(dir)

@@ -127,6 +127,70 @@ fn eval_run_human_names_the_trace_source() {
         .stdout(predicate::str::contains(") via trace.db"));
 }
 
+fn busy_task_db(dir: &TempDir) {
+    trace_db(
+        dir.path().join("runs").as_path(),
+        &[
+            (
+                "run-a",
+                "busy-task",
+                0,
+                "Read",
+                r#"{"file_path":"src/lib.py"}"#,
+            ),
+            (
+                "run-a",
+                "silent-task",
+                0,
+                "Read",
+                r#"{"file_path":"README.md"}"#,
+            ),
+        ],
+    );
+}
+
+fn eval_run_json_from(cwd: &Path, run_dir: &str) -> Value {
+    let output = aoa()
+        .current_dir(cwd)
+        .args(["eval", "run", "--json", "--codeprobe-run", run_dir])
+        .output()
+        .expect("run");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("valid json")
+}
+
+#[test]
+fn eval_run_finds_the_trace_db_when_the_run_dir_is_spelled_dot() {
+    let dir = TempDir::new().expect("tempdir");
+    let run = answer_only_run(&dir);
+    busy_task_db(&dir);
+
+    let report = eval_run_json_from(&run, ".");
+
+    assert_eq!(report["error_count"], 0);
+    let busy = eval_run_traces::record(&report, "busy-task");
+    assert_eq!(busy["trace_source"], "trace_db");
+    assert_eq!(eval_run_traces::count_of(&busy["spans"], "file.read"), 1);
+}
+
+#[test]
+fn eval_run_finds_the_trace_db_when_the_run_dir_is_spelled_dot_dot() {
+    let dir = TempDir::new().expect("tempdir");
+    let run = answer_only_run(&dir);
+    busy_task_db(&dir);
+
+    let report = eval_run_json_from(&run.join("busy-task"), "..");
+
+    assert_eq!(report["error_count"], 0);
+    let busy = eval_run_traces::record(&report, "busy-task");
+    assert_eq!(busy["trace_source"], "trace_db");
+    assert_eq!(eval_run_traces::count_of(&busy["spans"], "file.read"), 1);
+}
+
 #[test]
 fn eval_run_keeps_the_transcript_as_source_when_it_carries_events() {
     let dir = TempDir::new().expect("tempdir");
