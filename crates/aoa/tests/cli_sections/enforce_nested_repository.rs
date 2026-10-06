@@ -886,6 +886,43 @@ fn enforce_check_refuses_a_write_spelled_above_the_filesystem_root() {
 }
 
 #[cfg(unix)]
+#[test]
+fn enforce_check_names_a_path_refusal_over_an_inner_reproduction_requirement() {
+    let fixture = TempDir::new().unwrap();
+    let o = fixture.path().canonicalize().unwrap().join("o");
+    let p = o.join("p");
+    let q = p.join("q");
+    init_git_repo(&o);
+    init_git_repo(&p);
+    init_git_repo(&q);
+    std::fs::write(o.join("aoa-policy.yaml"), PERMISSIVE_POLICY).unwrap();
+    std::fs::write(
+        p.join("aoa-policy.yaml"),
+        "protected_paths: [\"real/**\"]\nreproduction_required: false\n",
+    )
+    .unwrap();
+    std::fs::write(q.join("aoa-policy.yaml"), "reproduction_required: true\n").unwrap();
+    let target = p.join("real/src.rs");
+    plant(&target);
+    std::os::unix::fs::symlink(p.join("real"), q.join("linked")).unwrap();
+
+    aoa_stdin()
+        .args(["enforce", "check"])
+        .write_stdin(write_to("linked/src.rs", &q))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "protected path: policy forbids writing 'real/src.rs'",
+        ))
+        .stderr(predicate::str::contains(format!(
+            "(enforced for {})",
+            p.display()
+        )))
+        .stderr(predicate::str::contains("reproduction-before-mutation").not());
+    assert_planted_target_is_untouched(&target);
+}
+
+#[cfg(unix)]
 fn assert_check_refuses_the_linked_policy_of(root: &Path, payload: String) {
     aoa_stdin()
         .args(["enforce", "check"])

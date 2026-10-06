@@ -955,7 +955,7 @@ mod tests {
         std::os::unix::fs::symlink(nested.join("real"), nested.join("alias")).unwrap();
         let candidate = nested.join("alias/src/lib.rs");
 
-        let governed = governed_write(&nested, Some(&candidate)).unwrap();
+        let governed = governed_write(&outer, Some(&candidate)).unwrap();
 
         assert_eq!(governed.roots, vec![nested.clone(), outer.clone()]);
         assert_eq!(governed.spellings, vec![candidate]);
