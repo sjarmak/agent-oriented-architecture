@@ -19,6 +19,11 @@ use super::{validate_single_component, PathTrustError};
 /// Mode for directories this module creates: owner-only.
 const DIR_MODE: Mode = Mode::RWXU;
 
+const DIRECTORY_FLAGS: OFlags = OFlags::RDONLY
+    .union(OFlags::DIRECTORY)
+    .union(OFlags::NOFOLLOW)
+    .union(OFlags::CLOEXEC);
+
 /// Is `name` inside the directory `parent` refers to a symlink? Used to explain
 /// an `openat` refusal, never as an authorization check in its own right.
 pub fn is_symlink_at(parent: impl AsFd, name: impl AsRef<OsStr>) -> bool {
@@ -48,8 +53,12 @@ pub fn map_nofollow_error(
 /// root. Every component acquired beneath it goes through [`open_dir_at`] or
 /// [`open_or_create_dir_at`] relative to this descriptor with `O_NOFOLLOW`.
 pub fn open_trust_root(root: &Path) -> Result<OwnedFd, PathTrustError> {
-    fs::open(root, OFlags::RDONLY | OFlags::DIRECTORY, Mode::empty())
-        .map_err(|source| PathTrustError::io(root, source.into()))
+    fs::open(
+        root,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|source| PathTrustError::io(root, source.into()))
 }
 
 /// Acquire an existing subdirectory `name` of `parent`, refusing a symlink.
@@ -59,13 +68,8 @@ pub fn open_dir_at(
     path: &Path,
 ) -> Result<OwnedFd, PathTrustError> {
     let name = name.as_ref();
-    fs::openat(
-        parent.as_fd(),
-        name,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW,
-        Mode::empty(),
-    )
-    .map_err(|source| map_nofollow_error(parent, name, path, source.into()))
+    fs::openat(parent.as_fd(), name, DIRECTORY_FLAGS, Mode::empty())
+        .map_err(|source| map_nofollow_error(parent, name, path, source.into()))
 }
 
 /// Acquire subdirectory `name` of `parent`, creating it when absent. A racing
@@ -76,12 +80,7 @@ pub fn open_or_create_dir_at(
     path: &Path,
 ) -> Result<OwnedFd, PathTrustError> {
     let name = name.as_ref();
-    match fs::openat(
-        parent.as_fd(),
-        name,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW,
-        Mode::empty(),
-    ) {
+    match fs::openat(parent.as_fd(), name, DIRECTORY_FLAGS, Mode::empty()) {
         Ok(fd) => Ok(fd),
         Err(Errno::NOENT) => {
             match fs::mkdirat(parent.as_fd(), name, DIR_MODE) {
@@ -184,6 +183,35 @@ mod tests {
             0,
             "the planted link's target must not have been touched"
         );
+    }
+
+    #[test]
+    fn every_acquired_descriptor_is_closed_on_exec() {
+        use rustix::io::{fcntl_getfd, FdFlags};
+
+        let root = tempfile::tempdir().expect("create root");
+        let own = root.path().join("policy.yaml");
+        std::fs::write(&own, "own\n").expect("write own file");
+        let root_fd = open_trust_root(root.path()).expect("open trust root");
+        let made = root.path().join("made");
+        let created = open_or_create_dir_at(&root_fd, "made", &made).expect("create dir");
+        let reacquired = open_dir_at(&root_fd, "made", &made).expect("reacquire dir");
+        let file = open_regular_file_at(&root_fd, "policy.yaml", &own)
+            .expect("open own file")
+            .expect("own file exists");
+
+        for (what, fd) in [
+            ("trust root", root_fd.as_fd()),
+            ("created directory", created.as_fd()),
+            ("reacquired directory", reacquired.as_fd()),
+            ("regular file", file.as_fd()),
+        ] {
+            let flags = fcntl_getfd(fd).expect("read descriptor flags");
+            assert!(
+                flags.contains(FdFlags::CLOEXEC),
+                "the {what} descriptor would leak into a child process"
+            );
+        }
     }
 
     #[test]

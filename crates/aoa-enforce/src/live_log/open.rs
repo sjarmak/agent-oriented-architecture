@@ -7,7 +7,7 @@
 use std::fs::File;
 use std::path::Path;
 
-use super::error::{IoAction, LiveLogError, LogPathComponent, Result};
+use super::error::{IoAction, LiveLogError, Result};
 
 /// How the live log is opened. The two modes the hook needs; see [`open_log`]
 /// for why the choice is an enum rather than a caller-supplied builder.
@@ -53,6 +53,7 @@ pub(super) fn open_log(log: &Path, access: LogAccess) -> Result<File> {
 
 #[cfg(unix)]
 mod unix_log {
+    use super::super::error::LogPathComponent;
     use super::*;
     use aoa_path_trust::dirfd::{
         map_nofollow_error, open_dir_at, open_or_create_dir_at, open_trust_root,
@@ -130,7 +131,8 @@ mod unix_log {
             LogAccess::Read => OFlags::RDONLY,
             LogAccess::AppendCreate => OFlags::RDWR | OFlags::CREATE | OFlags::APPEND,
         } | OFlags::NOFOLLOW
-            | OFlags::NONBLOCK;
+            | OFlags::NONBLOCK
+            | OFlags::CLOEXEC;
         let (repo, aoa_dir, traces_dir, name) = log_parts(log)?;
         let traces_fd = open_traces_dir(repo, aoa_dir, traces_dir, access)?;
         let fd = fs::openat(&traces_fd, name, flags, FILE_MODE).map_err(|source| {
@@ -190,9 +192,28 @@ pub(super) fn create_traces_dir(path: &Path) -> Result<()> {
 mod tests {
     use super::super::error::IoAction;
     use super::super::{append_span, read_spans, LiveLogError};
+    use super::{open_log, LogAccess};
     use aoa_trace::SpanType;
     use serde_json::Map;
     use std::time::Duration;
+
+    #[test]
+    fn an_opened_log_is_closed_on_exec() {
+        use rustix::io::{fcntl_getfd, FdFlags};
+        use std::os::fd::AsFd;
+
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join(".aoa/traces/live-cloexec.jsonl");
+
+        for access in [LogAccess::AppendCreate, LogAccess::Read] {
+            let file = open_log(&log, access).unwrap();
+            let flags = fcntl_getfd(file.as_fd()).unwrap();
+            assert!(
+                flags.contains(FdFlags::CLOEXEC),
+                "the log descriptor would leak into a child process"
+            );
+        }
+    }
 
     #[test]
     fn append_creates_private_trace_directories() {

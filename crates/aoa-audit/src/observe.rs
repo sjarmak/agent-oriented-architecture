@@ -150,6 +150,18 @@ mod unix {
         .union(Mode::ROTH)
         .union(Mode::WOTH);
 
+    pub(super) const CREATE_EXCLUSIVELY: OFlags = OFlags::WRONLY
+        .union(OFlags::CREATE)
+        .union(OFlags::EXCL)
+        .union(OFlags::NOFOLLOW)
+        .union(OFlags::NONBLOCK)
+        .union(OFlags::CLOEXEC);
+
+    pub(super) const READ_IN_PLACE: OFlags = OFlags::RDONLY
+        .union(OFlags::NOFOLLOW)
+        .union(OFlags::NONBLOCK)
+        .union(OFlags::CLOEXEC);
+
     fn io(path: &Path, source: Errno) -> AuditError {
         AuditError::Io {
             path: path.to_path_buf(),
@@ -210,12 +222,7 @@ mod unix {
         after_aoa_open();
 
         let _traces_fd = open_or_create_dir(&aoa_fd, "traces", &traces_dir)?;
-        let gitignore_fd = match fs::openat(
-            &aoa_fd,
-            ".gitignore",
-            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::NONBLOCK,
-            FILE_MODE,
-        ) {
+        let gitignore_fd = match fs::openat(&aoa_fd, ".gitignore", CREATE_EXCLUSIVELY, FILE_MODE) {
             Ok(fd) => Some(fd),
             Err(Errno::EXIST) => None,
             Err(source) => {
@@ -239,20 +246,16 @@ mod unix {
             // hardlink share the truncation with a tracked file. Open without
             // blocking, verify the acquired object is one ordinary inode, and
             // accept it only when it already carries the exact install bytes.
-            let fd = fs::openat(
-                &aoa_fd,
-                ".gitignore",
-                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK,
-                Mode::empty(),
-            )
-            .map_err(|source| {
-                install_path_error(map_nofollow_error(
-                    &aoa_fd,
-                    ".gitignore",
-                    &gitignore,
-                    source.into(),
-                ))
-            })?;
+            let fd = fs::openat(&aoa_fd, ".gitignore", READ_IN_PLACE, Mode::empty()).map_err(
+                |source| {
+                    install_path_error(map_nofollow_error(
+                        &aoa_fd,
+                        ".gitignore",
+                        &gitignore,
+                        source.into(),
+                    ))
+                },
+            )?;
             let stat = fs::fstat(&fd).map_err(|source| io(&gitignore, source))?;
             if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
                 || stat.st_nlink != 1
@@ -305,23 +308,18 @@ mod unix {
 
         after_traces_open();
 
-        let trace_fd = fs::openat(
-            &traces_fd,
-            name,
-            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW,
-            FILE_MODE,
-        )
-        .map_err(|source| {
-            if source == Errno::LOOP || is_symlink_at(&traces_fd, name) {
-                AuditError::UnsafeTraceName {
-                    name: name.to_string(),
+        let trace_fd =
+            fs::openat(&traces_fd, name, CREATE_EXCLUSIVELY, FILE_MODE).map_err(|source| {
+                if source == Errno::LOOP || is_symlink_at(&traces_fd, name) {
+                    AuditError::UnsafeTraceName {
+                        name: name.to_string(),
+                    }
+                } else if source == Errno::EXIST {
+                    AuditError::TraceExists { path: path.clone() }
+                } else {
+                    io(&path, source)
                 }
-            } else if source == Errno::EXIST {
-                AuditError::TraceExists { path: path.clone() }
-            } else {
-                io(&path, source)
-            }
-        })?;
+            })?;
         let mut file = File::from(trace_fd);
         file.write_all(json.as_bytes())
             .map_err(|source| AuditError::Io {
@@ -535,6 +533,18 @@ mod tests {
         use super::*;
         use aoa_trace::{Span, SpanSource, SpanType};
         use std::os::unix::fs::symlink;
+
+        #[test]
+        fn every_file_open_neither_follows_links_nor_leaks_across_exec() {
+            use rustix::fs::OFlags;
+
+            for flags in [unix::CREATE_EXCLUSIVELY, unix::READ_IN_PLACE] {
+                assert!(
+                    flags.contains(OFlags::NOFOLLOW | OFlags::CLOEXEC),
+                    "{flags:?}"
+                );
+            }
+        }
 
         fn valid_trace() -> Trace {
             Trace {
