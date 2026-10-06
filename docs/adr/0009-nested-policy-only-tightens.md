@@ -47,8 +47,12 @@ them refuses.
   records one *spelling*, the canonical path of the link's parent directory
   joined with the link's name and the rest of the path as written, unresolved.
   The walk follows at most 40 links (`MAX_LINKS_FOLLOWED`) and refuses the
-  write past that bound, as the resolver's own `ELOOP`. Where the walk ends is
-  the canonical target. The governing roots are the repositories enclosing
+  write past that bound, as the resolver's own `ELOOP`. A `..` at the
+  filesystem root, in the written path or in a link target, stays at the
+  root, as the kernel resolves it; before this record both resolutions
+  reported it as escaping and the write was out of scope, so `/../O/src.rs`
+  reached a protected file in `O`. Where the walk ends is the canonical
+  target. The governing roots are the repositories enclosing
   the canonical target's nearest existing ancestor directory and, for each
   spelling, the repositories enclosing that link's canonical parent directory,
   together with the repositories enclosing the session's own; every chain is
@@ -58,7 +62,12 @@ them refuses.
   `/O/P/Q/linked` a link to `/O/P/real`, a write to `/O/P/Q/linked/src.rs`
   lists `Q`, `P`, `O`, and a refusal by `Q` names `Q`. Each root's policy is
   evaluated, through `scope_under`, against the written path and against
-  every spelling, and the write is refused if any match refuses. With `/alias`
+  every spelling, and the write is refused if any match refuses. Every
+  root's path patterns are checked innermost first and the first match
+  blocks, naming that root; only when no root's path patterns refuse does
+  the innermost root requiring reproduction gate the write, so with `Q`
+  requiring reproduction and `P` protecting `real/**` the refusal names `P`
+  with its path reason, because reproducing cannot cure a protected path. With `/alias`
   a link to `/real` above every repository and `/real/O/P/linked` a link to a
   repository `/D`, a write spelled `/alias/O/P/linked/src.rs` from a session
   in `/D` is governed by `/D`, where it lands, and by `/O/P` and `/O`, where
@@ -181,15 +190,21 @@ nested repository itself, one spelled through a link above every repository by
 the repository owning the inner link from a session in the repository it lands
 in, one through a nested link by the innermost refusing repository by name, and
 one through a chain of two links by either repository spelling a link in it; a
-path that loops through links is refused;
+path that loops through links is refused; a write spelled through a link whose
+target climbs above the filesystem root, and one spelled above the root
+directly, are refused by the repository they land in; a path refusal by an
+enclosing repository is named over the inner repository's reproduction
+requirement;
 a symlinked, dangling or malformed policy refuses, including the session's own;
 a write into the session's own `.git/hooks` is denied.
 Each refusal test proves the planted target was not modified.
 `crates/aoa-path-trust/src/nofollow.rs` and `dirfd.rs` hold the reader's own
 refusals as unit tests, including a name of more than one component, and
 `resolve.rs` holds the spelling walk's: the spelling recorded at each link of
-a chain, a loop refused at the bound, and a chain as long as the bound still
-resolved. The `governed_write` unit tests in `enforce.rs` show a root every
-chain reaches is listed once with its spelling listed once, roots ordered
-innermost first whichever chain found them, and a chain of links collecting
-every repository it passes through.
+a chain, a loop refused at the bound, a chain as long as the bound still
+resolved, and a `..` at the filesystem root held at the root lexically, when
+resolving, and in a link target. The `governed_write` unit tests in
+`enforce.rs` show a root every chain reaches is listed once with its spelling
+listed once, from a session in the enclosing repository so the nested root is
+found only by discovery, roots ordered innermost first whichever chain found
+them, and a chain of links collecting every repository it passes through.
