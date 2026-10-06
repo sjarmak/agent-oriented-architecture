@@ -61,6 +61,17 @@ pub fn open_trust_root(root: &Path) -> Result<OwnedFd, PathTrustError> {
     .map_err(|source| PathTrustError::io(root, source.into()))
 }
 
+fn single_component(name: &OsStr, path: &Path) -> Result<(), PathTrustError> {
+    let accepted = name
+        .to_str()
+        .is_some_and(|name| validate_single_component(name).is_ok());
+    if accepted {
+        Ok(())
+    } else {
+        Err(PathTrustError::unsafe_path(path))
+    }
+}
+
 /// Acquire an existing subdirectory `name` of `parent`, refusing a symlink.
 pub fn open_dir_at(
     parent: impl AsFd,
@@ -68,6 +79,7 @@ pub fn open_dir_at(
     path: &Path,
 ) -> Result<OwnedFd, PathTrustError> {
     let name = name.as_ref();
+    single_component(name, path)?;
     fs::openat(parent.as_fd(), name, DIRECTORY_FLAGS, Mode::empty())
         .map_err(|source| map_nofollow_error(parent, name, path, source.into()))
 }
@@ -80,6 +92,7 @@ pub fn open_or_create_dir_at(
     path: &Path,
 ) -> Result<OwnedFd, PathTrustError> {
     let name = name.as_ref();
+    single_component(name, path)?;
     match fs::openat(parent.as_fd(), name, DIRECTORY_FLAGS, Mode::empty()) {
         Ok(fd) => Ok(fd),
         Err(Errno::NOENT) => {
@@ -98,7 +111,7 @@ pub fn open_regular_file_at(
     name: &str,
     path: &Path,
 ) -> Result<Option<File>, PathTrustError> {
-    validate_single_component(name).map_err(|_| PathTrustError::unsafe_path(path))?;
+    single_component(OsStr::new(name), path)?;
     let fd = match fs::openat(
         parent.as_fd(),
         name,
@@ -183,6 +196,44 @@ mod tests {
             0,
             "the planted link's target must not have been touched"
         );
+    }
+
+    #[test]
+    fn acquires_directories_only_by_a_single_component_name() {
+        let base = tempfile::tempdir().expect("create base");
+        let outside = tempfile::tempdir().expect("create outside");
+        let root = base.path().join("root");
+        std::fs::create_dir(&root).expect("create root");
+        symlink(outside.path(), root.join("linked")).expect("plant link");
+        let root_fd = open_trust_root(&root).expect("open trust root");
+
+        for name in ["linked/inner", "../escaped", "./inner", ".", "..", ""] {
+            let path = root.join(name);
+            for result in [
+                open_dir_at(&root_fd, name, &path),
+                open_or_create_dir_at(&root_fd, name, &path),
+            ] {
+                assert!(
+                    matches!(
+                        &result,
+                        Err(PathTrustError::UnsafePath { path: refused }) if refused == &path
+                    ),
+                    "{name:?} must be refused before anything is opened: {result:?}"
+                );
+            }
+        }
+        assert_eq!(
+            std::fs::read_dir(outside.path())
+                .expect("read outside")
+                .count(),
+            0,
+            "the planted link's target must not have been touched"
+        );
+        let beside_root: Vec<_> = std::fs::read_dir(base.path())
+            .expect("read base")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        assert_eq!(beside_root, ["root"], "a parent step escaped the root");
     }
 
     #[test]
