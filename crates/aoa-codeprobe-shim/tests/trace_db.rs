@@ -680,6 +680,30 @@ fn a_missing_or_extra_index_is_refused() {
 }
 
 #[test]
+fn a_long_schema_statement_is_cut_in_the_error() {
+    let dir = TempDir::new().expect("tempdir");
+    let (path, conn) = open_fixture(&dir);
+    let padding = "x".repeat(256 * 1024);
+    rebuild_events(
+        &conn,
+        &format!(
+            "{}, CHECK (tool_name <> '{padding}')",
+            EVENTS_COLUMNS_WITH_CONFIG.replace("{config}", "TEXT NOT NULL")
+        ),
+    );
+    insert(&conn, &tool_use(0, "Read", r#"{"file_path":"a"}"#));
+    drop(conn);
+
+    let err = trace_db_err(parse_trace_db(&trial(path)).unwrap_err());
+
+    assert!(
+        matches!(&err, TraceDbError::Schema { detail, .. }
+            if detail.len() < 4096 && detail.contains("... (262") && detail.contains(" bytes)")),
+        "{err}"
+    );
+}
+
+#[test]
 fn schema_versions_past_the_first_two_are_left_out_of_the_error() {
     let dir = TempDir::new().expect("tempdir");
     let (path, conn) = open_fixture(&dir);

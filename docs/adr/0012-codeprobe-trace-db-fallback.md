@@ -81,10 +81,11 @@ collation, a generated or hidden column, a missing or an extra index, or a
 different primary key all change the stored text or the object set and are
 `TraceDbError::Schema`, which lists the objects missing from and unexpected in
 the database. At most sixteen schema objects and two migration versions are
-read into that message, so a hostile database cannot make the diagnostic
-arbitrarily large. A trial is the rows whose `config` is the run directory's
-name and whose `task_id` is the trial's; rows from more than one `run_id` are
-`AmbiguousRun`, and no rows at all is `NoEvents`. Three event types are read:
+read into that message, and each object's `sql` is cut at 512 bytes, so a
+hostile database cannot make the diagnostic arbitrarily large. A trial is the
+rows whose `config` is the run directory's name and whose `task_id` is the
+trial's; rows from more than one `run_id` are `AmbiguousRun`, and no rows at
+all is `NoEvents`. Three event types are read:
 `tool_use` becomes a span through the same mapping the transcript walk uses,
 `result` is codeprobe's final-answer marker and produces nothing,
 `trace_truncated` is `Truncated`, and anything else is `MalformedEvent`.

@@ -246,15 +246,22 @@ fn check_schema(conn: &Connection, path: &Path) -> Result<(), TraceDbError> {
         })
         .map_err(sqlite_err)?;
     if found != expected {
-        let missing: Vec<&SchemaObject> = expected.iter().filter(|o| !found.contains(o)).collect();
-        let unexpected: Vec<&SchemaObject> =
-            found.iter().filter(|o| !expected.contains(o)).collect();
+        let missing: Vec<_> = expected
+            .iter()
+            .filter(|o| !found.contains(o))
+            .map(shown)
+            .collect();
+        let unexpected: Vec<_> = found
+            .iter()
+            .filter(|o| !expected.contains(o))
+            .map(shown)
+            .collect();
         return Err(TraceDbError::Schema {
             path: path.to_path_buf(),
             detail: format!(
                 "sqlite_master tables and indexes (type, name, table, sql) differ from the \
                  accepted schema: missing {missing:?}; unexpected {unexpected:?} \
-                 (at most {SCHEMA_OBJECTS_FETCHED} objects read)"
+                 (at most {SCHEMA_OBJECTS_FETCHED} objects read, sql shown to {SQL_SHOWN} bytes)"
             ),
         });
     }
@@ -280,6 +287,20 @@ fn check_schema(conn: &Connection, path: &Path) -> Result<(), TraceDbError> {
 type SchemaObject = (String, String, String, Option<String>);
 
 const SCHEMA_OBJECTS_FETCHED: i64 = 16;
+
+const SQL_SHOWN: usize = 512;
+
+fn shown(object: &SchemaObject) -> (&str, &str, &str, Option<String>) {
+    let (kind, name, table, sql) = object;
+    let sql = sql.as_deref().map(|sql| {
+        if sql.len() <= SQL_SHOWN {
+            return sql.to_string();
+        }
+        let cut = sql.floor_char_boundary(SQL_SHOWN);
+        format!("{}... ({} bytes)", &sql[..cut], sql.len())
+    });
+    (kind, name, table, sql)
+}
 
 fn schema_objects(conn: &Connection) -> Result<Vec<SchemaObject>, rusqlite::Error> {
     conn.prepare(
