@@ -1954,3 +1954,37 @@ fn a_ci_marker_reached_through_a_linked_directory_does_not_count() {
     std::fs::create_dir_all(repo.path().join(".github/workflows")).expect("create workflows");
     assert!(!plane_missing(repo.path(), aoa_audit::EnforcementPlane::Ci));
 }
+
+#[test]
+fn a_back_pointer_and_a_core_worktree_naming_different_directories_lend_the_hook_to_neither() {
+    let (_git_dirs, repo, git_dir) = separate_git_dir_repo_with_hook();
+    let elsewhere = fixture_repo();
+    std::fs::copy(repo.path().join(".git"), elsewhere.path().join(".git"))
+        .expect("name the git dir from another checkout");
+    std::fs::write(
+        git_dir.join("gitdir"),
+        format!("{}\n", repo.path().join(".git").display()),
+    )
+    .expect("point back at the checkout");
+    assert!(!pre_commit_plane_missing(repo.path()));
+    let worktree_setting = |worktree: &Path| {
+        config_file(
+            &git_dir.join("config"),
+            "core.worktree",
+            worktree.to_str().expect("utf-8 path"),
+        );
+    };
+
+    worktree_setting(elsewhere.path());
+    assert!(pre_commit_plane_missing(repo.path()));
+    assert!(pre_commit_plane_missing(elsewhere.path()));
+
+    worktree_setting(repo.path().parent().expect("tempdir parent"));
+    assert!(
+        pre_commit_plane_missing(repo.path()),
+        "a work tree holding the checkout as a subdirectory is not the checkout"
+    );
+
+    worktree_setting(repo.path());
+    assert!(!pre_commit_plane_missing(repo.path()));
+}

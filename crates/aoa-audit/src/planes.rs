@@ -107,21 +107,23 @@ fn names_worktree(git_dir: &Path, common_dir: &Path, repo: &Path) -> Result<bool
         return Ok(registers_worktree(common_dir, &resolved)
             && linked_worktree_points_back(repo, git_dir).is_ok_and(|points_back| points_back));
     }
-    match linked_worktree_points_back(repo, git_dir) {
-        Ok(points_back) => Ok(points_back),
+    let points_back = match linked_worktree_points_back(repo, git_dir) {
+        Ok(true) => Some(()),
+        Ok(false) => return Ok(false),
         Err(RepositoryRootError::Backlink { source, .. })
             if source.kind() == std::io::ErrorKind::NotFound =>
         {
-            Ok(
-                match config_value(repo, git_dir, &["--get", "core.worktree"])? {
-                    ConfigValue::Set(worktree) => same_directory(&git_dir.join(worktree), repo),
-                    ConfigValue::Unset => names_no_worktree(git_dir, repo)?,
-                    ConfigValue::Unreadable => false,
-                },
-            )
+            None
         }
-        Err(_) => Ok(false),
-    }
+        Err(_) => return Ok(false),
+    };
+    Ok(
+        match config_value(repo, git_dir, &["--get", "core.worktree"])? {
+            ConfigValue::Set(worktree) => same_directory(&git_dir.join(worktree), repo),
+            ConfigValue::Unset => points_back.is_some() || names_no_worktree(git_dir, repo)?,
+            ConfigValue::Unreadable => false,
+        },
+    )
 }
 
 fn registers_worktree(common_dir: &Path, git_dir: &Path) -> bool {
