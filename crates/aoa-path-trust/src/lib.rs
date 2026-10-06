@@ -2,7 +2,7 @@
 //! trust root.
 //!
 //! One crate owns this invariant so a bypass fixed here is fixed for every
-//! consumer. Three questions live here, and they are deliberately distinct:
+//! consumer. Five questions live here, and they are deliberately distinct:
 //!
 //! - [`validate_single_component`] — may this *name* be joined onto a trusted
 //!   base at all?
