@@ -13,13 +13,12 @@ const IGNORE_FILE_NAMES: [&str; 2] = [".gitignore", ".ignore"];
 const UTF8_BOM: char = '\u{feff}';
 
 pub fn discover_context_roots(dir: &Path) -> Result<Vec<PathBuf>, LintError> {
-    discover_entering(dir, &|_| ())
+    discover_checking(dir, &|_| ())
 }
 
-fn discover_entering(dir: &Path, entering: &dyn Fn(&Path)) -> Result<Vec<PathBuf>, LintError> {
-    let mut rules = Rules::for_linting(dir)?;
+fn discover_checking(dir: &Path, checked: &dyn Fn(&Path)) -> Result<Vec<PathBuf>, LintError> {
+    let mut rules = Rules::for_linting(dir, checked)?;
     let mut roots = Vec::new();
-    entering(dir);
     rules.enter(dir)?;
     let mut walking = vec![entries_of(dir)?];
     while let Some(entries) = walking.last_mut() {
@@ -32,7 +31,6 @@ fn discover_entering(dir: &Path, entering: &dyn Fn(&Path)) -> Result<Vec<PathBuf
             .file_type()
             .map_err(|source| walk_failed(&path, source))?;
         if kind.is_dir() && entry.file_name() != ".git" && rules.admit(&path, true) {
-            entering(&path);
             rules.enter(&path)?;
             walking.push(entries_of(&path)?);
         } else if kind.is_file() && is_context_root_name(&path) && rules.admit(&path, false) {
@@ -57,14 +55,15 @@ fn walk_failed(path: &Path, source: io::Error) -> LintError {
     }
 }
 
-struct Rules {
+struct Rules<'a> {
     linted: PathBuf,
     enclosure: Enclosure,
     matchers: BTreeMap<PathBuf, Gitignore>,
+    checked: &'a dyn Fn(&Path),
 }
 
-impl Rules {
-    fn for_linting(dir: &Path) -> Result<Self, LintError> {
+impl<'a> Rules<'a> {
+    fn for_linting(dir: &Path, checked: &'a dyn Fn(&Path)) -> Result<Self, LintError> {
         let enclosure = Enclosure::open(dir).map_err(|refused| match refused {
             BudgetError::Io { path, source } => walk_failed(&path, source),
             other => LintError::Budget(other),
@@ -73,6 +72,7 @@ impl Rules {
             linted: dir.to_path_buf(),
             enclosure,
             matchers: BTreeMap::new(),
+            checked,
         })
     }
 
@@ -130,6 +130,7 @@ impl Rules {
                 path: path.to_path_buf(),
             });
         }
+        (self.checked)(path);
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)
             .map_err(|source| walk_failed(path, source))?;
@@ -197,50 +198,34 @@ fn is_context_root_name(path: &Path) -> bool {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use std::sync::mpsc;
-    use std::time::Duration;
-
     use super::*;
 
-    fn make_fifo(path: &Path) {
-        let mode = rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR;
-        rustix::fs::mknodat(rustix::fs::CWD, path, rustix::fs::FileType::Fifo, mode, 0).unwrap();
-    }
-
     #[test]
-    fn a_directory_swapped_for_a_link_as_it_is_entered_has_no_rules_read_through_the_link() {
+    fn a_directory_swapped_for_a_link_between_the_check_and_the_read_keeps_the_rules_that_were_checked(
+    ) {
         let base = tempfile::tempdir().unwrap();
         let base = base.path().canonicalize().unwrap();
         let repo = base.join("repo");
         let docs = repo.join("docs");
-        let outside = base.join("outside");
+        let other = repo.join("other");
         let elsewhere = base.join("elsewhere");
-        std::fs::create_dir_all(&docs).unwrap();
-        std::fs::create_dir(&outside).unwrap();
-        std::fs::write(docs.join(".gitignore"), "").unwrap();
-        std::fs::write(docs.join("CLAUDE.md"), "").unwrap();
-        make_fifo(&outside.join(".gitignore"));
-        std::fs::write(outside.join("CLAUDE.md"), "").unwrap();
-        let (sent, received) = mpsc::channel();
-        std::thread::spawn(move || {
-            let swapping = |entered: &Path| {
-                if entered == docs {
-                    std::fs::rename(&docs, &elsewhere).unwrap();
-                    std::os::unix::fs::symlink(&outside, &docs).unwrap();
-                }
-            };
-            sent.send(discover_entering(&repo, &swapping)).unwrap();
-        });
+        for dir in [&docs, &other] {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join("AGENTS.md"), "").unwrap();
+            std::fs::write(dir.join("CLAUDE.md"), "").unwrap();
+        }
+        std::fs::write(docs.join(".gitignore"), "AGENTS.md\n").unwrap();
+        std::fs::write(other.join(".gitignore"), "CLAUDE.md\n").unwrap();
+        let swapping = |checked: &Path| {
+            if checked == docs.join(".gitignore") {
+                std::fs::rename(&docs, &elsewhere).unwrap();
+                std::os::unix::fs::symlink(&other, &docs).unwrap();
+            }
+        };
 
-        let refused = received.recv_timeout(Duration::from_secs(5)).unwrap();
+        let roots = discover_checking(&repo, &swapping).unwrap();
 
-        assert!(
-            matches!(
-                &refused,
-                Err(LintError::IgnoreFileOutside { path, dir })
-                    if path == &base.join("repo/docs/.gitignore") && dir == &base.join("repo")
-            ),
-            "{refused:?}"
-        );
+        assert!(docs.is_symlink());
+        assert_eq!(roots, [docs.join("CLAUDE.md"), other.join("AGENTS.md")]);
     }
 }
