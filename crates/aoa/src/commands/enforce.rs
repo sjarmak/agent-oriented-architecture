@@ -466,8 +466,6 @@ fn block(base: &Path, event: &HookEvent, root: &Path, reason: BlockReason) -> Re
     Ok(BLOCK_EXIT_CODE)
 }
 
-/// The path a write event targets as the hook spelled it, if any (`file_path`
-/// for the edit tools, `notebook_path` for notebooks).
 fn write_target(event: &HookEvent) -> Option<&str> {
     event
         .tool_input
@@ -518,22 +516,6 @@ fn anchor_target(raw: &str, cwd: &str) -> Result<PathBuf> {
     Ok(cwd.join(target))
 }
 
-/// Classify a hook target against the canonical repository root.
-///
-/// A target counts as inside when *either* resolution lands under `root`, and
-/// the asymmetry is load-bearing in both directions:
-///
-/// - Resolved-inside catches the `../`-relative and symlinked spellings that
-///   walk back into the repository. Containment has to be decided on the
-///   resolved path or the check is a string comparison anyone can spell around.
-/// - Lexical-inside keeps a repository-local symlink that points out of the
-///   tree in scope. Deciding on the resolved path alone would turn such an
-///   alias into a way to name any protected path and have the gate wave it
-///   through, which is the R5 alias hole the two-spelling match exists to
-///   close.
-///
-/// Only a target outside by both readings is out of scope. Resolution failures
-/// other than containment still propagate, so `check` keeps denying on them.
 fn scope_under(root: &Path, candidate: &Path) -> Result<WriteScope> {
     let lexical = contained(root, &normalize_lexically(candidate))?;
     let resolved = contained(root, &resolve_canonicalizing(candidate)?)?;
