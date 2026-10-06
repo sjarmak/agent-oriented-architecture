@@ -104,6 +104,11 @@ const CLASSIFIED: &[Classified] = &[
         ignored: 0,
     },
     Classified {
+        path: "crates/aoa-codeprobe-shim/tests/trace_db.rs",
+        notices: 1,
+        ignored: 0,
+    },
+    Classified {
         path: "crates/aoa-enforce/src/live_log/open.rs",
         notices: 1,
         ignored: 0,

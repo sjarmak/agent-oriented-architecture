@@ -1,7 +1,4 @@
-//! Integration tests for the `trace.db` source: a fixture database built by
-//! each test from the DDL the reader states, read back through the public
-//! surface, and never modified by the read.
-
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use aoa_codeprobe_shim::{
@@ -96,6 +93,37 @@ fn trial(path: PathBuf) -> TraceDbTrial {
         config: CONFIG.to_string(),
         task_id: TASK.to_string(),
     }
+}
+
+fn names_in(dir: &Path) -> Vec<std::ffi::OsString> {
+    let mut names: Vec<_> = std::fs::read_dir(dir)
+        .expect("list directory")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect();
+    names.sort();
+    names
+}
+
+fn set_mode(path: &Path, mode: u32) {
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("chmod");
+}
+
+fn seal_against_writing(dir: &Path) -> bool {
+    set_mode(dir, 0o555);
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(dir.join("probe"))
+        .is_ok();
+    if written {
+        std::fs::remove_file(dir.join("probe")).expect("remove probe");
+        eprintln!(
+            "SKIP (docs/adr/0004-environment-dependent-test-skips.md): this process writes \
+             past a mode that denies it, so it cannot be denied a write"
+        );
+    }
+    !written
 }
 
 fn busy_rows() -> Vec<Row<'static>> {
@@ -266,6 +294,85 @@ fn the_read_leaves_the_database_bytes_untouched() {
     parse_trace_db(&malformed).expect_err("malformed input fails");
 
     assert_eq!(std::fs::read(&trial.path).expect("re-read"), before);
+}
+
+#[test]
+fn the_read_creates_no_sidecar_beside_the_source() {
+    let dir = TempDir::new().expect("tempdir");
+    let trial = fixture(&dir, &busy_rows());
+    assert_eq!(names_in(dir.path()), ["trace.db"]);
+
+    parse_trace_db(&trial).expect("fixture parses");
+
+    assert_eq!(names_in(dir.path()), ["trace.db"]);
+}
+
+#[test]
+fn a_read_only_run_directory_is_read_and_left_as_it_was() {
+    let dir = TempDir::new().expect("tempdir");
+    let trial = fixture(&dir, &busy_rows());
+    let before = std::fs::read(&trial.path).expect("read fixture bytes");
+    set_mode(&trial.path, 0o444);
+    if !seal_against_writing(dir.path()) {
+        set_mode(dir.path(), 0o755);
+        return;
+    }
+
+    let result = parse_trace_db(&trial);
+
+    let names = names_in(dir.path());
+    let after = std::fs::read(&trial.path).expect("re-read");
+    set_mode(dir.path(), 0o755);
+    let result = result.expect("a read-only run directory is read");
+    assert_eq!(result.trace.spans.len(), 5);
+    assert_eq!(names, ["trace.db"]);
+    assert_eq!(after, before);
+}
+
+#[test]
+fn an_events_table_without_the_primary_key_is_refused() {
+    let dir = TempDir::new().expect("tempdir");
+    let (path, conn) = open_fixture(&dir);
+    conn.execute_batch(
+        "DROP TABLE events; CREATE TABLE events (
+            run_id TEXT NOT NULL, config TEXT NOT NULL, task_id TEXT NOT NULL,
+            event_seq INTEGER NOT NULL, ts REAL NOT NULL, event_type TEXT NOT NULL,
+            tool_name TEXT, tool_input TEXT, tool_output TEXT, duration_ms INTEGER,
+            input_tokens INTEGER, output_tokens INTEGER, bytes_written INTEGER NOT NULL);",
+    )
+    .expect("recreate without the key");
+    insert(&conn, &tool_use(0, "Read", r#"{"file_path":"a"}"#));
+    insert(&conn, &tool_use(0, "Read", r#"{"file_path":"a"}"#));
+    drop(conn);
+
+    let err = trace_db_err(parse_trace_db(&trial(path)).unwrap_err());
+
+    assert!(
+        matches!(&err, TraceDbError::Schema { detail, .. } if detail.contains("events")),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_schema_migrations_table_with_other_columns_is_refused() {
+    let dir = TempDir::new().expect("tempdir");
+    let (path, conn) = open_fixture(&dir);
+    conn.execute_batch(
+        "DROP TABLE schema_migrations;
+         CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at REAL NOT NULL, note TEXT);
+         INSERT INTO schema_migrations (version, applied_at) VALUES (1, 0.0);",
+    )
+    .expect("recreate with another column");
+    insert(&conn, &tool_use(0, "Read", r#"{"file_path":"a"}"#));
+    drop(conn);
+
+    let err = trace_db_err(parse_trace_db(&trial(path)).unwrap_err());
+
+    assert!(
+        matches!(&err, TraceDbError::Schema { detail, .. }
+            if detail.contains("schema_migrations") && detail.contains("note")),
+        "{err}"
+    );
 }
 
 #[test]

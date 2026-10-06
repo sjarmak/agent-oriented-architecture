@@ -105,6 +105,14 @@ than an accident:
   directory is on its ext4 root disk. The second expectation is not checked by
   anything in the workspace: a runner whose temporary directory moved to a
   filesystem without user attributes would report `ok` for that one test.
+- `crates/aoa-codeprobe-shim/tests/trace_db.rs` holds one notice of the same
+  root-user shape: `a_read_only_run_directory_is_read_and_left_as_it_was`
+  expects a mode-555 run directory holding a mode-444 `trace.db` to be read
+  through the private copy that
+  [ADR 0012](0012-codeprobe-trace-db-fallback.md) describes, with no sidecar
+  created beside the source. The test probes whether this process can write
+  past the mode and prints the notice when it can, because a root process would
+  pass the assertion for the wrong reason (aoa-m12mo).
 
 The `exposure_scan.rs` test also prints a SKIP notice, which is not a third convention: the notice
 sits *inside* the ignored test and reports an unset `AOA_R0_CAMPAIGN_RUNS` to
