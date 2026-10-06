@@ -209,13 +209,9 @@ fn run_outcome(event: &HookEvent, span_type: SpanType) -> Result<i32> {
     if !HookScope::Mutation.selects(&event.tool_name) {
         return Ok(0);
     }
-    if let Some(raw) = write_target(event) {
+    if let Some(candidate) = write_candidate(event)? {
         let base = resolve_base(event)?;
-        // A write landing outside this repository is not this repository's
-        // history. Recording it would put a foreign path in the live log the
-        // gate reads and the held-out corpus mines, and would show up on the
-        // liveness surface as this plane enforcing something.
-        if matches!(write_scope(&base, raw)?, WriteScope::Outside) {
+        if matches!(scope_under(&base, &candidate)?, WriteScope::Outside) {
             return Ok(0);
         }
         record_write_span(&base, event, span_type)?;
@@ -276,10 +272,8 @@ fn run_check(event: &HookEvent) -> Result<i32> {
         return Ok(0);
     }
 
+    let candidate = write_candidate(event)?;
     let base = resolve_base(event)?;
-    let candidate = write_target(event)
-        .map(|raw| target_candidate(&base, raw))
-        .transpose()?;
     let mut inside_base = false;
     let mut reproduction_root = None;
     let governed = governed_write(&base, candidate.as_deref())?;
@@ -472,8 +466,8 @@ fn block(base: &Path, event: &HookEvent, root: &Path, reason: BlockReason) -> Re
     Ok(BLOCK_EXIT_CODE)
 }
 
-/// The repo-relative path a write event targets, if any (`file_path` for the
-/// edit tools, `notebook_path` for notebooks).
+/// The path a write event targets as the hook spelled it, if any (`file_path`
+/// for the edit tools, `notebook_path` for notebooks).
 fn write_target(event: &HookEvent) -> Option<&str> {
     event
         .tool_input
@@ -496,9 +490,37 @@ enum WriteScope {
     Outside,
 }
 
+fn write_candidate(event: &HookEvent) -> Result<Option<PathBuf>> {
+    write_target(event)
+        .map(|raw| anchor_target(raw, &event.cwd))
+        .transpose()
+}
+
+fn anchor_target(raw: &str, cwd: &str) -> Result<PathBuf> {
+    if raw.is_empty() {
+        return Err(anyhow!("hook write target must not be empty"));
+    }
+    let target = Path::new(raw);
+    if target.is_absolute() {
+        return Ok(target.to_path_buf());
+    }
+    if cwd.is_empty() {
+        return Err(anyhow!(
+            "hook cwd is absent, so relative write target {raw:?} cannot be anchored"
+        ));
+    }
+    let cwd = Path::new(cwd);
+    if !cwd.is_absolute() {
+        return Err(anyhow!(
+            "hook cwd must be absolute to anchor relative write target {raw:?}: {cwd:?}"
+        ));
+    }
+    Ok(cwd.join(target))
+}
+
 /// Classify a hook target against the canonical repository root.
 ///
-/// A target counts as inside when *either* resolution lands under `base`, and
+/// A target counts as inside when *either* resolution lands under `root`, and
 /// the asymmetry is load-bearing in both directions:
 ///
 /// - Resolved-inside catches the `../`-relative and symlinked spellings that
@@ -512,17 +534,6 @@ enum WriteScope {
 ///
 /// Only a target outside by both readings is out of scope. Resolution failures
 /// other than containment still propagate, so `check` keeps denying on them.
-fn write_scope(base: &Path, raw: &str) -> Result<WriteScope> {
-    scope_under(base, &target_candidate(base, raw)?)
-}
-
-fn target_candidate(base: &Path, raw: &str) -> Result<PathBuf> {
-    if raw.is_empty() {
-        return Err(anyhow!("hook write target must not be empty"));
-    }
-    Ok(hook_candidate(base, Path::new(raw)))
-}
-
 fn scope_under(root: &Path, candidate: &Path) -> Result<WriteScope> {
     let lexical = contained(root, &normalize_lexically(candidate))?;
     let resolved = contained(root, &resolve_canonicalizing(candidate)?)?;
@@ -550,16 +561,6 @@ fn contained(base: &Path, path: &Path) -> Result<Option<String>> {
         .to_str()
         .map(|relative| Some(relative.to_owned()))
         .ok_or_else(|| anyhow!("resolved hook write target is not UTF-8: {relative:?}"))
-}
-
-/// Where a hook target points before any resolution: absolute spellings stand
-/// alone, relative ones hang off the repository root.
-fn hook_candidate(base: &Path, raw: &Path) -> PathBuf {
-    if raw.is_absolute() {
-        raw.to_path_buf()
-    } else {
-        base.join(raw)
-    }
 }
 
 fn load_policy(base: &Path) -> Result<Option<Policy>> {
@@ -882,7 +883,8 @@ mod tests {
     }
 
     fn scope(base: &Path, raw: &str) -> WriteScope {
-        write_scope(base, raw).expect("supported hook target")
+        let candidate = anchor_target(raw, base.to_str().unwrap()).expect("anchored hook target");
+        scope_under(base, &candidate).expect("supported hook target")
     }
 
     #[test]
@@ -1008,11 +1010,43 @@ mod tests {
         let repo = tempfile::tempdir().unwrap();
         let base = repo.path().canonicalize().unwrap();
 
-        assert!(write_scope(&base, "").is_err());
-        assert!(write_scope(&base, ".")
+        let cwd = base.to_str().unwrap();
+        assert!(anchor_target("", cwd).is_err());
+        assert!(scope_under(&base, &anchor_target(".", cwd).unwrap())
             .unwrap_err()
             .to_string()
             .contains("repository root"));
+    }
+
+    #[test]
+    fn a_relative_target_is_anchored_at_the_hook_cwd_and_an_absolute_one_stands_alone() {
+        assert_eq!(
+            anchor_target("../src.rs", "/O/sub").unwrap(),
+            PathBuf::from("/O/sub/../src.rs")
+        );
+        assert_eq!(
+            anchor_target("/elsewhere/src.rs", "/O/sub").unwrap(),
+            PathBuf::from("/elsewhere/src.rs")
+        );
+        assert_eq!(
+            anchor_target("/elsewhere/src.rs", "").unwrap(),
+            PathBuf::from("/elsewhere/src.rs")
+        );
+    }
+
+    #[test]
+    fn a_relative_target_without_an_absolute_hook_cwd_is_refused() {
+        let absent = anchor_target("src.rs", "").unwrap_err().to_string();
+        assert!(
+            absent.contains("hook cwd is absent") && absent.contains("src.rs"),
+            "{absent}"
+        );
+
+        let relative = anchor_target("src.rs", "O/sub").unwrap_err().to_string();
+        assert!(
+            relative.contains("must be absolute") && relative.contains("O/sub"),
+            "{relative}"
+        );
     }
 
     /// The adapter's own rule, and the only one it still owns: a payload path

@@ -55,6 +55,8 @@ mod enforce;
 mod enforce_liveness;
 #[path = "cli_sections/enforce_nested_repository.rs"]
 mod enforce_nested_repository;
+#[path = "cli_sections/enforce_relative_target.rs"]
+mod enforce_relative_target;
 #[path = "cli_sections/eval_run.rs"]
 mod eval_run;
 #[path = "cli_sections/eval_run_graph_coverage.rs"]
