@@ -45,3 +45,4 @@ crates/aoa-migrate/assets/eslint/node_modules/
 /.codex/
 /.ruff_cache/
 .DS_Store
+!crates/aoa-codeprobe-shim/tests/fixtures/codeprobe/trace.db

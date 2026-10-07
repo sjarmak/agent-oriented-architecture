@@ -2,8 +2,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use aoa_codeprobe_shim::{
-    parse_trace_db, parse_trial, parse_trial_locating, LocatedTrial, ShimError, TraceDbError,
-    TraceDbReader, TraceDbTrial, TraceSource, MAX_TOOL_INPUT_BYTES, TRACE_DB_SCHEMA,
+    parse_trace_db, parse_transcript_file, parse_trial, parse_trial_locating, LocatedTrial,
+    ShimError, TraceDbError, TraceDbReader, TraceDbTrial, TraceSource, MAX_TOOL_INPUT_BYTES,
+    TRACE_DB_SCHEMA,
 };
 use aoa_trace::{validate_trace_value, SpanSource, SpanType};
 use rusqlite::{params, Connection};
@@ -1214,4 +1215,51 @@ fn a_tool_input_over_the_field_cap_is_refused_naming_the_event() {
         ),
         "{err}"
     );
+}
+
+fn checked_in_fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join(name)
+}
+
+fn target_key(span_type: SpanType) -> &'static str {
+    match span_type {
+        SpanType::RetrievalSearch => "query",
+        SpanType::GatewayInvoke => "tool",
+        SpanType::TestRun => "command",
+        _ => "path",
+    }
+}
+
+#[test]
+fn a_database_codeprobe_wrote_reads_as_the_transcript_it_ingested() {
+    let from_db =
+        parse_trace_db(&trial(checked_in_fixture("codeprobe/trace.db"))).expect("codeprobe db");
+    validate_trace_value(&from_db.trace).expect("trace validates");
+    let from_transcript =
+        parse_transcript_file(&checked_in_fixture("agent_output.txt")).expect("transcript");
+
+    let types: Vec<SpanType> = from_db.trace.spans.iter().map(|s| s.span_type).collect();
+    assert_eq!(
+        types,
+        vec![
+            SpanType::RetrievalSearch,
+            SpanType::FileRead,
+            SpanType::GatewayInvoke,
+            SpanType::WriteAttempt,
+            SpanType::WriteAttempt,
+            SpanType::TestRun,
+        ]
+    );
+    assert_eq!(from_db.trace.spans.len(), from_transcript.trace.spans.len());
+    for (db_span, transcript_span) in from_db.trace.spans.iter().zip(&from_transcript.trace.spans) {
+        let key = target_key(transcript_span.span_type);
+        assert_eq!(target(db_span, key), target(transcript_span, key));
+        assert_eq!(db_span.seq, transcript_span.seq);
+        assert_eq!(db_span.source, SpanSource::Native);
+    }
+    assert_eq!(from_db.warnings.len(), 1, "{:?}", from_db.warnings);
+    assert!(from_db.warnings[0].contains("unmapped tool 'WeirdCustomTool'"));
 }
