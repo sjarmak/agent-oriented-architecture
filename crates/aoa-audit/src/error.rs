@@ -33,6 +33,17 @@ pub enum AuditError {
     #[error("trace file already exists at {path}: refusing to overwrite a landed trace")]
     TraceExists { path: PathBuf },
 
+    #[error(
+        "writing the trace at {path} failed ({write}) and the truncated file could not be \
+         removed ({unlink}); a partial trace is left behind"
+    )]
+    PartialTraceLeft {
+        path: PathBuf,
+        #[source]
+        write: std::io::Error,
+        unlink: std::io::Error,
+    },
+
     /// A node of the installed `.aoa/traces` path already exists as a symlink.
     /// The install-path analogue of [`AuditError::UnsafeTraceName`]: that one
     /// guards the caller-supplied *name*, this one guards the *directories* the

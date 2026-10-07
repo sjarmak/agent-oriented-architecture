@@ -138,7 +138,7 @@ mod unix {
         is_symlink_at, map_nofollow_error, open_dir_at, open_or_create_dir_at, open_trust_root,
     };
     use aoa_trace::{validate_trace_value, TraceError};
-    use rustix::fs::{self, FileType, Mode, OFlags};
+    use rustix::fs::{self, AtFlags, FileType, Mode, OFlags};
     use rustix::io::Errno;
     use std::fs::File;
     use std::os::fd::{AsFd, OwnedFd};
@@ -285,6 +285,29 @@ mod unix {
         })
     }
 
+    pub(super) fn write_whole_or_discard(
+        traces_fd: &OwnedFd,
+        name: &str,
+        path: &Path,
+        mut sink: impl Write,
+        json: &[u8],
+    ) -> Result<(), AuditError> {
+        let Err(write) = sink.write_all(json) else {
+            return Ok(());
+        };
+        match fs::unlinkat(traces_fd, name, AtFlags::empty()) {
+            Ok(()) => Err(AuditError::Io {
+                path: path.to_path_buf(),
+                source: write,
+            }),
+            Err(unlink) => Err(AuditError::PartialTraceLeft {
+                path: path.to_path_buf(),
+                write,
+                unlink: unlink.into(),
+            }),
+        }
+    }
+
     pub(super) fn write_trace(
         outcome: &ObserveOutcome,
         name: &str,
@@ -320,12 +343,8 @@ mod unix {
                     io(&path, source)
                 }
             })?;
-        let mut file = File::from(trace_fd);
-        file.write_all(json.as_bytes())
-            .map_err(|source| AuditError::Io {
-                path: path.clone(),
-                source,
-            })?;
+        let file = File::from(trace_fd);
+        write_whole_or_discard(&traces_fd, name, &path, &file, json.as_bytes())?;
 
         // Serialization is deterministic and cannot alter the in-memory trace.
         // Validate that same value without reopening the attacker-controlled
@@ -591,6 +610,89 @@ mod tests {
                 "*\n"
             );
             assert!(displaced.join("traces").is_dir());
+        }
+
+        struct FullDisk;
+
+        impl Write for FullDisk {
+            fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from(std::io::ErrorKind::StorageFull))
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        fn created_in(dir: &Path, name: &str) -> rustix::fd::OwnedFd {
+            let dir_fd = rustix::fs::open(
+                dir,
+                rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .expect("open traces dir");
+            rustix::fs::openat(
+                &dir_fd,
+                name,
+                unix::CREATE_EXCLUSIVELY,
+                rustix::fs::Mode::from_raw_mode(0o600),
+            )
+            .expect("create trace");
+            dir_fd
+        }
+
+        #[test]
+        fn failed_whole_trace_write_removes_the_truncated_file_and_reports_the_write() {
+            let dir = tempfile::tempdir().expect("create dir");
+            let path = dir.path().join("partial.json");
+            let dir_fd = created_in(dir.path(), "partial.json");
+
+            let err = unix::write_whole_or_discard(&dir_fd, "partial.json", &path, FullDisk, b"{}")
+                .expect_err("a failed write is reported");
+
+            assert!(
+                matches!(&err, AuditError::Io { path: p, source }
+                    if p == &path && source.kind() == std::io::ErrorKind::StorageFull),
+                "{err:?}"
+            );
+            assert!(!path.exists(), "truncated trace left behind");
+        }
+
+        #[test]
+        fn failed_whole_trace_write_names_a_partial_file_it_could_not_remove() {
+            let dir = tempfile::tempdir().expect("create dir");
+            let path = dir.path().join("partial.json");
+            let dir_fd = created_in(dir.path(), "partial.json");
+            std::fs::remove_file(&path).expect("take the entry away first");
+
+            let err = unix::write_whole_or_discard(&dir_fd, "partial.json", &path, FullDisk, b"{}")
+                .expect_err("a failed write is reported");
+
+            assert!(
+                matches!(&err, AuditError::PartialTraceLeft { path: p, write, unlink }
+                    if p == &path
+                        && write.kind() == std::io::ErrorKind::StorageFull
+                        && unlink.kind() == std::io::ErrorKind::NotFound),
+                "{err:?}"
+            );
+        }
+
+        #[test]
+        fn successful_whole_trace_write_keeps_the_file() {
+            let dir = tempfile::tempdir().expect("create dir");
+            let path = dir.path().join("whole.json");
+            let dir_fd = created_in(dir.path(), "whole.json");
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .expect("reopen for writing");
+
+            unix::write_whole_or_discard(&dir_fd, "whole.json", &path, &file, b"{}")
+                .expect("write succeeds");
+
+            assert_eq!(std::fs::read_to_string(&path).expect("read"), "{}");
         }
 
         #[test]
