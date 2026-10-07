@@ -173,12 +173,49 @@ Repository-local config (`.git/config`) stays in force everywhere. It belongs
 to the repository being measured, travels with it, and is the same for every
 operator who measures that checkout.
 
+### Which builder a new call takes
+
+The four places above are one strip and three registers, and nothing in the
+code chose between the registers for a caller: each was placed by the commit
+that needed it (aoa-1e1np). The chooser is what the caller does with git's
+answer, because that is what decides whether configuration can change the
+answer and whether a refusal can be mistaken for a finding.
+
+| What the caller does with git's answer | Builder | Register |
+| --- | --- | --- |
+| Locates a repository: where its top level or git directory is, what a path git states resolves to. No configuration changes the answer; configuration can only make git refuse, and the refusal is reported with git's own message. | `git_free_of_inherited_state()` as it comes | the resolver (`aoa-path-trust`: `root.rs`, `submodule.rs`) |
+| Reads a refusal as a fact about the repository: a command that fails means something is absent, so an inherited setting that makes git refuse would be reported as a finding. | `planes::git` | the audit (`aoa-audit`) |
+| Parses output that configuration can reshape or break: blame, log, tree listings, anything with a format or a filter. | `commands::git::reading_repository_data` | the data readers (`aoa` CLI) |
+
+A caller that fits none of the rows is a fourth register this record does not
+have, and the author adds its row here first. The registers are kept apart
+rather than folded because folding changes the audit's findings: handing the
+audit the data readers' builder would make it honour the operator's
+`safe.directory`, refuse on a replaceable temporary directory, and run the
+trust read, so a repository the audit reports on today would be reported
+differently; handing it the resolver's environment would bring back the
+wrong finding commit 88357cf removed. The resolver cannot take either of the
+others for the reason given under place 2. A test-only call under
+`#[cfg(test)]` is in no register: it builds a fixture rather than answering
+an operator.
+
+`crates/aoa/tests/git_spawn_registers.rs` holds this table to the code. It
+counts every `git_free_of_inherited_state()` call in the production part of
+each source under `crates/*/src`, requires each count to be classified into
+one of the three registers or as test-only, and fails on a `Command::new("git")`
+anywhere but the shared strip. A new git call therefore cannot land without
+naming its register, and a register row cannot be added without the table
+above saying what it is for. The production part is what precedes a file's
+`#[cfg(test)] mod tests`; the scan is textual and reaches those two spellings
+only, so a call spelled another way, or placed after the test module, is a
+defect in that source rather than a gap this record closes by guessing.
+
 ## Consequences
 
-- A new git call in the CLI that parses output uses
-  `reading_repository_data`. A new call that only locates a repository may use
-  the shared strip directly, and has to be able to say why config cannot change
-  its answer.
+- A new git call takes the builder the chooser table above gives it, and
+  `git_spawn_registers.rs` fails the workspace tests until the call is
+  classified. A call that only locates a repository may use the shared strip
+  directly, and has to be able to say why config cannot change its answer.
 - A new environment variable or setting is placed by the rule, not by analogy:
   if it can only cause a loud refusal it may be inherited, otherwise it is
   stripped at the narrowest builder that needs it.
@@ -278,6 +315,8 @@ operator who measures that checkout.
 - `crates/aoa-path-trust/tests/git_environment_repository_variables.rs` and
   `git_environment_inherited_redirects.rs`: every stripped name pinned on the
   built command.
+- `crates/aoa/tests/git_spawn_registers.rs`: every production git call is
+  classified into a register, and the shared strip is the only constructor.
 - `crates/aoa/tests/cli_sections/audit_git_environment.rs` and
   `cli_git_environment.rs`: the audit and the data readers answer the same
   under each inherited variable.
