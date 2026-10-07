@@ -39,7 +39,7 @@ A write is checked against the policy of every governed repository that
 encloses the target, from the innermost outward, and it is refused if any of
 them refuses.
 
-- The walk is `governed_write` in `crates/aoa/src/commands/enforce.rs`, and
+- The walk is `governed_write` in `crates/aoa/src/commands/enforce/scope.rs`, and
   it starts from the written path, not from the session. The path is walked
   component by component, each inspected without following links
   (`resolve_written_path` in `aoa-path-trust`): a component that is a link is

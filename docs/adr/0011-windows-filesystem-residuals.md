@@ -147,7 +147,7 @@ does not:
 ### Case-folding volumes
 
 The write gate compares path spellings, not files. `scope_under` in
-`crates/aoa/src/commands/enforce.rs` resolves a hook's write target twice,
+`crates/aoa/src/commands/enforce/scope.rs` resolves a hook's write target twice,
 lexically through `resolve_written_path` in
 `crates/aoa-path-trust/src/resolve.rs` and through `resolve_canonicalizing`,
 and `contained` strips the repository root from each to get the
@@ -191,6 +191,6 @@ test can prove either behaviour, and a check that is never run proves nothing
 - `crates/aoa-path-trust/src/nofollow.rs` holds both arms of the trust-file
   open.
 - `crates/aoa-audit/src/answer.rs` holds both arms of the deadline reader.
-- `crates/aoa/src/commands/enforce.rs` (`scope_under`, `contained`) and
+- `crates/aoa/src/commands/enforce/scope.rs` (`scope_under`, `contained`) and
   `crates/aoa-path-trust/src/resolve.rs` (`resolve_written_path`) hold the
   spelling comparison the case-folding residual is about.
