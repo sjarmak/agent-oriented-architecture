@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -31,12 +32,14 @@ fn make_fifo(path: &Path) {
     .expect("make a fifo");
 }
 
+#[cfg(unix)]
 const FIXTURE_ROOT_MODE: u32 = 0o700;
 
 fn fixture_root() -> &'static Path {
     static ROOT: OnceLock<PathBuf> = OnceLock::new();
     ROOT.get_or_init(|| {
-        let root = std::env::temp_dir().join(format!("aoa-cli-fixtures-{}", owner_id()));
+        let parent = fixture_parent(std::env::var_os("XDG_RUNTIME_DIR"), std::env::temp_dir());
+        let root = parent.join(format!("aoa-cli-fixtures-{}", owner_id()));
         match create_private_dir(&root) {
             Ok(()) => {}
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -49,6 +52,13 @@ fn fixture_root() -> &'static Path {
         }
         root
     })
+}
+
+fn fixture_parent(runtime_dir: Option<OsString>, shared_temp: PathBuf) -> PathBuf {
+    runtime_dir
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or(shared_temp)
 }
 
 #[cfg(unix)]
@@ -122,6 +132,17 @@ fn the_fixture_root_sits_under_no_git_marker() {
          checkout; point TMPDIR at a directory with no .git above it",
         root.display()
     );
+}
+
+#[test]
+fn the_fixture_root_prefers_the_user_runtime_directory_to_the_shared_temporary_directory() {
+    let shared = PathBuf::from("/shared/tmp");
+    assert_eq!(
+        fixture_parent(Some("/run/user/1000".into()), shared.clone()),
+        PathBuf::from("/run/user/1000")
+    );
+    assert_eq!(fixture_parent(Some("".into()), shared.clone()), shared);
+    assert_eq!(fixture_parent(None, shared.clone()), shared);
 }
 
 #[cfg(unix)]

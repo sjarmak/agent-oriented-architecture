@@ -175,7 +175,11 @@ aoa-ntcxp). What a fix needs, and why neither form is written:
 - A lookup of the stored spelling: walk the written path's components under
   the root, reading each directory to find the entry the volume holds for
   that name, and match the rule against the spelling found. This covers every
-  rule at the cost of one directory read per component on every write.
+  rule for the components that already exist, at the cost of one directory
+  read per component on every write. A component the write would create has
+  no stored spelling to find, so a pattern rule such as `*.key` still meets
+  the payload's spelling of a new leaf, and the fix has to say whether that
+  leaf is matched folded or as written.
 
 Either form is Linux-reachable code, and a casefold ext4 directory is the
 volume to prove it on: the kernel this was probed on (7.0.0, 2026-10-07)
