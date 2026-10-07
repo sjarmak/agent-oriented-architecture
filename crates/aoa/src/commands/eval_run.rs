@@ -308,7 +308,7 @@ fn detect_partition(args: &EvalRunArgs) -> Option<SubtreePartition> {
 
 struct TraceDbLookup<'a> {
     run_dir: &'a Path,
-    located: Option<Option<LocatedTraceDb>>,
+    located: Option<Result<Option<LocatedTraceDb>, String>>,
 }
 
 struct LocatedTraceDb {
@@ -325,10 +325,12 @@ impl<'a> TraceDbLookup<'a> {
     }
 
     fn trial_for(&mut self, task_id: &str) -> Result<Option<LocatedTrial<'_>>> {
-        let located = match &mut self.located {
-            Some(located) => located,
-            slot @ None => slot.insert(Self::locate(self.run_dir)?),
-        };
+        let run_dir = self.run_dir;
+        let located = self
+            .located
+            .get_or_insert_with(|| Self::locate(run_dir).map_err(|e| format!("{e:#}")))
+            .as_ref()
+            .map_err(|reason| anyhow::anyhow!("{reason}"))?;
         Ok(located.as_ref().map(|db| LocatedTrial {
             reader: &db.reader,
             trial: TraceDbTrial {
@@ -642,6 +644,29 @@ mod tests {
     use super::*;
     use aoa_trace::{Span, SpanSource, SpanType};
     use serde_json::Value;
+
+    #[test]
+    fn a_trace_db_that_fails_to_open_is_tried_once_per_run_and_the_failure_is_kept() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let run = dir.path().join("run-a");
+        std::fs::create_dir(&run).expect("run dir");
+        let trace_db = dir.path().join("trace.db");
+        std::fs::write(&trace_db, b"this is not a database").expect("broken db");
+        let mut lookup = TraceDbLookup::new(&run);
+
+        let first = lookup.trial_for("task-1").err().expect("a broken db fails");
+        std::fs::remove_file(&trace_db).expect("take the broken db away");
+        let second = lookup
+            .trial_for("task-2")
+            .err()
+            .expect("the failure is kept");
+
+        assert_eq!(format!("{first:#}"), format!("{second:#}"));
+        assert!(
+            format!("{second:#}").contains("trace.db"),
+            "the kept failure names the database: {second:#}"
+        );
+    }
 
     /// `F_edit` must stay non-empty for a transcript whose write succeeded.
     ///
