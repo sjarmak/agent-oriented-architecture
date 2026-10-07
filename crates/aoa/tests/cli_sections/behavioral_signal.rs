@@ -45,7 +45,7 @@ pub(super) fn seed_live_sessions_with_spans(repo: &Path, n: usize, spans: &str) 
 // `.claude/settings.json` still only registers the old ones sees exactly this.
 #[test]
 fn attempt_only_sessions_are_not_counted_as_landed_edits() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     seed_live_sessions_with_spans(
         repo.path(),
         10,
@@ -87,7 +87,7 @@ fn attempt_only_sessions_are_not_counted_as_landed_edits() {
 // in both registers.
 #[test]
 fn audit_reports_insufficient_data_without_observe_captured_signal() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     aoa()
         .args(["audit", "--repo"])
         .arg(repo.path())
@@ -147,7 +147,7 @@ fn crafted_trace_files_cannot_forge_sufficient_behavioral_signal() {
 // reachable' score — no graph means no measurement, so no item.
 #[test]
 fn audit_withholds_the_surface_score_when_nothing_indexes() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     seed_live_sessions(repo.path(), MIN_HELD_OUT_OBSERVATIONS);
 
     let output = aoa()
@@ -169,7 +169,7 @@ fn audit_withholds_the_surface_score_when_nothing_indexes() {
 // measures held-out signal, not session-file count.
 #[test]
 fn audit_ignores_contentless_sessions_when_counting_observations() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     let traces = repo.path().join(".aoa").join("traces");
     std::fs::create_dir_all(&traces).expect("create traces dir");
     for i in 0..MIN_HELD_OUT_OBSERVATIONS {
@@ -196,7 +196,7 @@ fn audit_ignores_contentless_sessions_when_counting_observations() {
 // the reason.
 #[test]
 fn recommend_reports_insufficient_data_without_observe_captured_signal() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     aoa()
         .args(["recommend", "--repo"])
         .arg(repo.path())
@@ -221,7 +221,7 @@ fn recommend_reports_insufficient_data_without_observe_captured_signal() {
 // Recommend cannot promote raw edit logs that lack complete task context.
 #[test]
 fn recommend_keeps_uncontextualized_live_edits_insufficient() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     seed_live_sessions(repo.path(), MIN_HELD_OUT_OBSERVATIONS);
     let output = aoa()
         .args(["recommend", "--json", "--repo"])

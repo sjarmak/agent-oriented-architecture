@@ -75,7 +75,7 @@ pub(super) fn inferred_owners(repo: &Path, inherited: Inherited<'_>) -> Option<V
 
 #[test]
 fn infer_owners_lists_the_named_repository_under_every_inherited_repository_variable() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let repo = dir.path().join("repo");
     let ambient = dir.path().join("ambient");
     repository_owned_by(ALICE, &repo);
@@ -100,7 +100,7 @@ fn infer_owners_lists_the_named_repository_under_every_inherited_repository_vari
 
 #[test]
 fn infer_owners_blames_the_named_repository_under_every_inherited_repository_variable() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let repo = dir.path().join("repo");
     let ambient = dir.path().join("ambient");
     repository_owned_by(ALICE, &repo);
@@ -121,7 +121,7 @@ fn infer_owners_blames_the_named_repository_under_every_inherited_repository_var
 
 #[test]
 fn infer_owners_answers_the_same_when_the_caller_traces_git_to_standard_output() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     repository_owned_by(ALICE, dir.path());
 
     let changed_the_answer = variables_that_change_the_answer(
@@ -163,7 +163,7 @@ pub(super) fn mined_clones(
     revert_the_unlocked: bool,
     ambient_holds_the_mined_commits: bool,
 ) -> MinedClones {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let ambient = dir.path().join("ambient");
     std::fs::create_dir_all(&ambient).unwrap();
     init_git_repo(&ambient);

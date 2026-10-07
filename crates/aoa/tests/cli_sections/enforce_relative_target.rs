@@ -41,7 +41,7 @@ fn write_to(target: &str, cwd: Option<&str>) -> String {
 }
 
 fn protected_repository_with_a_subdirectory() -> (TempDir, PathBuf, PathBuf, PathBuf) {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let repo = fixture.path().canonicalize().unwrap().join("O");
     init_git_repo(&repo);
     std::fs::write(repo.join("aoa-policy.yaml"), PROTECTIVE_POLICY).unwrap();
@@ -99,7 +99,7 @@ fn enforce_check_anchors_a_relative_target_from_the_repository_root_as_before() 
 #[test]
 fn enforce_check_refuses_a_relative_target_when_the_hook_has_no_usable_cwd() {
     let (_fixture, repo, _sub, target) = protected_repository_with_a_subdirectory();
-    let elsewhere = TempDir::new().unwrap();
+    let elsewhere = TempDir::new_in(fixture_root()).unwrap();
 
     for cwd in [None, Some(""), Some("O/sub")] {
         aoa_stdin()

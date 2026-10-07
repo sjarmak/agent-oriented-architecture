@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 use aoa_construct::MIN_HELD_OUT_OBSERVATIONS;
 use assert_cmd::prelude::*;
@@ -30,13 +31,86 @@ fn make_fifo(path: &Path) {
     .expect("make a fifo");
 }
 
+const FIXTURE_ROOT_MODE: u32 = 0o700;
+
+fn fixture_root() -> &'static Path {
+    static ROOT: OnceLock<PathBuf> = OnceLock::new();
+    ROOT.get_or_init(|| {
+        let root = std::env::temp_dir().join(format!("aoa-cli-fixtures-{}", owner_id()));
+        match create_private_dir(&root) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                require_private_dir(&root)
+            }
+            Err(err) => panic!(
+                "failed to create the fixture root {}: {err}",
+                root.display()
+            ),
+        }
+        root
+    })
+}
+
+#[cfg(unix)]
+fn owner_id() -> String {
+    rustix::process::getuid().as_raw().to_string()
+}
+
+#[cfg(not(unix))]
+fn owner_id() -> String {
+    std::env::var("USERNAME").unwrap_or_else(|_| "user".to_string())
+}
+
+#[cfg(unix)]
+fn create_private_dir(root: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .mode(FIXTURE_ROOT_MODE)
+        .create(root)
+}
+
+#[cfg(not(unix))]
+fn create_private_dir(root: &Path) -> std::io::Result<()> {
+    std::fs::DirBuilder::new().create(root)
+}
+
+#[cfg(unix)]
+fn require_private_dir(root: &Path) {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = root.symlink_metadata().unwrap_or_else(|err| {
+        panic!(
+            "failed to inspect the fixture root {}: {err}",
+            root.display()
+        )
+    });
+    let mode = metadata.mode() & 0o7777;
+    assert!(
+        metadata.is_dir()
+            && mode == FIXTURE_ROOT_MODE
+            && metadata.uid() == rustix::process::getuid().as_raw(),
+        "the fixture root {} exists but is not a directory of mode {FIXTURE_ROOT_MODE:o} owned by \
+         this user (found mode {mode:o}, uid {}); remove it or point TMPDIR elsewhere",
+        root.display(),
+        metadata.uid()
+    );
+}
+
+#[cfg(not(unix))]
+fn require_private_dir(root: &Path) {
+    assert!(
+        root.symlink_metadata().map(|m| m.is_dir()).unwrap_or(false),
+        "the fixture root {} exists but is not a directory; remove it or point TMPDIR elsewhere",
+        root.display()
+    );
+}
+
 #[test]
-fn the_temporary_directory_sits_under_no_git_marker() {
-    let temp = std::env::temp_dir();
-    let temp = temp
+fn the_fixture_root_sits_under_no_git_marker() {
+    let root = fixture_root();
+    let root = root
         .canonicalize()
-        .unwrap_or_else(|err| panic!("temporary directory {}: {err}", temp.display()));
-    let markers: Vec<PathBuf> = temp
+        .unwrap_or_else(|err| panic!("fixture root {}: {err}", root.display()));
+    let markers: Vec<PathBuf> = root
         .ancestors()
         .map(|dir| dir.join(".git"))
         .filter(|marker| marker.symlink_metadata().is_ok())
@@ -46,8 +120,19 @@ fn the_temporary_directory_sits_under_no_git_marker() {
         "the CLI fixtures are created under {} and the repository-root resolver treats every \
          ancestor .git marker as a repository, so {markers:?} would make every fixture a nested \
          checkout; point TMPDIR at a directory with no .git above it",
-        temp.display()
+        root.display()
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_fixture_root_is_readable_by_its_owner_only() {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = fixture_root()
+        .symlink_metadata()
+        .expect("fixture root exists");
+    assert!(metadata.is_dir());
+    assert_eq!(metadata.mode() & 0o7777, FIXTURE_ROOT_MODE);
 }
 
 #[cfg(unix)]

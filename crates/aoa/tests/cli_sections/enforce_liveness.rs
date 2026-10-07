@@ -43,7 +43,7 @@ fn liveness_state(report: &Value) -> String {
 /// than a transcribed settings.json for the reason `planes.rs` records: a
 /// hand-spelled hook fixture drifted from `hook_command` and kept passing.
 fn registered_checkout() -> TempDir {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     observe_enforce(repo.path());
     std::fs::remove_dir_all(repo.path().join(".aoa")).unwrap();
     repo
@@ -64,7 +64,7 @@ fn present_ci_plane(repo: &Path) {
 /// that used to be indistinguishable from a healthy repo between sessions.
 #[test]
 fn installed_hooks_that_never_ran_report_silent_and_never_enforcing() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     observe_enforce(repo.path());
 
     let report = audit_json(repo.path());
@@ -103,7 +103,7 @@ fn installed_hooks_that_never_ran_report_silent_and_never_enforcing() {
 /// hooks actually write.
 #[test]
 fn a_repo_emitting_spans_through_the_hook_path_reports_enforcing() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     observe_enforce(repo.path());
 
     aoa_stdin()
@@ -134,7 +134,7 @@ fn a_repo_emitting_spans_through_the_hook_path_reports_enforcing() {
 /// a whole night of sessions.
 #[test]
 fn the_silent_state_is_loud_in_the_human_register() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     observe_enforce(repo.path());
 
     aoa_stdin()
@@ -152,7 +152,7 @@ fn the_silent_state_is_loud_in_the_human_register() {
 /// operator to debug an install that was never done.
 #[test]
 fn a_repo_with_no_hook_set_reports_not_installed() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
 
     let report = audit_json(repo.path());
     assert_eq!(liveness_state(&report), "not-installed");
@@ -254,7 +254,7 @@ fn an_unobserved_plane_is_still_a_finding_in_both_registers() {
 /// absence of a measurement".
 #[test]
 fn an_installed_plane_that_emitted_nothing_still_fails_the_tier1_gate() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     observe_enforce(repo.path());
     present_ci_plane(repo.path());
 
@@ -287,7 +287,7 @@ fn an_installed_plane_that_emitted_nothing_still_fails_the_tier1_gate() {
 /// so a reader is still told. Only the exit code moves.
 #[test]
 fn deleting_the_telemetry_directory_downgrades_a_measured_silence() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     observe_enforce(repo.path());
     present_ci_plane(repo.path());
 
@@ -349,9 +349,9 @@ fn runtime_plane_items(report: &Value) -> Vec<&Value> {
 
 #[test]
 fn a_foreign_hook_set_is_reported_apart_from_a_repo_with_no_hooks() {
-    let foreign = TempDir::new().unwrap();
+    let foreign = TempDir::new_in(fixture_root()).unwrap();
     foreign_hook_set(foreign.path());
-    let bare = TempDir::new().unwrap();
+    let bare = TempDir::new_in(fixture_root()).unwrap();
 
     let foreign_report = audit_json(foreign.path());
     let bare_report = audit_json(bare.path());
@@ -380,7 +380,7 @@ fn a_foreign_hook_set_is_reported_apart_from_a_repo_with_no_hooks() {
 
 #[test]
 fn a_decoy_command_naming_the_wrapper_reports_the_runtime_plane_absent() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     observe_enforce(repo.path());
     present_ci_plane(repo.path());
     let settings_path = repo.path().join(".claude/settings.json");
@@ -435,7 +435,7 @@ fn a_decoy_command_naming_the_wrapper_reports_the_runtime_plane_absent() {
 
 #[test]
 fn an_installer_command_under_the_wrong_matcher_is_absent_and_named_in_both_registers() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     observe_enforce(repo.path());
     present_ci_plane(repo.path());
     let settings_path = repo.path().join(".claude/settings.json");
@@ -484,7 +484,7 @@ fn an_installer_command_under_the_wrong_matcher_is_absent_and_named_in_both_regi
 
 #[test]
 fn a_foreign_hook_set_draws_no_stamp_warning_and_still_fails_the_tier1_gate() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     foreign_hook_set(repo.path());
     present_ci_plane(repo.path());
 
@@ -511,7 +511,7 @@ fn a_foreign_hook_set_draws_no_stamp_warning_and_still_fails_the_tier1_gate() {
 
 #[test]
 fn a_codeowners_only_repo_is_told_which_write_boundary_surface_is_absent() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     std::fs::create_dir_all(repo.path().join(".github")).unwrap();
     std::fs::write(repo.path().join(".github/CODEOWNERS"), "* @owner\n").unwrap();
 

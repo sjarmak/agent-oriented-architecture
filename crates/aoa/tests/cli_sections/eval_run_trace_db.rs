@@ -37,7 +37,7 @@ fn answer_only_run(dir: &TempDir) -> PathBuf {
 
 #[test]
 fn eval_run_reads_an_answer_only_trial_from_the_run_trace_db() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = answer_only_run(&dir);
     trace_db(
         dir.path().join("runs").as_path(),
@@ -96,7 +96,7 @@ fn eval_run_reads_an_answer_only_trial_from_the_run_trace_db() {
 
 #[test]
 fn eval_run_scores_every_answer_only_trial_of_a_run_from_one_trace_db() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = answer_only_run(&dir);
     write_trial(&run, "third-task", ANSWER_ONLY);
     let mut rows = Vec::new();
@@ -132,7 +132,7 @@ fn eval_run_scores_every_answer_only_trial_of_a_run_from_one_trace_db() {
 
 #[test]
 fn eval_run_human_names_the_trace_source() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = answer_only_run(&dir);
     trace_db(
         dir.path().join("runs").as_path(),
@@ -201,7 +201,7 @@ fn eval_run_json_from(cwd: &Path, run_dir: &str) -> Value {
 
 #[test]
 fn eval_run_finds_the_trace_db_when_the_run_dir_is_spelled_dot() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = answer_only_run(&dir);
     busy_task_db(&dir);
 
@@ -215,7 +215,7 @@ fn eval_run_finds_the_trace_db_when_the_run_dir_is_spelled_dot() {
 
 #[test]
 fn eval_run_finds_the_trace_db_when_the_run_dir_is_spelled_dot_dot() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = answer_only_run(&dir);
     busy_task_db(&dir);
 
@@ -229,7 +229,7 @@ fn eval_run_finds_the_trace_db_when_the_run_dir_is_spelled_dot_dot() {
 
 #[test]
 fn eval_run_keeps_the_transcript_as_source_when_it_carries_events() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = dir.path().join("runs").join(CONFIG);
     write_trial(&run, "busy-task", eval_run_traces::READ_AND_EDIT_TRANSCRIPT);
     trace_db(
@@ -256,7 +256,7 @@ fn eval_run_keeps_the_transcript_as_source_when_it_carries_events() {
 
 #[test]
 fn eval_run_fails_loud_per_trial_on_a_trace_db_it_cannot_attribute() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = answer_only_run(&dir);
     trace_db(
         dir.path().join("runs").as_path(),
@@ -307,7 +307,7 @@ fn eval_run_fails_loud_per_trial_on_a_trace_db_it_cannot_attribute() {
 
 #[test]
 fn eval_run_fails_loud_on_a_trace_db_of_another_schema() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = answer_only_run(&dir);
     let conn = Connection::open(dir.path().join("runs").join("trace.db")).expect("create");
     conn.execute_batch(
@@ -338,7 +338,7 @@ fn eval_run_fails_loud_on_a_trace_db_of_another_schema() {
 
 #[test]
 fn eval_run_still_rejects_an_answer_only_trial_when_the_trace_db_holds_nothing_for_it() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = answer_only_run(&dir);
     trace_db(
         dir.path().join("runs").as_path(),

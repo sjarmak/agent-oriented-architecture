@@ -4,7 +4,7 @@ use super::*;
 // Criterion 4: observe makes no tracked-file changes.
 #[test]
 fn observe_makes_no_tracked_changes() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     init_git_repo(repo.path());
 
     aoa()
@@ -31,7 +31,7 @@ fn observe_makes_no_tracked_changes() {
 // Criterion 5 + 9 (audit half): tiered punch-list, --json structured, --fail-on tier1.
 #[test]
 fn audit_human_prints_punch_list() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     aoa()
         .args(["audit", "--repo"])
         .arg(repo.path())
@@ -43,7 +43,7 @@ fn audit_human_prints_punch_list() {
 
 #[test]
 fn audit_json_is_parseable() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     let output = aoa()
         .args(["audit", "--json", "--repo"])
         .arg(repo.path())
@@ -86,9 +86,9 @@ fn path_led_by_a_git_whose_descendant_holds_stdout(stand_in_dir: &Path, seconds:
 fn audit_fails_within_the_git_deadline_when_a_git_descendant_holds_stdout_open() {
     const DESCENDANT_HOLDS_STDOUT_SECONDS: u64 = 25;
     const LONGEST_ACCEPTED_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     init_git_repo(repo.path());
-    let stand_in_dir = TempDir::new().expect("stand-in dir");
+    let stand_in_dir = TempDir::new_in(fixture_root()).expect("stand-in dir");
     let path = path_led_by_a_git_whose_descendant_holds_stdout(
         stand_in_dir.path(),
         DESCENDANT_HOLDS_STDOUT_SECONDS,
@@ -112,9 +112,9 @@ fn audit_fails_within_the_git_deadline_when_a_git_descendant_holds_stdout_open()
 #[cfg(unix)]
 #[test]
 fn audit_says_why_git_could_not_be_asked_about_the_pre_commit_plane() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     init_git_repo(repo.path());
-    let no_git_here = TempDir::new().expect("empty PATH directory");
+    let no_git_here = TempDir::new_in(fixture_root()).expect("empty PATH directory");
 
     let output = aoa()
         .args(["audit", "--json", "--repo"])
@@ -145,7 +145,7 @@ fn audit_says_why_git_could_not_be_asked_about_the_pre_commit_plane() {
 // with the discovery failure surfaced, never an abort with no report.
 #[test]
 fn audit_degrades_on_malformed_workspace_manifest() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     std::fs::write(repo.path().join("package.json"), "{ \"name\": \"x\", }").unwrap();
     std::fs::write(repo.path().join("main.rs"), "fn main() {}\n").unwrap();
 
@@ -165,7 +165,7 @@ fn audit_degrades_on_malformed_workspace_manifest() {
 
 #[test]
 fn recommend_degrades_on_malformed_workspace_manifest() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     std::fs::write(repo.path().join("package.json"), "{ \"name\": \"x\", }").unwrap();
     std::fs::write(repo.path().join("main.rs"), "fn main() {}\n").unwrap();
 
@@ -192,7 +192,7 @@ fn recommend_degrades_on_malformed_workspace_manifest() {
 #[test]
 fn audit_fail_on_tier1_exits_non_zero_when_tier1_present() {
     // A bare repo is missing the runtime-hook and CI planes (both Tier-1).
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     aoa()
         .args(["audit", "--fail-on", "tier1", "--repo"])
         .arg(repo.path())
@@ -211,7 +211,7 @@ fn audit_fail_on_tier1_exits_zero_without_tier1_gap() {
     // a Tier-1 silence (aoa-dpluh) and would fail this gate, while an absent one
     // is the Tier-3 unobserved plane (aoa-rsixa) and would pass it — but pass on
     // a different fact than the one this test is pinning.
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     std::fs::create_dir_all(repo.path().join(".claude")).unwrap();
     std::fs::write(
         repo.path().join(".claude/settings.json"),
@@ -243,7 +243,7 @@ fn audit_fail_on_tier1_exits_zero_without_tier1_gap() {
 
 #[test]
 fn audit_fail_on_tier1_rejects_a_gutted_runtime_hook_file() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     std::fs::create_dir_all(repo.path().join(".claude")).unwrap();
     std::fs::write(repo.path().join(".claude/settings.json"), "{}").unwrap();
     std::fs::create_dir_all(repo.path().join(".github/workflows")).unwrap();
@@ -260,7 +260,7 @@ fn audit_fail_on_tier1_rejects_a_gutted_runtime_hook_file() {
 
 #[test]
 fn audit_without_fail_on_exits_zero_even_with_tier1_gap() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     aoa()
         .args(["audit", "--repo"])
         .arg(repo.path())
@@ -272,7 +272,7 @@ fn audit_without_fail_on_exits_zero_even_with_tier1_gap() {
 // oversized-context suppression marker.
 #[test]
 fn lint_context_changed_filters_and_honors_suppression() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let root = dir.path().join("AGENTS.md");
     let changed = dir.path().join("changed.md");
     let other = dir.path().join("other.md");
@@ -331,7 +331,7 @@ fn lint_context_changed_filters_and_honors_suppression() {
 
 #[test]
 fn lint_context_human_renders_text() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let root = dir.path().join("AGENTS.md");
     std::fs::write(&root, "# Root\n\nplain doc with no smells\n").unwrap();
 
@@ -380,7 +380,7 @@ fn finding_files(parsed: &Value) -> Vec<&str> {
 
 #[test]
 fn lint_context_without_root_lints_a_claude_only_tree_with_nested_files() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     std::fs::write(dir.path().join("CLAUDE.md"), "# Root\n\nplain\n").unwrap();
     std::fs::create_dir_all(dir.path().join("services/api")).unwrap();
     std::fs::write(
@@ -400,7 +400,7 @@ fn lint_context_without_root_lints_a_claude_only_tree_with_nested_files() {
 
 #[test]
 fn lint_context_explicit_root_also_lints_nested_context_files() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     std::fs::write(dir.path().join("CLAUDE.md"), "# Root\n\nplain\n").unwrap();
     std::fs::create_dir_all(dir.path().join("pkg")).unwrap();
     std::fs::write(dir.path().join("pkg/AGENTS.md"), LINT_DUPLICATED_HEADING).unwrap();
@@ -416,7 +416,7 @@ fn lint_context_explicit_root_also_lints_nested_context_files() {
 
 #[test]
 fn lint_context_root_above_the_working_directory_lints_the_named_file() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     std::fs::write(dir.path().join("AGENTS.md"), LINT_DUPLICATED_HEADING).unwrap();
     std::fs::create_dir_all(dir.path().join("pkg")).unwrap();
     std::fs::write(dir.path().join("pkg/AGENTS.md"), "# Pkg\n\nplain\n").unwrap();
@@ -452,7 +452,7 @@ fn closure_files(closure: &Value) -> Vec<&str> {
 
 #[test]
 fn lint_context_counts_a_sibling_directory_for_the_only_nested_root() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     write_package_linking_shared_docs(dir.path());
 
     let parsed = lint_json(dir.path(), &[]);
@@ -464,7 +464,7 @@ fn lint_context_counts_a_sibling_directory_for_the_only_nested_root() {
 
 #[test]
 fn lint_context_names_a_member_it_could_not_count() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     std::fs::write(dir.path().join("AGENTS.md"), "[binary](binary.md)\n").expect("write root");
     std::fs::write(dir.path().join("binary.md"), b"rules\n\xff\n").expect("write member");
 
@@ -486,7 +486,7 @@ fn lint_context_names_a_member_it_could_not_count() {
 
 #[test]
 fn lint_context_names_a_link_that_leaves_the_directory_of_an_explicit_root() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     write_package_linking_shared_docs(dir.path());
 
     let parsed = lint_json(dir.path(), &["--root", "pkg/AGENTS.md"]);
@@ -521,7 +521,7 @@ pub(super) fn lint_outputs(dir: &Path) -> [std::process::Output; 2] {
 #[cfg(unix)]
 #[test]
 fn lint_context_output_does_not_depend_on_what_a_link_leaving_the_directory_reaches() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let repo = dir.path().join("repo");
     std::fs::create_dir(&repo).expect("create repo");
     std::fs::write(
@@ -557,7 +557,7 @@ fn lint_context_output_does_not_depend_on_what_a_link_leaving_the_directory_reac
 #[cfg(unix)]
 #[test]
 fn lint_context_output_does_not_depend_on_what_a_link_steps_through_outside_the_directory() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let repo = dir.path().join("repo");
     std::fs::create_dir(&repo).expect("create repo");
     std::fs::write(repo.join("AGENTS.md"), "[member](probe.md)\n").expect("write root");
@@ -589,7 +589,7 @@ fn lint_context_output_does_not_depend_on_what_a_link_steps_through_outside_the_
 
 #[test]
 fn lint_context_human_reports_how_many_roots_were_linted() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     std::fs::write(dir.path().join("AGENTS.md"), "# Root\n").unwrap();
     std::fs::create_dir_all(dir.path().join("pkg")).unwrap();
     std::fs::write(dir.path().join("pkg/CLAUDE.md"), "# Pkg\n").unwrap();
@@ -609,7 +609,7 @@ const LINT_BUDGET_MEMBER: &str = "# Member\n\nSee [shared](../shared.md) for the
 const LINT_BUDGET_SHARED: &str = "# Shared\n\nalpha beta gamma delta epsilon\n";
 
 fn lint_budget_tree() -> TempDir {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     std::fs::write(dir.path().join("CLAUDE.md"), LINT_BUDGET_ROOT).unwrap();
     std::fs::write(dir.path().join("shared.md"), LINT_BUDGET_SHARED).unwrap();
     std::fs::create_dir_all(dir.path().join("pkg")).unwrap();
@@ -722,7 +722,7 @@ fn lint_context_marks_only_the_closure_that_breaches_the_ceiling() {
 
 #[test]
 fn lint_context_leaves_a_suppressed_file_out_of_the_breach_but_still_reports_it() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let root_text = "# Root\n\nSee [big](big.md).\n";
     let big_text = format!(
         "# aoa-allow: oversized-context generated reference\n\n{}",
@@ -755,7 +755,7 @@ fn lint_context_leaves_a_suppressed_file_out_of_the_breach_but_still_reports_it(
 
 #[test]
 fn lint_context_budget_counts_under_the_requested_tokenizer() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let text = format!("# Root\n\n{}", "naïve café déjà-vu 日本語 ".repeat(40));
     std::fs::write(dir.path().join("AGENTS.md"), &text).unwrap();
 
@@ -814,7 +814,7 @@ fn lint_context_human_prints_tokens_for_the_root_closure_and_each_member() {
 
 #[test]
 fn lint_context_without_any_context_file_says_how_to_name_one() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     std::fs::write(dir.path().join("README.md"), "# Readme\n").unwrap();
 
     aoa()
@@ -828,7 +828,7 @@ fn lint_context_without_any_context_file_says_how_to_name_one() {
 
 #[test]
 fn lint_context_missing_explicit_root_states_the_cause_once() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
 
     let output = aoa()
         .current_dir(dir.path())
@@ -853,14 +853,14 @@ fn lint_context_missing_explicit_root_states_the_cause_once() {
 fn audit_reads_the_pre_commit_plane_from_the_repository_not_the_machine_git_config() {
     use std::os::unix::fs::PermissionsExt;
 
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     init_git_repo(repo.path());
     let machine_hooks = repo.path().join("machine-hooks");
     std::fs::create_dir_all(&machine_hooks).unwrap();
     let hook = machine_hooks.join("pre-commit");
     std::fs::write(&hook, "#!/bin/sh\nexit 0\n").unwrap();
     std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let machine_config = TempDir::new().expect("tempdir");
+    let machine_config = TempDir::new_in(fixture_root()).expect("tempdir");
     let global = machine_config.path().join("gitconfig");
     std::fs::write(
         &global,

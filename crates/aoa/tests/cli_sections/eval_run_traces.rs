@@ -113,7 +113,7 @@ fn validate_trace_json(path: &Path) -> Value {
 
 #[test]
 fn eval_run_json_reports_span_counts_by_type_per_task() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = two_trial_run(&dir);
 
     let report = eval_run_json(&run, &[]);
@@ -133,7 +133,7 @@ fn eval_run_json_reports_span_counts_by_type_per_task() {
 
 #[test]
 fn a_task_whose_agent_called_no_tools_reports_only_the_abstain_span() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = two_trial_run(&dir);
 
     let report = eval_run_json(&run, &[]);
@@ -148,7 +148,7 @@ fn a_task_whose_agent_called_no_tools_reports_only_the_abstain_span() {
 
 #[test]
 fn eval_run_human_register_reports_span_counts_per_task() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = two_trial_run(&dir);
 
     aoa()
@@ -164,7 +164,7 @@ fn eval_run_human_register_reports_span_counts_per_task() {
 
 #[test]
 fn a_transcript_with_no_agent_events_is_an_error_and_gets_no_trace_file() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = dir.path().join("run");
     write_trial(
         &run,
@@ -192,7 +192,7 @@ fn a_transcript_with_no_agent_events_is_an_error_and_gets_no_trace_file() {
 
 #[test]
 fn emitted_traces_pass_validate_trace_and_match_the_reported_counts() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = two_trial_run(&dir);
     let traces = dir.path().join("out").join("traces");
 
@@ -208,7 +208,7 @@ fn emitted_traces_pass_validate_trace_and_match_the_reported_counts() {
 
 #[test]
 fn human_register_names_where_traces_were_written() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = two_trial_run(&dir);
     let traces = dir.path().join("traces");
 
@@ -224,7 +224,7 @@ fn human_register_names_where_traces_were_written() {
 
 #[test]
 fn a_trial_that_fails_after_its_trace_was_reconstructed_still_gets_a_trace_file() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = dir.path().join("run");
     write_trial(&run, "unscored-task", READ_AND_EDIT_TRANSCRIPT, None);
     let traces = dir.path().join("traces");
@@ -247,7 +247,7 @@ fn a_trial_that_fails_after_its_trace_was_reconstructed_still_gets_a_trace_file(
 
 #[test]
 fn without_the_flag_no_trace_directory_is_created() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = two_trial_run(&dir);
 
     eval_run_json(&run, &[]);
@@ -262,7 +262,7 @@ fn without_the_flag_no_trace_directory_is_created() {
 #[cfg(unix)]
 #[test]
 fn emitting_over_a_planted_symlink_leaves_its_target_untouched() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = two_trial_run(&dir);
     let traces = dir.path().join("traces");
     std::fs::create_dir_all(&traces).expect("traces dir");
@@ -289,7 +289,7 @@ fn emitting_over_a_planted_symlink_leaves_its_target_untouched() {
 fn emitted_traces_are_readable_by_their_owner_only() {
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = two_trial_run(&dir);
     let traces = dir.path().join("traces");
 
@@ -309,7 +309,7 @@ fn emitted_traces_are_readable_by_their_owner_only() {
 fn a_trace_destination_that_already_exists_with_a_wider_mode_is_narrowed() {
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = two_trial_run(&dir);
     let traces = dir.path().join("traces");
     let stale = traces.join("busy-task.trace.json");

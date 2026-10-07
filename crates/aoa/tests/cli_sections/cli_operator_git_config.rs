@@ -74,7 +74,7 @@ fn plain_git_reads(repo: &Path, started_in: &Path, environment: &[(&str, &OsStr)
 
 #[test]
 fn infer_owners_answers_the_same_when_operator_config_ignores_revisions_from_a_missing_file() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let repo = dir.path().join("repo");
     repository_owned_by(ALICE, &repo);
     let missing = dir.path().join("no-such-ignore-revs");
@@ -140,7 +140,7 @@ reports: {changed_the_answer:?}"
 
 #[test]
 fn infer_owners_reads_a_distrusted_repository_the_operator_config_marks_safe() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let repo = dir.path().canonicalize().unwrap().join("repo");
     repository_owned_by(ALICE, &repo);
     let config = operator_config(
@@ -164,7 +164,7 @@ fn infer_owners_reads_a_distrusted_repository_the_operator_config_marks_safe() {
 
 #[test]
 fn infer_owners_reports_git_refusing_a_distrusted_repository_no_operator_config_marks_safe() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let repo = dir.path().canonicalize().unwrap().join("repo");
     repository_owned_by(ALICE, &repo);
     let elsewhere = dir.path().join("elsewhere");
@@ -192,7 +192,7 @@ fn infer_owners_reports_git_refusing_a_distrusted_repository_no_operator_config_
 
 #[test]
 fn infer_owners_trusts_exactly_the_repositories_plain_git_trusts_wherever_it_is_started() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let root = dir.path().canonicalize().unwrap();
     let trusted_side = root.join("a");
     let other_side = root.join("b");
@@ -237,7 +237,7 @@ fn infer_owners_trusts_exactly_the_repositories_plain_git_trusts_wherever_it_is_
 
 #[test]
 fn infer_owners_reads_a_distrusted_repository_listed_after_fifty_thousand_others() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let repo = dir.path().canonicalize().unwrap().join("repo");
     repository_owned_by(ALICE, &repo);
     let padding = "synthetic-checkout-".repeat(6);
@@ -262,7 +262,7 @@ fn infer_owners_reads_a_distrusted_repository_listed_after_fifty_thousand_others
 
 #[test]
 fn infer_owners_reads_the_named_repository_when_started_beside_a_corrupt_gitfile() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let repo = dir.path().join("repo");
     repository_owned_by(ALICE, &repo);
     let started_in = dir.path().join("started-in");
@@ -293,7 +293,7 @@ fn infer_owners_reads_the_named_repository_when_started_beside_a_corrupt_gitfile
 
 #[test]
 fn infer_owners_leaves_nothing_behind_in_the_temporary_directory() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let repo = dir.path().canonicalize().unwrap().join("repo");
     repository_owned_by(ALICE, &repo);
     let config = operator_config(
@@ -329,7 +329,7 @@ fn entries_of(directory: &Path) -> Vec<PathBuf> {
 
 #[test]
 fn infer_owners_reads_a_trusted_repository_when_the_temporary_directory_is_a_relative_path() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let root = dir.path().canonicalize().unwrap();
     let repo = root.join("repo");
     repository_owned_by(ALICE, &repo);
@@ -372,7 +372,7 @@ fn refused_naming(output: &std::process::Output, named: &str) -> bool {
 
 #[test]
 fn infer_owners_refuses_a_relative_global_config_that_withdraws_trust_inside_the_repository() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let root = dir.path().canonicalize().unwrap();
     let repo = root.join("repo");
     repository_owned_by(ALICE, &repo);
@@ -408,7 +408,7 @@ stderr {:?}",
 
 #[test]
 fn infer_owners_refuses_each_config_locating_variable_set_to_a_relative_path() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let repo = dir.path().join("repo");
     repository_owned_by(ALICE, &repo);
 
@@ -433,7 +433,7 @@ fn infer_owners_refuses_each_config_locating_variable_set_to_a_relative_path() {
 
 #[test]
 fn infer_owners_reads_when_a_config_locating_variable_is_set_but_empty() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let repo = dir.path().join("repo");
     repository_owned_by(ALICE, &repo);
 
@@ -455,7 +455,7 @@ fn temporary_directory_with_mode(parent: &Path, name: &str, mode: u32) -> PathBu
 
 #[test]
 fn infer_owners_refuses_a_temporary_directory_others_can_replace_files_in() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let root = dir.path().canonicalize().unwrap();
     let repo = root.join("repo");
     repository_owned_by(ALICE, &repo);

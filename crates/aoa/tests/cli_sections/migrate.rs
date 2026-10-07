@@ -5,7 +5,7 @@ use super::*;
 /// A fixture checkout with a manifest-bearing root but no README, so the audit
 /// reports a navigability site the migration can fix.
 pub(super) fn migrate_repo() -> TempDir {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let p = dir.path();
     std::fs::write(p.join("Cargo.toml"), "[package]\nname = \"demo\"\n").unwrap();
     std::fs::create_dir_all(p.join("src")).unwrap();
@@ -148,7 +148,7 @@ fn migrate_fix_selector_runs_named_fix() {
 }
 
 fn conforming_repo_without_language_markers() -> TempDir {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     std::fs::write(dir.path().join("README.md"), "# demo\n").unwrap();
     std::fs::write(dir.path().join("notes.txt"), "plain\n").unwrap();
     dir

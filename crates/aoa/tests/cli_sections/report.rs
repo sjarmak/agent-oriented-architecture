@@ -8,7 +8,7 @@ use super::*;
 
 #[test]
 fn report_composes_all_pillars_and_reports_absent_falsification() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     aoa()
         .args(["report", "--repo"])
         .arg(repo.path())
@@ -24,7 +24,7 @@ fn report_composes_all_pillars_and_reports_absent_falsification() {
 
 #[test]
 fn report_json_composes_pillars_and_pillar_is_not_live_without_falsification() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     let output = aoa()
         .args(["report", "--json", "--repo"])
         .arg(repo.path())
@@ -51,7 +51,7 @@ fn report_json_composes_pillars_and_pillar_is_not_live_without_falsification() {
 // signal the audit measured — otherwise the halves contradict each other.
 #[test]
 fn report_json_conditions_the_determination_on_the_behavioral_signal() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     let output = aoa()
         .args(["report", "--json", "--repo"])
         .arg(repo.path())
@@ -92,7 +92,7 @@ fn report_json_conditions_the_determination_on_the_behavioral_signal() {
 // Raw landed edits are not complete four-metric evidence, regardless of count.
 #[test]
 fn report_json_keeps_uncontextualized_live_edits_insufficient() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     seed_live_sessions(repo.path(), 10);
     let output = aoa()
         .args(["report", "--json", "--repo"])
@@ -166,7 +166,7 @@ fn without_graph_notice(mut standalone: Value) -> Value {
 /// the symbol graph is empty for every command, so neither alone would catch a
 /// config or conditioning divergence.
 pub(super) fn seeded_indexable_repo() -> TempDir {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     seed_live_sessions(repo.path(), MIN_HELD_OUT_OBSERVATIONS);
     std::fs::write(
         repo.path().join("app.py"),
@@ -189,7 +189,7 @@ pub(super) fn seeded_indexable_repo() -> TempDir {
 // so a fork that rebuilds the audit config by hand (aoa-d6t.41) is invisible.
 #[test]
 fn report_and_recommend_agree_on_recommendations() {
-    let greenfield = TempDir::new().expect("tempdir");
+    let greenfield = TempDir::new_in(fixture_root()).expect("tempdir");
     let indexable = seeded_indexable_repo();
 
     // Assert the two surfaces agree for `repo`, and hand back the report view so
@@ -250,7 +250,7 @@ fn report_and_recommend_agree_on_recommendations() {
 // the graph instead of one irrelevant file aborting the repository-wide audit.
 #[test]
 fn audit_recommend_and_report_isolate_a_non_utf8_source_file() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     std::fs::write(
         repo.path().join("generated.py"),
         b"def f():\n    x = \"\xff\xfe\"\n",
@@ -270,7 +270,7 @@ fn audit_recommend_and_report_isolate_a_non_utf8_source_file() {
 
 #[test]
 fn report_proceed_verdict_marks_the_migrate_pillar_live() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     std::fs::write(
         repo.path().join("falsification.json"),
         r#"{"verdict":"proceed","notes":[]}"#,
@@ -291,7 +291,7 @@ fn report_proceed_verdict_marks_the_migrate_pillar_live() {
 
 #[test]
 fn report_pivot_verdict_keeps_the_migrate_pillar_not_live() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     std::fs::write(
         repo.path().join("falsification.json"),
         r#"{"verdict":"pivot","notes":[]}"#,
@@ -312,7 +312,7 @@ fn report_precondition_unmet_verdict_is_surfaced_and_not_live() {
     // An inconclusive written by an unmet precondition (e.g. too_few_repos)
     // carries its discriminator; the report surfaces it and the pillar stays
     // not live.
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     std::fs::write(
         repo.path().join("falsification.json"),
         r#"{"verdict":"inconclusive","precondition_unmet":"too_few_repos","notes":[]}"#,
@@ -337,7 +337,7 @@ fn report_precondition_unmet_verdict_is_surfaced_and_not_live() {
 fn report_fails_loud_on_malformed_falsification_json() {
     // A present-but-unparsable falsification.json is a hard error, never
     // silently treated as absent (that would fabricate "gate never ran").
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     std::fs::write(repo.path().join("falsification.json"), "not json").unwrap();
 
     aoa()

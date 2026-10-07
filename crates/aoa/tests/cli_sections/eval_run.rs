@@ -72,7 +72,7 @@ fn eval_run_excludes_a_trial_whose_scoring_carries_no_signal() {
     // Both trials are copies of real fixture trials — same transcripts, same
     // task ids so both oracles load. The ONLY difference is the no-signal
     // trial's scoring.json, so nothing else can be what fails.
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = dir.path().join("run");
     for id in ["native-consensus-001", "external-filelist-000"] {
         let trial = run.join(id);
@@ -141,7 +141,7 @@ fn eval_run_excludes_a_trial_whose_scoring_carries_no_signal() {
 // contaminates the behavioral signal.
 #[test]
 fn eval_run_excludes_a_trial_whose_scorer_errored() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = dir.path().join("run");
     let id = "native-consensus-001";
     let trial = run.join(id);
@@ -211,7 +211,7 @@ fn eval_run_rejects_a_transcript_that_holds_only_the_final_answer() {
         "{\"type\":\"system\"}\n{\"type\":\"result\",\"result\":\"7\"}\n",
         "",
     ] {
-        let dir = TempDir::new().expect("tempdir");
+        let dir = TempDir::new_in(fixture_root()).expect("tempdir");
         let run = answer_only_run(&dir, transcript);
 
         let output = aoa()
@@ -241,7 +241,7 @@ fn eval_run_rejects_a_transcript_that_holds_only_the_final_answer() {
 
 #[test]
 fn eval_run_human_reports_an_answer_only_transcript_as_an_error() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = answer_only_run(&dir, "7\n");
 
     aoa()
@@ -256,7 +256,7 @@ fn eval_run_human_reports_an_answer_only_transcript_as_an_error() {
 
 #[test]
 fn eval_run_records_a_prose_only_stream_json_transcript() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = answer_only_run(
         &dir,
         "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"7\"}]}}\n",
@@ -276,7 +276,7 @@ fn eval_run_records_a_prose_only_stream_json_transcript() {
 
 #[test]
 fn eval_run_uses_the_artifact_leg_as_held_out_for_dual_composite() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = dir.path().join("run");
     let id = "native-consensus-001";
     let trial = run.join(id);
@@ -319,7 +319,7 @@ fn eval_run_uses_the_artifact_leg_as_held_out_for_dual_composite() {
 fn eval_run_isolates_a_non_utf8_trial_dir_name() {
     use std::os::unix::ffi::OsStringExt;
 
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = dir.path().join("run");
     std::fs::create_dir_all(&run).expect("run dir");
     // One real trial copied from the fixture, so the run dir is otherwise valid
@@ -473,7 +473,7 @@ const TASK_SOURCE_HEADING: &str = "What codeprobe needs from a repository";
 
 #[test]
 fn eval_run_names_an_empty_task_source_when_the_run_holds_no_trials() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let output = aoa()
         .args(["eval", "run", "--codeprobe-run"])
         .arg(dir.path())
@@ -715,7 +715,7 @@ fn eval_run_subtree_root_overrides_repo_partition_source() {
 
 #[test]
 fn eval_run_keeps_dependency_install_code_out_of_the_mutation_surface() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     let own = repo.path().join("src");
     let installed = repo.path().join("node_modules/dep/gyp");
     std::fs::create_dir_all(&own).unwrap();
@@ -750,7 +750,7 @@ fn eval_run_keeps_dependency_install_code_out_of_the_mutation_surface() {
 fn eval_run_reads_a_transcript_backed_run_whose_directory_name_is_not_utf8() {
     use std::os::unix::ffi::OsStringExt;
 
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = dir
         .path()
         .join(std::ffi::OsString::from_vec(b"run-\xff".to_vec()));

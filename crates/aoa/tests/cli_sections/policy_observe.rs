@@ -3,7 +3,7 @@ use super::*;
 
 #[test]
 fn policy_compile_writes_three_planes_idempotently() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     std::fs::write(
         repo.path().join("aoa-policy.yaml"),
         "protected_paths: [\"migrations/**\"]\ngateway_allowlist: [\"src/db/gateway.rs\"]\n",
@@ -58,7 +58,7 @@ fn policy_compile_rejects_artifact_injection_before_writing_any_plane() {
 
     for field in ["protected_paths", "gateway_allowlist"] {
         for payload in payloads {
-            let repo = TempDir::new().unwrap();
+            let repo = TempDir::new_in(fixture_root()).unwrap();
             let escaped = payload
                 .replace('\\', "\\\\")
                 .replace('"', "\\\"")
@@ -91,7 +91,7 @@ fn policy_compile_rejects_artifact_injection_before_writing_any_plane() {
 
 #[test]
 fn policy_compile_emits_gitattributes_marking_for_generated_paths() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     std::fs::write(
         repo.path().join("aoa-policy.yaml"),
         "generated_paths:\n  - glob: \"**/*.gen.rs\"\n    source: \"schema.json\"\n",
@@ -123,7 +123,7 @@ fn policy_compile_emits_gitattributes_marking_for_generated_paths() {
 
 #[test]
 fn policy_guard_staged_rejects_protected_file() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     std::fs::write(
         repo.path().join("aoa-policy.yaml"),
         "protected_paths: [\"migrations/**\"]\n",
@@ -158,7 +158,7 @@ fn policy_guard_staged_rejects_protected_file() {
 
 #[test]
 fn enforce_ignores_non_mutation_tools() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     // A Read is not a guarded mutation: allowed even with no reproduction.
     aoa_stdin()
         .args(["enforce", "check"])
@@ -169,7 +169,7 @@ fn enforce_ignores_non_mutation_tools() {
 
 #[test]
 fn observe_enforce_writes_idempotent_settings_and_plain_observe_does_not() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     let settings = repo.path().join(".claude/settings.json");
 
     observe_enforce(repo.path());
@@ -202,7 +202,7 @@ fn observe_enforce_writes_idempotent_settings_and_plain_observe_does_not() {
     assert_eq!(first, second, "second observe --enforce must be a no-op");
 
     // Plain observe (no --enforce) installs no hook.
-    let plain = TempDir::new().unwrap();
+    let plain = TempDir::new_in(fixture_root()).unwrap();
     aoa_stdin()
         .args(["observe", "--repo", plain.path().to_str().unwrap()])
         .assert()
@@ -216,7 +216,7 @@ fn observe_enforce_writes_idempotent_settings_and_plain_observe_does_not() {
 /// while the gating self-audit kept passing.
 #[test]
 fn tracked_settings_json_matches_observe_enforce_output() {
-    let fresh = TempDir::new().unwrap();
+    let fresh = TempDir::new_in(fixture_root()).unwrap();
     observe_enforce(fresh.path());
     let generated = std::fs::read_to_string(fresh.path().join(".claude/settings.json"))
         .expect("observe --enforce writes settings.json");
@@ -268,7 +268,7 @@ fn observe_reports_missing_and_stale_enforce_hook_stamps() {
             "malformed",
         ),
     ] {
-        let repo = TempDir::new().unwrap();
+        let repo = TempDir::new_in(fixture_root()).unwrap();
         std::fs::create_dir_all(repo.path().join(".claude")).unwrap();
         std::fs::write(
             repo.path().join(".claude/settings.json"),
@@ -289,7 +289,7 @@ fn observe_reports_missing_and_stale_enforce_hook_stamps() {
 
 #[test]
 fn current_enforce_hook_stamp_is_quiet_in_observe_and_audit() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     observe_enforce(repo.path());
 
     let settings: Value =
@@ -312,7 +312,7 @@ fn current_enforce_hook_stamp_is_quiet_in_observe_and_audit() {
 
 #[test]
 fn audit_surfaces_a_stale_hook_stamp_in_both_registers() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     std::fs::create_dir_all(repo.path().join(".claude")).unwrap();
     std::fs::write(
         repo.path().join(".claude/settings.json"),
@@ -341,7 +341,7 @@ fn audit_surfaces_a_stale_hook_stamp_in_both_registers() {
 /// not exist is the installed-but-inert state this whole path removes.
 #[test]
 fn observe_enforce_installs_an_executable_wrapper() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     observe_enforce(repo.path());
 
     let wrapper = repo.path().join(".claude/hooks/aoa-enforce");
@@ -374,9 +374,9 @@ fn observe_enforce_installs_an_executable_wrapper() {
 #[cfg(unix)]
 #[test]
 fn the_configured_hook_command_resolves_and_is_loud_when_the_binary_is_absent() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     observe_enforce(repo.path());
-    let elsewhere = TempDir::new().unwrap();
+    let elsewhere = TempDir::new_in(fixture_root()).unwrap();
 
     let settings: Value =
         serde_json::from_slice(&std::fs::read(repo.path().join(".claude/settings.json")).unwrap())
@@ -451,7 +451,7 @@ fn the_configured_hook_command_resolves_and_is_loud_when_the_binary_is_absent() 
 /// the two drift and the committed copy keeps whatever an editor left behind.
 #[test]
 fn tracked_wrapper_matches_observe_enforce_output() {
-    let fresh = TempDir::new().unwrap();
+    let fresh = TempDir::new_in(fixture_root()).unwrap();
     observe_enforce(fresh.path());
     let generated = std::fs::read_to_string(fresh.path().join(".claude/hooks/aoa-enforce"))
         .expect("observe --enforce writes the wrapper");
@@ -473,7 +473,7 @@ fn tracked_wrapper_matches_observe_enforce_output() {
 /// the settings read as installed while nothing can run.
 #[test]
 fn a_missing_wrapper_is_reported_even_when_the_stamp_is_current() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     observe_enforce(repo.path());
     std::fs::remove_file(repo.path().join(".claude/hooks/aoa-enforce")).unwrap();
 

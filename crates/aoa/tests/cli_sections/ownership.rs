@@ -5,7 +5,7 @@ use super::*;
 
 /// A two-author git repo: alice owns `a/`, bob owns `b/` and the root file.
 fn blame_repo() -> TempDir {
-    let dir = TempDir::new().unwrap();
+    let dir = TempDir::new_in(fixture_root()).unwrap();
     init_git_repo(dir.path());
     std::fs::create_dir_all(dir.path().join("a")).unwrap();
     std::fs::write(dir.path().join("a/one.txt"), "line\nline\nline\n").unwrap();
@@ -148,7 +148,7 @@ fn infer_owners_ignores_staged_but_uncommitted_files() {
 // weight and the reported arithmetic is silently wrong.
 #[test]
 fn infer_owners_counts_conflicted_files_once() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     init_git_repo(repo.path());
     std::fs::create_dir_all(repo.path().join("c")).unwrap();
     std::fs::write(repo.path().join("c/f.txt"), "one\ntwo\n").unwrap();
@@ -198,7 +198,7 @@ fn infer_owners_counts_conflicted_files_once() {
 // that --write refuses.
 #[test]
 fn infer_owners_zero_entries_keeps_registers_in_parity() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     init_git_repo(repo.path());
     run_git(
         repo.path(),
@@ -239,7 +239,7 @@ fn infer_owners_zero_entries_keeps_registers_in_parity() {
 // R17: policy compile exposes the JSON register listing the written planes.
 #[test]
 fn policy_compile_json_lists_written_planes() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     std::fs::write(
         repo.path().join("aoa-policy.yaml"),
         "protected_paths: [\"migrations/**\"]\n",
@@ -273,7 +273,7 @@ fn policy_compile_json_lists_written_planes() {
 // keeps the failure exit code.
 #[test]
 fn policy_guard_staged_json_carries_blocked_findings() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     std::fs::write(
         repo.path().join("aoa-policy.yaml"),
         "protected_paths: [\"migrations/**\"]\n",
@@ -318,7 +318,7 @@ fn policy_guard_staged_json_carries_blocked_findings() {
 // R17: observe exposes the JSON register reporting the installed paths.
 #[test]
 fn observe_json_reports_installed_paths() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     let output = aoa()
         .args(["observe", "--repo", repo.path().to_str().unwrap(), "--json"])
         .output()

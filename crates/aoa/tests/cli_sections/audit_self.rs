@@ -8,7 +8,7 @@ use super::*;
 
 #[test]
 fn audit_self_without_migration_reports_absent_and_exits_zero() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     aoa()
         .args(["audit", "--self", "--repo"])
         .arg(repo.path())
@@ -96,7 +96,7 @@ fn audit_self_with_heldout_gain_clears_the_regression() {
 
 #[test]
 fn audit_self_baseline_without_migrated_is_rejected() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     aoa()
         .args(["audit", "--self", "--repo"])
         .arg(repo.path())
@@ -110,7 +110,7 @@ fn audit_self_baseline_without_migrated_is_rejected() {
 fn audit_baseline_without_self_is_rejected() {
     // The held-out pair only means something to the self-audit; supplying it to
     // a plain audit is a usage error, not silently ignored.
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     aoa()
         .args(["audit", "--repo"])
         .arg(repo.path())
@@ -148,7 +148,7 @@ fn audit_self_resolves_manifest_paths_against_repo_not_cwd() {
         .success();
 
     // Audit from an unrelated cwd that contains a decoy README.md.
-    let elsewhere = TempDir::new().expect("tempdir");
+    let elsewhere = TempDir::new_in(fixture_root()).expect("tempdir");
     std::fs::write(elsewhere.path().join("README.md"), "x").unwrap();
 
     let output = aoa()
@@ -181,7 +181,7 @@ fn audit_self_escapes_manifest_text_in_human_output() {
     // Entry paths and fix ids come verbatim from on-disk manifest JSON — the
     // same trust level as falsification.json, whose fields the report escapes.
     // A crafted path or fix id must not put a raw ESC byte on the terminal.
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     let evil_name = "evil\u{1b}[2Jfile.md";
     std::fs::write(repo.path().join(evil_name), "hello world").unwrap();
     write_migration_manifest(
@@ -214,8 +214,8 @@ fn audit_self_rejects_manifest_entry_outside_the_repo() {
     // resolves outside it is a corrupted (or hostile) migration record — a
     // hard error, never a read of arbitrary reachable files (/dev/zero,
     // /etc/passwd) on the manifest's say-so.
-    let repo = TempDir::new().expect("tempdir");
-    let outside = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
+    let outside = TempDir::new_in(fixture_root()).expect("tempdir");
     let secret = outside.path().join("secret.md");
     std::fs::write(&secret, "outside the audited repo").unwrap();
     write_migration_manifest(
@@ -239,7 +239,7 @@ fn audit_self_caps_migration_written_file_reads() {
     // Migration-written files are read through the same byte cap as every
     // other untrusted file the CLI touches; a pathological entry cannot
     // exhaust memory.
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     let big = repo.path().join("big.md");
     std::fs::write(&big, vec![b'x'; 16 * 1024 * 1024 + 1]).unwrap();
     write_migration_manifest(
@@ -271,7 +271,7 @@ fn audit_self_does_not_accept_a_not_good_gain_as_justification() {
         .assert()
         .success();
 
-    let runs = TempDir::new().expect("tempdir");
+    let runs = TempDir::new_in(fixture_root()).expect("tempdir");
     let baseline = runs.path().join("baseline.json");
     let migrated = runs.path().join("migrated.json");
     // baseline: visible 0.25, held-out 0.25 (gap 0).

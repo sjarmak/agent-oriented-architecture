@@ -3,7 +3,7 @@ use super::*;
 // Criterion 7: falsify writes falsification.json with a verdict field.
 #[test]
 fn falsify_writes_verdict_file() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let out = dir.path().join("falsification.json");
 
     aoa()
@@ -26,7 +26,7 @@ fn falsify_writes_verdict_file() {
 // build report can never silently read as "not degraded".
 #[test]
 fn falsify_without_build_meta_abstains_as_degraded() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let out = dir.path().join("falsification.json");
 
     aoa()
@@ -63,7 +63,7 @@ fn policy_compile_unknown_forge_fails_loudly() {
 
 #[test]
 fn policy_compile_known_forge_succeeds() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     std::fs::write(repo.path().join("aoa-policy.yaml"), "protected_paths: []\n").unwrap();
     aoa()
         .args([
@@ -82,7 +82,7 @@ fn policy_compile_known_forge_succeeds() {
 // policy is a user error, not a silent empty default.
 #[test]
 fn policy_compile_without_policy_file_fails_loud() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     aoa()
         .args(["policy", "compile", "--repo", repo.path().to_str().unwrap()])
         .assert()

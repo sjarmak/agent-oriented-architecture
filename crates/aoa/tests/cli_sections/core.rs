@@ -25,7 +25,7 @@ fn validate_trace_invalid_exits_non_zero() {
 #[cfg(unix)]
 #[test]
 fn cli_error_boundary_neutralises_terminal_controls_from_paths() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let hostile = dir.path().join("repo\u{1b}[2Jname");
     let output = aoa()
         .args(["audit", "--repo"])
@@ -163,7 +163,7 @@ fn clean_lint_root(dir: &TempDir) -> PathBuf {
 #[cfg(unix)]
 #[test]
 fn human_output_to_a_closed_stdout_exits_with_the_command_verdict_and_no_panic() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let output = aoa()
         .args(["lint-context", "--root"])
         .arg(clean_lint_root(&dir))
@@ -179,7 +179,7 @@ fn human_output_to_a_closed_stdout_exits_with_the_command_verdict_and_no_panic()
 #[cfg(unix)]
 #[test]
 fn json_output_to_a_closed_stdout_exits_with_the_command_verdict_and_no_panic() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let output = aoa()
         .args(["lint-context", "--json", "--root"])
         .arg(clean_lint_root(&dir))
@@ -195,7 +195,7 @@ fn json_output_to_a_closed_stdout_exits_with_the_command_verdict_and_no_panic() 
 #[cfg(unix)]
 #[test]
 fn error_output_to_a_closed_stderr_keeps_the_failure_exit_code() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let status = aoa()
         .args(["audit", "--repo"])
         .arg(dir.path().join("absent"))

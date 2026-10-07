@@ -41,7 +41,7 @@ const ASSUMED_OWNERSHIP_VARIABLE: [&str; 1] = ["GIT_TEST_ASSUME_DIFFERENT_OWNER"
 const ASSUMED: &str = "1";
 
 fn repository_with_a_pre_commit_hook() -> TempDir {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     init_git_repo(repo.path());
     let hook = repo.path().join(".git/hooks/pre-commit");
     std::fs::create_dir_all(hook.parent().expect("hooks directory")).unwrap();
@@ -80,7 +80,7 @@ fn variables_that_change_the_answer<'a>(variables: &[&'a str], value: &OsStr) ->
 
 #[test]
 fn audit_reads_the_pre_commit_plane_the_same_under_every_inherited_repository_variable() {
-    let ambient = TempDir::new().expect("tempdir");
+    let ambient = TempDir::new_in(fixture_root()).expect("tempdir");
     let elsewhere = ambient.path().join("elsewhere");
 
     let changed_the_answer =

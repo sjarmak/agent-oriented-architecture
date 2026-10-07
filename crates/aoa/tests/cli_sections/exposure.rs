@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn exposure_scan_json_reports_subject_keyed_partial_status() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = TempDir::new_in(fixture_root()).unwrap();
     let runs = temp.path().join("runs");
     let repo = temp.path().join("repo");
     let campaign_repo = runs.join("httpie");
@@ -81,7 +81,7 @@ fn exposure_scan_json_reports_subject_keyed_partial_status() {
 
 #[test]
 fn exposure_scan_human_output_explains_the_causing_run_and_scores() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = TempDir::new_in(fixture_root()).unwrap();
     let runs = temp.path().join("runs");
     let repo = temp.path().join("repo");
     let campaign_repo = runs.join("sqlparse");
@@ -135,7 +135,7 @@ fn exposure_scan_human_output_explains_the_causing_run_and_scores() {
 
 #[test]
 fn exposure_scan_out_persists_the_ledger_the_build_manifest_consumes() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = TempDir::new_in(fixture_root()).unwrap();
     let runs = temp.path().join("runs");
     let repo = temp.path().join("repo");
     let campaign_repo = runs.join("sqlparse");

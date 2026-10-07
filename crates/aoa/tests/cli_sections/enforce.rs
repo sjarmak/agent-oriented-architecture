@@ -68,7 +68,7 @@ fn enforce_records_each_write_outcome_under_its_own_span() {
         ("fail", "write.failed"),
         ("deny", "write.denied"),
     ] {
-        let repo = TempDir::new().unwrap();
+        let repo = TempDir::new_in(fixture_root()).unwrap();
         aoa_stdin()
             .args(["enforce", subcommand])
             .write_stdin(hook_payload("Edit", None, repo.path()))
@@ -92,7 +92,7 @@ fn enforce_records_each_write_outcome_under_its_own_span() {
 /// hand-edited settings.json routes one to it.
 #[test]
 fn enforce_outcome_hooks_never_block_and_ignore_unguarded_tools() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     aoa_stdin()
         .args(["enforce", "commit"])
         .write_stdin(hook_payload("Bash", Some("ls"), repo.path()))
@@ -111,7 +111,7 @@ fn enforce_outcome_hooks_never_block_and_ignore_unguarded_tools() {
 /// committed span is ground truth.
 #[test]
 fn allowed_write_records_intent_then_confirmation() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     // A reproduction first, so the R7 gate permits the write.
     aoa_stdin()
         .args(["enforce", "record"])
@@ -143,7 +143,7 @@ fn allowed_write_records_intent_then_confirmation() {
 
 #[test]
 fn enforce_check_blocks_write_without_reproduction() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     aoa_stdin()
         .args(["enforce", "check"])
         .write_stdin(hook_payload("Write", None, repo.path()))
@@ -158,7 +158,7 @@ fn enforce_check_blocks_write_without_reproduction() {
 /// so any I/O error on that path reaches the gate's own failure handling.
 #[test]
 fn enforce_check_fails_closed_when_the_span_log_is_unusable() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     // A directory squatting the log path is unopenable as a file, standing in
     // for every other route to the same state (a FIFO, an unwritable file, a
     // lock that never frees).
@@ -174,7 +174,7 @@ fn enforce_check_fails_closed_when_the_span_log_is_unusable() {
 
 #[test]
 fn enforce_writer_repairs_and_reports_an_unterminated_tail() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     let log = live_log_path(repo.path());
     std::fs::create_dir_all(log.parent().unwrap()).unwrap();
     std::fs::write(
@@ -220,7 +220,7 @@ fn enforce_writer_repairs_and_reports_an_unterminated_tail() {
 #[cfg(unix)]
 #[test]
 fn enforce_check_fails_closed_on_a_fifo_span_log() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     let log = live_log_path(repo.path());
     std::fs::create_dir_all(log.parent().unwrap()).unwrap();
     make_fifo(&log);
@@ -237,8 +237,8 @@ fn enforce_check_fails_closed_on_a_fifo_span_log() {
 #[cfg(unix)]
 #[test]
 fn enforce_check_refuses_a_symlinked_traces_directory() {
-    let repo = TempDir::new().unwrap();
-    let outside = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
+    let outside = TempDir::new_in(fixture_root()).unwrap();
     std::fs::create_dir_all(repo.path().join(".aoa")).unwrap();
     std::os::unix::fs::symlink(outside.path(), repo.path().join(".aoa/traces")).unwrap();
 
@@ -261,7 +261,7 @@ fn enforce_check_refuses_a_symlinked_traces_directory() {
 /// unreadable one used to leave every protected path writable for the session.
 #[test]
 fn enforce_check_fails_closed_on_a_malformed_policy() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     std::fs::write(repo.path().join("aoa-policy.yaml"), "protected_paths: [\n").unwrap();
 
     aoa_stdin()
@@ -302,7 +302,7 @@ fn enforce_recording_hooks_stay_fail_open_when_the_span_log_is_unusable() {
         ("fail", "Edit", None),
         ("deny", "Edit", None),
     ] {
-        let repo = TempDir::new().unwrap();
+        let repo = TempDir::new_in(fixture_root()).unwrap();
         std::fs::create_dir_all(live_log_path(repo.path())).unwrap();
 
         aoa_stdin()
@@ -316,7 +316,7 @@ fn enforce_recording_hooks_stay_fail_open_when_the_span_log_is_unusable() {
 
 #[test]
 fn enforce_allows_write_after_a_test_run_is_recorded() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
 
     // 1. Pre-reproduction write is blocked (exit 2).
     aoa_stdin()
@@ -359,7 +359,7 @@ fn enforce_allows_write_after_a_test_run_is_recorded() {
 // gate: held-out truth capture is independent of gating (aoa-d6t.23).
 #[test]
 fn enforce_check_records_allowed_write_when_reproduction_is_disabled() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     std::fs::write(
         repo.path().join("aoa-policy.yaml"),
         "reproduction_required: false\n",
@@ -381,7 +381,7 @@ fn enforce_check_records_allowed_write_when_reproduction_is_disabled() {
 
 #[test]
 fn enforce_check_blocks_protected_path_even_without_reproduction() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     mark_git_repo(repo.path());
     std::fs::write(
         repo.path().join("aoa-policy.yaml"),
@@ -412,7 +412,7 @@ fn enforce_check_blocks_protected_path_even_without_reproduction() {
 
 #[test]
 fn enforce_check_normalizes_protected_path_targets_before_matching() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     mark_git_repo(repo.path());
     std::fs::write(
         repo.path().join("aoa-policy.yaml"),
@@ -460,7 +460,7 @@ fn enforce_check_blocks_protected_symlink_alias_and_destination() {
             ".github",
         ),
     ] {
-        let repo = TempDir::new().unwrap();
+        let repo = TempDir::new_in(fixture_root()).unwrap();
         mark_git_repo(repo.path());
         std::fs::write(
             repo.path().join("aoa-policy.yaml"),
@@ -481,7 +481,7 @@ fn enforce_check_blocks_protected_symlink_alias_and_destination() {
 
 #[test]
 fn enforce_reproduction_toggle_off_allows_unprotected_write() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     std::fs::write(
         repo.path().join("aoa-policy.yaml"),
         "protected_paths: [\".github/**\"]\nreproduction_required: false\n",
@@ -508,7 +508,7 @@ fn repository_enclosing(directory: &Path) -> Option<PathBuf> {
 
 #[test]
 fn enforce_check_rejects_an_arbitrary_non_repository_cwd_without_writing() {
-    let dir = TempDir::new().unwrap();
+    let dir = TempDir::new_in(fixture_root()).unwrap();
     if let Some(enclosing) = repository_enclosing(dir.path()) {
         eprintln!(
             "SKIP (docs/adr/0004-environment-dependent-test-skips.md): {} encloses the temp \
@@ -539,7 +539,7 @@ fn enforce_check_rejects_an_arbitrary_non_repository_cwd_without_writing() {
 
 #[test]
 fn enforce_check_reports_safe_directory_exit_128_as_the_actual_git_failure() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     mark_git_repo(repo.path());
     let payload = serde_json::to_string(&serde_json::json!({
         "session_id": "it-dubious-owner",
@@ -564,7 +564,7 @@ fn enforce_check_reports_safe_directory_exit_128_as_the_actual_git_failure() {
 
 #[test]
 fn enforce_check_reports_a_refused_nested_repository_instead_of_using_its_parent() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let parent = fixture.path().canonicalize().unwrap().join("parent");
     let nested = parent.join("nested");
     mark_git_repo(&parent);
@@ -617,10 +617,10 @@ fn enforce_check_reports_a_refused_nested_repository_instead_of_using_its_parent
 
 #[test]
 fn enforce_check_ignores_ambient_git_repository_overrides() {
-    let unrelated_repo = TempDir::new().unwrap();
+    let unrelated_repo = TempDir::new_in(fixture_root()).unwrap();
     mark_git_repo(unrelated_repo.path());
 
-    let untrusted = TempDir::new().unwrap();
+    let untrusted = TempDir::new_in(fixture_root()).unwrap();
     std::fs::create_dir(untrusted.path().join(".git")).unwrap();
     std::fs::write(
         untrusted.path().join("aoa-policy.yaml"),
@@ -652,10 +652,10 @@ fn enforce_check_ignores_ambient_git_repository_overrides() {
 
 #[test]
 fn enforce_check_ignores_ambient_git_object_directory() {
-    let object_source = TempDir::new().unwrap();
+    let object_source = TempDir::new_in(fixture_root()).unwrap();
     mark_git_repo(object_source.path());
 
-    let untrusted = TempDir::new().unwrap();
+    let untrusted = TempDir::new_in(fixture_root()).unwrap();
     std::fs::create_dir_all(untrusted.path().join(".git/refs")).unwrap();
     std::fs::write(untrusted.path().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
     std::fs::write(
@@ -705,7 +705,7 @@ fn write_payload(file_path: &str, session: &str, cwd: &Path) -> String {
 
 #[test]
 fn enforce_check_blocks_write_to_declared_generated_path() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     // Gate off so only the R6 generated-artifact block can fire — isolates it.
     std::fs::write(
         repo.path().join("aoa-policy.yaml"),
@@ -736,7 +736,7 @@ fn enforce_check_blocks_write_to_declared_generated_path() {
 
 #[test]
 fn enforce_check_normalizes_generated_path_targets_before_matching() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     std::fs::write(
         repo.path().join("aoa-policy.yaml"),
         "reproduction_required: false\n\
@@ -784,7 +784,7 @@ fn enforce_check_blocks_generated_symlink_alias_and_destination() {
             "generated",
         ),
     ] {
-        let repo = TempDir::new().unwrap();
+        let repo = TempDir::new_in(fixture_root()).unwrap();
         std::fs::write(
             repo.path().join("aoa-policy.yaml"),
             "reproduction_required: false\n\
@@ -812,7 +812,7 @@ fn enforce_check_blocks_generated_symlink_alias_and_destination() {
 /// liveness surface reads as evidence the plane is running.
 #[test]
 fn enforce_check_allows_write_target_outside_repository_ungated() {
-    let outside = TempDir::new().unwrap();
+    let outside = TempDir::new_in(fixture_root()).unwrap();
     // Planted so the absolute spelling names an *existing* file, exercising the
     // canonicalize-an-existing-component path rather than the absent-leaf one
     // the outcome-hook test below covers.
@@ -823,7 +823,7 @@ fn enforce_check_allows_write_target_outside_repository_ungated() {
         .iter()
         .enumerate()
     {
-        let repo = TempDir::new().unwrap();
+        let repo = TempDir::new_in(fixture_root()).unwrap();
         aoa_stdin()
             .args(["enforce", "check"])
             .write_stdin(write_payload(
@@ -847,9 +847,9 @@ fn enforce_check_allows_write_target_outside_repository_ungated() {
 /// activity the liveness surface would read as this plane enforcing.
 #[test]
 fn enforce_outcome_hooks_record_nothing_for_a_target_outside_the_repository() {
-    let outside = TempDir::new().unwrap();
+    let outside = TempDir::new_in(fixture_root()).unwrap();
     let absolute = outside.path().join("notes.md");
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
 
     for verb in ["commit", "fail", "deny"] {
         aoa_stdin()
@@ -874,7 +874,7 @@ fn enforce_outcome_hooks_record_nothing_for_a_target_outside_the_repository() {
 /// still denied.
 #[test]
 fn enforce_check_still_blocks_an_in_repo_write_without_reproduction() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
 
     aoa_stdin()
         .args(["enforce", "check"])
@@ -893,7 +893,7 @@ fn enforce_check_still_blocks_an_in_repo_write_without_reproduction() {
 /// stays gated.
 #[test]
 fn enforce_check_gates_a_relative_target_that_resolves_back_inside_the_repository() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
 
     aoa_stdin()
         .args(["enforce", "check"])
@@ -917,8 +917,8 @@ fn enforce_check_gates_a_relative_target_that_resolves_back_inside_the_repositor
 fn enforce_check_gates_a_repo_local_symlink_pointing_outside_the_repository() {
     use std::os::unix::fs::symlink;
 
-    let repo = TempDir::new().unwrap();
-    let outside = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
+    let outside = TempDir::new_in(fixture_root()).unwrap();
     let planted = outside.path().join("planted.rs");
     std::fs::write(&planted, "original\n").unwrap();
     symlink(outside.path(), repo.path().join("escape")).unwrap();
@@ -945,7 +945,7 @@ fn enforce_check_gates_a_repo_local_symlink_pointing_outside_the_repository() {
 fn enforce_check_blocks_write_to_bare_glob_generated_path() {
     // Back-compat form: a bare-string generated_paths entry (no `source:`). The
     // block must still fire; the redirect falls back to the glob itself.
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     std::fs::write(
         repo.path().join("aoa-policy.yaml"),
         "reproduction_required: false\n\
@@ -974,7 +974,7 @@ fn enforce_check_blocks_write_to_bare_glob_generated_path() {
 
 #[test]
 fn enforce_check_allows_write_to_non_generated_path() {
-    let repo = TempDir::new().unwrap();
+    let repo = TempDir::new_in(fixture_root()).unwrap();
     std::fs::write(
         repo.path().join("aoa-policy.yaml"),
         "reproduction_required: false\n\

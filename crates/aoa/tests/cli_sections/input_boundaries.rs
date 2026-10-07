@@ -8,7 +8,7 @@ use super::*;
 const CLEAN_TASK: &str = r#"{ "visible_success": true, "held_out_success": false }"#;
 
 fn compare_run(run_json: &str) -> assert_cmd::assert::Assert {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = dir.path().join("run.json");
     std::fs::write(&run, run_json).expect("run written");
     aoa()
@@ -76,7 +76,7 @@ fn compare_run_file_accepts_documented_schema() {
 // realistic drift from the schema `--canary`'s help publishes; see `CanarySpec`.
 #[test]
 fn r0b_canary_manifest_rejects_unknown_fields() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let manifest = dir.path().join("canary.json");
     std::fs::write(
         &manifest,

@@ -5,7 +5,7 @@ use super::*;
 /// A fixture tree passing all four level-1 mechanical criteria, so the
 /// checkbox baseline lands at level 2 (Documented).
 fn checkbox_repo() -> TempDir {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let p = dir.path();
     std::fs::write(p.join("Cargo.toml"), "[package]\n").unwrap();
     std::fs::write(p.join("README.md"), "# demo\n").unwrap();
@@ -96,7 +96,7 @@ fn gap_checkbox_baseline_show_excluded_lists_reasons() {
 
 #[test]
 fn gap_checkbox_baseline_passes_an_oxc_monorepo_root_with_colocated_tests() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     let p = repo.path();
     std::fs::write(p.join("package.json"), "{}\n").unwrap();
     std::fs::write(p.join("README.md"), "# demo\n").unwrap();
@@ -127,7 +127,7 @@ fn gap_checkbox_baseline_passes_an_oxc_monorepo_root_with_colocated_tests() {
 // A missing root fails loud with a typed error, never a level-1 default.
 #[test]
 fn gap_checkbox_baseline_missing_root_fails_loud() {
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     let missing = repo.path().join("nope");
     aoa()
         .args(["gap", "checkbox-baseline"])

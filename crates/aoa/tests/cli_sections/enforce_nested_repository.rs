@@ -129,7 +129,7 @@ fn assert_write_to_src_is_blocked_by_the_policy_of(governing: &Path, bystanders:
 
 #[test]
 fn enforce_check_applies_a_submodules_own_policy_not_its_superprojects() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let upstream = root.join("upstream");
     let parent = root.join("parent");
@@ -151,7 +151,7 @@ fn enforce_check_applies_a_submodules_own_policy_not_its_superprojects() {
 
 #[test]
 fn enforce_check_applies_the_superprojects_policy_to_the_superproject_not_its_submodules() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let upstream = root.join("upstream");
     let parent = root.join("parent");
@@ -176,7 +176,7 @@ fn enforce_check_applies_the_superprojects_policy_to_the_superproject_not_its_su
 
 #[test]
 fn enforce_check_applies_the_policy_of_a_submodule_of_a_submodule_not_either_superproject() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let innermost_upstream = root.join("innermost-upstream");
     let upstream = root.join("upstream");
@@ -202,7 +202,7 @@ fn enforce_check_applies_the_policy_of_a_submodule_of_a_submodule_not_either_sup
 
 #[test]
 fn enforce_check_refuses_a_marker_file_naming_a_planted_gitdir_instead_of_applying_any_policy() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let planted = root.join("planted");
     let parent = root.join("parent");
@@ -222,7 +222,7 @@ fn enforce_check_refuses_a_marker_file_naming_a_planted_gitdir_instead_of_applyi
 
 #[test]
 fn enforce_check_refuses_a_submodule_whose_core_worktree_names_another_directory() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let upstream = root.join("upstream");
     let parent = root.join("parent");
@@ -249,7 +249,7 @@ fn enforce_check_refuses_a_submodule_whose_core_worktree_names_another_directory
 #[test]
 fn enforce_check_refuses_a_nested_worktree_with_a_mismatched_backlink_instead_of_applying_its_parent_policy(
 ) {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let owner = root.join("owner");
     let parent = root.join("parent");
@@ -278,7 +278,7 @@ fn enforce_check_refuses_a_nested_worktree_with_a_mismatched_backlink_instead_of
 #[test]
 fn enforce_check_refuses_a_marker_whose_repository_is_rooted_above_the_parent_instead_of_applying_the_parent_policy(
 ) {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let elsewhere = root.join("elsewhere");
     let outer = root.join("outer");
@@ -364,7 +364,7 @@ fn assert_check_is_refused_by_the_policy_of(root: &Path, payload: String, policy
 
 #[test]
 fn enforce_check_holds_a_parents_refusal_inside_a_nested_repository_with_its_own_policy() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let parent = root.join("parent");
     let nested = parent.join("nested");
@@ -399,7 +399,7 @@ fn enforce_check_holds_a_parents_refusal_inside_a_nested_repository_with_its_own
 
 #[test]
 fn enforce_check_holds_a_superprojects_refusal_inside_a_submodule_with_its_own_policy() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let upstream = root.join("upstream");
     let parent = root.join("parent");
@@ -427,7 +427,7 @@ fn enforce_check_holds_a_superprojects_refusal_inside_a_submodule_with_its_own_p
 #[cfg(unix)]
 #[test]
 fn enforce_check_lets_a_nested_repository_named_one_space_add_a_refusal_its_parent_does_not_make() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let parent = root.join("parent");
     let nested = parent.join(" ");
@@ -452,7 +452,7 @@ fn enforce_check_lets_a_nested_repository_named_one_space_add_a_refusal_its_pare
 
 #[test]
 fn enforce_check_holds_a_parents_refusal_for_a_target_the_nested_repository_does_not_contain() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let parent = root.join("parent");
     let nested = parent.join("nested");
@@ -490,7 +490,7 @@ fn enforce_check_holds_a_parents_refusal_for_a_target_the_nested_repository_does
 
 #[test]
 fn enforce_check_holds_a_parents_reproduction_requirement_a_nested_policy_switches_off() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let parent = root.join("parent");
     let nested = parent.join("nested");
@@ -511,7 +511,7 @@ fn enforce_check_holds_a_parents_reproduction_requirement_a_nested_policy_switch
 
 #[test]
 fn enforce_check_lets_an_enclosing_repository_without_a_policy_contribute_nothing() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let parent = root.join("parent");
     let nested = parent.join("nested");
@@ -528,7 +528,7 @@ fn enforce_check_lets_an_enclosing_repository_without_a_policy_contribute_nothin
 
 #[test]
 fn enforce_check_refuses_a_nested_repository_whose_enclosing_repository_git_refuses() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let parent = root.join("parent");
     let nested = parent.join("nested");
@@ -554,7 +554,7 @@ fn enforce_check_refuses_a_nested_repository_whose_enclosing_repository_git_refu
 
 #[test]
 fn enforce_check_holds_a_session_in_the_parent_to_a_refusal_the_nested_repository_adds() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let parent = root.join("parent");
     let nested = parent.join("nested");
@@ -591,7 +591,7 @@ fn enforce_check_holds_a_session_in_the_parent_to_a_refusal_the_nested_repositor
 
 #[test]
 fn enforce_check_leaves_a_governed_repository_the_session_is_not_inside_out_of_scope() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let session = root.join("session");
     let unrelated = root.join("unrelated");
@@ -617,7 +617,7 @@ fn enforce_check_leaves_a_governed_repository_the_session_is_not_inside_out_of_s
 #[cfg(unix)]
 #[test]
 fn enforce_check_refuses_a_write_through_a_linked_directory_at_the_location_it_lands_in() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let parent = root.join("parent");
     init_git_repo(&parent);
@@ -641,7 +641,7 @@ fn enforce_check_refuses_a_write_through_a_linked_directory_at_the_location_it_l
 #[cfg(unix)]
 #[test]
 fn enforce_check_holds_a_write_through_a_link_to_the_policy_of_the_repository_it_lands_in() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let parent = root.join("parent");
     let elsewhere = root.join("elsewhere");
@@ -665,7 +665,7 @@ fn enforce_check_holds_a_write_through_a_link_to_the_policy_of_the_repository_it
 #[test]
 fn enforce_check_holds_a_session_in_an_enclosing_repository_to_the_alias_refusal_of_the_repository_spelling_the_link(
 ) {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let outer = root.join("outer");
     let inner = outer.join("inner");
@@ -701,7 +701,7 @@ fn enforce_check_holds_a_session_in_an_enclosing_repository_to_the_alias_refusal
 #[test]
 fn enforce_check_holds_a_write_spelled_through_a_link_above_every_repository_to_the_repository_owning_the_inner_link(
 ) {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let real = root.join("real");
     let o = real.join("o");
@@ -738,7 +738,7 @@ fn enforce_check_holds_a_write_spelled_through_a_link_above_every_repository_to_
 #[cfg(unix)]
 #[test]
 fn enforce_check_names_the_innermost_repository_refusing_a_write_through_a_nested_link() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let o = fixture.path().canonicalize().unwrap().join("o");
     let p = o.join("p");
     let q = p.join("q");
@@ -771,7 +771,7 @@ fn enforce_check_names_the_innermost_repository_refusing_a_write_through_a_neste
 #[cfg(unix)]
 #[test]
 fn enforce_check_holds_a_write_through_a_chain_of_links_to_every_repository_spelling_one() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let (a, b, c) = (root.join("a"), root.join("b"), root.join("c"));
     init_git_repo(&a);
@@ -813,7 +813,7 @@ fn enforce_check_holds_a_write_through_a_chain_of_links_to_every_repository_spel
 #[cfg(unix)]
 #[test]
 fn enforce_check_refuses_a_write_whose_path_loops_through_links() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let repo = fixture.path().canonicalize().unwrap().join("repo");
     init_git_repo(&repo);
     std::fs::write(repo.join("aoa-policy.yaml"), PERMISSIVE_POLICY).unwrap();
@@ -838,7 +838,7 @@ fn enforce_check_refuses_a_write_whose_path_loops_through_links() {
 #[cfg(unix)]
 #[test]
 fn enforce_check_refuses_a_write_through_a_link_whose_target_climbs_above_the_filesystem_root() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let o = root.join("o");
     init_git_repo(&o);
@@ -863,7 +863,7 @@ fn enforce_check_refuses_a_write_through_a_link_whose_target_climbs_above_the_fi
 
 #[test]
 fn enforce_check_refuses_a_write_spelled_above_the_filesystem_root() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let o = fixture.path().canonicalize().unwrap().join("o");
     init_git_repo(&o);
     std::fs::write(
@@ -888,7 +888,7 @@ fn enforce_check_refuses_a_write_spelled_above_the_filesystem_root() {
 #[cfg(unix)]
 #[test]
 fn enforce_check_names_a_path_refusal_over_an_inner_reproduction_requirement() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let o = fixture.path().canonicalize().unwrap().join("o");
     let p = o.join("p");
     let q = p.join("q");
@@ -938,7 +938,7 @@ fn assert_check_refuses_the_linked_policy_of(root: &Path, payload: String) {
 #[cfg(unix)]
 #[test]
 fn enforce_check_refuses_an_enclosing_policy_that_is_a_symlink_to_a_permissive_one() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let parent = root.join("parent");
     let nested = parent.join("nested");
@@ -962,7 +962,7 @@ fn enforce_check_refuses_an_enclosing_policy_that_is_a_symlink_to_a_permissive_o
 #[cfg(unix)]
 #[test]
 fn enforce_check_refuses_an_enclosing_policy_that_is_a_dangling_symlink() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let parent = root.join("parent");
     let nested = parent.join("nested");
@@ -984,7 +984,7 @@ fn enforce_check_refuses_an_enclosing_policy_that_is_a_dangling_symlink() {
 #[cfg(unix)]
 #[test]
 fn enforce_check_refuses_the_sessions_own_policy_when_it_is_a_symlink() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let repo = root.join("repo");
     init_git_repo(&repo);
@@ -999,7 +999,7 @@ fn enforce_check_refuses_the_sessions_own_policy_when_it_is_a_symlink() {
 
 #[test]
 fn enforce_check_refuses_a_malformed_enclosing_policy() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let parent = root.join("parent");
     let nested = parent.join("nested");
@@ -1024,7 +1024,7 @@ fn enforce_check_refuses_a_malformed_enclosing_policy() {
 
 #[test]
 fn enforce_check_refuses_a_nested_bare_repository_instead_of_applying_its_parent_policy() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let parent = root.join("parent");
     let bare = parent.join("nested.git");
@@ -1039,7 +1039,7 @@ fn enforce_check_refuses_a_nested_bare_repository_instead_of_applying_its_parent
 
 #[test]
 fn enforce_check_refuses_a_cwd_inside_the_git_directory_of_the_root_itself() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let parent = root.join("parent");
     init_git_repo(&parent);
@@ -1054,7 +1054,7 @@ fn enforce_check_refuses_a_cwd_inside_the_git_directory_of_the_root_itself() {
 
 #[test]
 fn enforce_check_refuses_a_write_into_the_hooks_of_the_sessions_own_git_directory() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = TempDir::new_in(fixture_root()).unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let parent = root.join("parent");
     init_git_repo(&parent);

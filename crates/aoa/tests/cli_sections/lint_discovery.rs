@@ -8,7 +8,7 @@ use super::*;
 #[test]
 fn lint_context_output_does_not_depend_on_what_an_ignore_file_link_leaving_the_directory_reaches() {
     for name in [".gitignore", ".ignore"] {
-        let dir = TempDir::new().expect("tempdir");
+        let dir = TempDir::new_in(fixture_root()).expect("tempdir");
         let repo = dir.path().join("repo");
         std::fs::create_dir(&repo).expect("create repo");
         std::fs::write(repo.join("AGENTS.md"), "# Root\n").expect("write root");
@@ -54,7 +54,7 @@ fn lint_outputs_within_five_seconds(dir: &Path) -> [std::process::Output; 2] {
 #[test]
 fn lint_context_output_does_not_depend_on_an_ignore_file_above_the_linted_directory() {
     for name in [".gitignore", ".ignore"] {
-        let dir = TempDir::new().expect("tempdir");
+        let dir = TempDir::new_in(fixture_root()).expect("tempdir");
         let repo = dir.path().join("repo");
         std::fs::create_dir(&repo).expect("create repo");
         std::fs::write(repo.join("AGENTS.md"), "# Root\n").expect("write root");
@@ -91,7 +91,7 @@ fn lint_context_output_does_not_depend_on_an_ignore_file_above_the_linted_direct
 #[test]
 fn lint_context_refuses_an_ignore_file_that_is_a_fifo_instead_of_waiting_on_it() {
     for name in [".gitignore", ".ignore"] {
-        let dir = TempDir::new().expect("tempdir");
+        let dir = TempDir::new_in(fixture_root()).expect("tempdir");
         let repo = dir.path().join("repo");
         std::fs::create_dir(&repo).expect("create repo");
         std::fs::write(repo.join("AGENTS.md"), "# Root\n").expect("write root");

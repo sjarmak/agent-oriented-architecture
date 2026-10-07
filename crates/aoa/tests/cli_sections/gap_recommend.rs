@@ -44,7 +44,7 @@ fn gap_json_carries_every_candidate_as_advisory() {
 #[test]
 fn recommend_human_surfaces_advisory_findings() {
     // A bare repo is missing Tier-1 planes and has no README -> several findings.
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     aoa()
         .args(["recommend", "--repo"])
         .arg(repo.path())
@@ -61,7 +61,7 @@ fn recommend_json_joins_findings_with_metric_and_fix() {
     // A manifest-bearing root without a README yields a navigability finding that
     // HAS a fix (navigability-anchor) but whose metric is Advisory -> the join
     // tags it advisory-only with the metric-advisory reason, fix surfaced.
-    let repo = TempDir::new().expect("tempdir");
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
     std::fs::write(
         repo.path().join("Cargo.toml"),
         "[package]\nname = \"demo\"\n",

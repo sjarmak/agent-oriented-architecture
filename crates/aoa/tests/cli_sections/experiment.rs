@@ -8,7 +8,7 @@ use sha2::Digest;
 // than laundering the historical degraded sentinels into measured evidence.
 #[test]
 fn experiment_edit_shape_emits_observations_but_no_measured_pairs() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let input = dir.path().join("falsify_input.json");
     let build_meta = dir.path().join("falsify_input.build.json");
 
@@ -59,7 +59,7 @@ fn copy_tree(from: &Path, to: &Path) {
 
 #[test]
 fn experiment_excludes_a_pair_whose_transcript_is_a_plain_text_answer() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let experiment = dir.path().join("experiment_answer");
     copy_tree(&fixture("experiment_answer"), &experiment);
     std::fs::copy(
@@ -116,7 +116,7 @@ fn experiment_excludes_a_pair_whose_transcript_is_a_plain_text_answer() {
 // the config carries the answer-family convention set.
 #[test]
 fn experiment_answer_shape_computes_real_convention_inputs() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let input = dir.path().join("falsify_input.json");
     let build_meta = dir.path().join("falsify_input.build.json");
     let observations_path = dir.path().join("falsify_input.observations.jsonl");
@@ -272,7 +272,7 @@ fn write_seed_one_manifest(dir: &Path) -> PathBuf {
 
 #[test]
 fn experiment_pair_yield_preflight_stops_low_yield_before_full_campaign() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let input = dir.path().join("falsify_input.json");
 
     aoa()
@@ -328,7 +328,7 @@ fn experiment_pair_yield_preflight_stops_low_yield_before_full_campaign() {
 
 #[test]
 fn experiment_rejects_manifest_missing_a_preregistered_repo() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let fixture_dir = fixture("experiment_answer");
     let mut manifest: Value = serde_json::from_str(
         &std::fs::read_to_string(fixture_dir.join("manifest.json")).expect("manifest"),
@@ -360,7 +360,7 @@ fn experiment_rejects_manifest_missing_a_preregistered_repo() {
 
 #[test]
 fn experiment_missing_calibration_is_excluded_data_not_a_command_failure() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let fixture_dir = fixture("experiment_answer");
     let mut manifest: Value = serde_json::from_str(
         &std::fs::read_to_string(fixture_dir.join("manifest.json")).expect("manifest"),
@@ -414,7 +414,7 @@ fn experiment_missing_calibration_is_excluded_data_not_a_command_failure() {
 
 #[test]
 fn experiment_observation_sidecar_is_byte_reproducible() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let run = |name: &str| {
         let out = dir.path().join(format!("{name}.json"));
         aoa()
@@ -434,7 +434,7 @@ fn experiment_observation_sidecar_is_byte_reproducible() {
 
 #[test]
 fn experiment_drops_divergent_unmeasured_edit_runs() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let output = aoa()
         .args(["eval", "experiment", "--manifest"])
         .arg(fixture("experiment_divergent/manifest.json"))
@@ -458,7 +458,7 @@ fn experiment_drops_divergent_unmeasured_edit_runs() {
 // emitted for transparency.
 #[test]
 fn falsify_abstains_on_degraded_convention_inputs() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let out = dir.path().join("falsification.json");
 
     aoa()
@@ -490,7 +490,7 @@ fn falsify_abstains_on_degraded_convention_inputs() {
 // precondition-driven one.
 #[test]
 fn falsify_real_verdict_has_no_precondition_marker() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let out = dir.path().join("falsification.json");
 
     aoa()
@@ -517,7 +517,7 @@ fn falsify_real_verdict_has_no_precondition_marker() {
 // must not inject raw control sequences into human output.
 #[test]
 fn falsify_escapes_untrusted_bias_warning_text() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = TempDir::new_in(fixture_root()).expect("tempdir");
     let out = dir.path().join("falsification.json");
 
     let assert = aoa()
