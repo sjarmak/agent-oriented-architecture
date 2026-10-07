@@ -1317,6 +1317,33 @@ fn a_back_pointer_that_is_a_fifo_is_refused_without_hanging() {
 
 #[cfg(unix)]
 #[test]
+fn a_linked_worktree_whose_back_pointer_cannot_be_resolved_names_that_path_as_the_reason() {
+    let (main, _linked_parent, linked) = linked_worktree_with_main_hook();
+    let looped = linked.join("looped");
+    std::os::unix::fs::symlink("looped", &looped).expect("plant a link loop");
+    let back_pointer = main.path().join(".git/worktrees/linked/gitdir");
+    std::fs::write(
+        &back_pointer,
+        format!("{}\n", looped.join(".git").display()),
+    )
+    .expect("point the back-pointer into the loop");
+
+    let report = audit(&linked, &audit_config()).expect("audit succeeds");
+
+    let plane = report
+        .items
+        .iter()
+        .find(|item| item.plane == Some(aoa_audit::EnforcementPlane::PreCommit))
+        .expect("the pre-commit plane is missing");
+    assert!(
+        plane.title.contains(&back_pointer.display().to_string()),
+        "{}",
+        plane.title
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn a_git_config_that_is_a_fifo_fails_the_audit_instead_of_hanging() {
     let repo = git_fixture_repo();
     write_hook(&repo.path().join(".git/hooks/pre-commit"));

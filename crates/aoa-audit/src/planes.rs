@@ -105,17 +105,12 @@ fn names_worktree(git_dir: &Path, common_dir: &Path, repo: &Path) -> Result<bool
     };
     if resolved != common_dir {
         return Ok(registers_worktree(common_dir, &resolved)
-            && linked_worktree_points_back(repo, git_dir).is_ok_and(|points_back| points_back));
+            && backlink_points_back(repo, git_dir)? == BacklinkVerdict::PointsBack);
     }
-    let points_back = match linked_worktree_points_back(repo, git_dir) {
-        Ok(true) => true,
-        Ok(false) => return Ok(false),
-        Err(RepositoryRootError::Backlink { source, .. })
-            if source.kind() == std::io::ErrorKind::NotFound =>
-        {
-            false
-        }
-        Err(trouble) => return Err(GitTrouble::Unasked(trouble.to_string())),
+    let points_back = match backlink_points_back(repo, git_dir)? {
+        BacklinkVerdict::PointsBack => true,
+        BacklinkVerdict::Mismatch => return Ok(false),
+        BacklinkVerdict::Absent => false,
     };
     Ok(
         match config_value(repo, git_dir, &["--get", "core.worktree"])? {
@@ -124,6 +119,26 @@ fn names_worktree(git_dir: &Path, common_dir: &Path, repo: &Path) -> Result<bool
             ConfigValue::Unreadable => false,
         },
     )
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum BacklinkVerdict {
+    PointsBack,
+    Mismatch,
+    Absent,
+}
+
+fn backlink_points_back(repo: &Path, git_dir: &Path) -> Result<BacklinkVerdict, GitTrouble> {
+    match linked_worktree_points_back(repo, git_dir) {
+        Ok(true) => Ok(BacklinkVerdict::PointsBack),
+        Ok(false) => Ok(BacklinkVerdict::Mismatch),
+        Err(RepositoryRootError::Backlink { source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            Ok(BacklinkVerdict::Absent)
+        }
+        Err(trouble) => Err(GitTrouble::Unasked(trouble.to_string())),
+    }
 }
 
 fn registers_worktree(common_dir: &Path, git_dir: &Path) -> bool {
