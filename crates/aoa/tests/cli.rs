@@ -30,6 +30,26 @@ fn make_fifo(path: &Path) {
     .expect("make a fifo");
 }
 
+#[test]
+fn the_temporary_directory_sits_under_no_git_marker() {
+    let temp = std::env::temp_dir();
+    let temp = temp
+        .canonicalize()
+        .unwrap_or_else(|err| panic!("temporary directory {}: {err}", temp.display()));
+    let markers: Vec<PathBuf> = temp
+        .ancestors()
+        .map(|dir| dir.join(".git"))
+        .filter(|marker| marker.symlink_metadata().is_ok())
+        .collect();
+    assert!(
+        markers.is_empty(),
+        "the CLI fixtures are created under {} and the repository-root resolver treats every \
+         ancestor .git marker as a repository, so {markers:?} would make every fixture a nested \
+         checkout; point TMPDIR at a directory with no .git above it",
+        temp.display()
+    );
+}
+
 #[cfg(unix)]
 #[path = "cli_sections/audit_git_environment.rs"]
 mod audit_git_environment;
