@@ -144,6 +144,30 @@ does not:
   answer is unaffected, the thread is one per timed-out call, and the process
   exits normally without joining it.
 
+### Case-folding volumes
+
+The write gate compares path spellings, not files. `scope_under` in
+`crates/aoa/src/commands/enforce.rs` resolves a hook's write target twice,
+lexically through `resolve_written_path` in
+`crates/aoa-path-trust/src/resolve.rs` and through `resolve_canonicalizing`,
+and `contained` strips the repository root from each to get the
+repository-relative string the policy's globs are matched against. Both
+resolutions keep the component spelling the hook payload used, or whatever
+`realpath` returns, and neither is defined to return the spelling the volume
+stores. On a volume that folds case (APFS and NTFS by default, an ext4
+directory with the casefold attribute) `PROTECTED/new` and `protected/new`
+name one entry, so a policy that protects `protected/**` is matched against
+the payload's spelling and misses the write while it lands in the protected
+directory. Byte-wise comparison is correct on every volume CI runs on, which is
+case-sensitive ext4 only.
+
+The site is recorded here rather than fixed because the fix waits on the same
+event as the sites above: a runner with a case-folding volume, on which a test
+can plant the two spellings and the gate can either compare the matched
+ancestor by device and inode or look up the stored spelling. Until then no
+test can prove either behaviour, and a check that is never run proves nothing
+(aoa-7pkom item 2).
+
 ## Consequences
 
 - A review that finds one of these arms is looking at a known residual, not a
@@ -167,3 +191,6 @@ does not:
 - `crates/aoa-path-trust/src/nofollow.rs` holds both arms of the trust-file
   open.
 - `crates/aoa-audit/src/answer.rs` holds both arms of the deadline reader.
+- `crates/aoa/src/commands/enforce.rs` (`scope_under`, `contained`) and
+  `crates/aoa-path-trust/src/resolve.rs` (`resolve_written_path`) hold the
+  spelling comparison the case-folding residual is about.
