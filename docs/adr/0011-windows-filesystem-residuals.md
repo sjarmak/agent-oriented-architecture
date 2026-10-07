@@ -161,12 +161,40 @@ the payload's spelling and misses the write while it lands in the protected
 directory. Byte-wise comparison is correct on every volume CI runs on, which is
 case-sensitive ext4 only.
 
-The site is recorded here rather than fixed because the fix waits on the same
-event as the sites above: a runner with a case-folding volume, on which a test
-can plant the two spellings and the gate can either compare the matched
-ancestor by device and inode or look up the stored spelling. Until then no
-test can prove either behaviour, and a check that is never run proves nothing
-(aoa-7pkom item 2).
+The site is recorded here rather than fixed because no test can yet prove a
+fix, and a check that is never run proves nothing (aoa-7pkom item 2,
+aoa-ntcxp). What a fix needs, and why neither form is written:
+
+- A comparison by device and inode: for a rule whose protected prefix is
+  literal (`protected/**`), stat the entry the rule names under the root and
+  the written path's ancestor at the same depth, and treat equal `(dev, ino)`
+  as matched whatever the spelling. This covers only rules with a literal
+  directory prefix. A rule whose protected component is itself a pattern
+  (`**/secret*`, `*.key`) names no entry to stat, so it is still matched
+  against the payload's spelling.
+- A lookup of the stored spelling: walk the written path's components under
+  the root, reading each directory to find the entry the volume holds for
+  that name, and match the rule against the spelling found. This covers every
+  rule at the cost of one directory read per component on every write.
+
+Either form is Linux-reachable code, and a casefold ext4 directory is the
+volume to prove it on: the kernel this was probed on (7.0.0, 2026-10-07)
+reports `casefold` under `/sys/fs/ext4/features`, and `mke2fs` 1.47.0 formats
+one with `-O casefold`, after which `chattr +F` marks a directory as folding.
+Mounting that image needs root. On the probing host `sudo` wants a password
+and `unshare -Urm` is refused (`kernel.apparmor_restrict_unprivileged_userns`
+is `1`), so no unprivileged route exists there. The `ubuntu-latest` runner CI
+uses has passwordless `sudo`, so a workflow step can `fallocate` an image,
+format it, loop-mount it and hand its path to a test through an environment
+variable; by [0004](0004-environment-dependent-test-skips.md) such a test
+prints a notice and returns when the variable is unset, and CI is what makes
+the notice legal. That step is the unblocking event for aoa-wj7pc, which
+plants both spellings and asserts the folded one is blocked. It has not been
+taken because the fix and its test would land unproved: the author cannot see
+the test fail where no folding volume can be mounted, and a CI change that
+mounts one is a decision for the project rather than a side effect of a
+follow-up. Until it is taken, byte-wise comparison stays the behaviour and
+this section is the record of what it misses.
 
 ## Consequences
 
