@@ -18,7 +18,7 @@
 //! # How the variants were triaged
 //!
 //! The three invariant submodules and the facade above them stated 21 distinct
-//! contexts; eleven variants carry them. Two groups are the same failure
+//! contexts; twelve variants carry them. Two groups are the same failure
 //! wearing a different noun and are deliberately merged; the merge is recorded
 //! here so a later reader can tell a decision from an oversight.
 //!
@@ -81,6 +81,9 @@ pub enum LiveLogError {
     /// followed, so nothing outside `<base>/.aoa/traces/` can be appended to.
     #[error("refusing to follow symlink at {}", path.display())]
     SymlinkRefused { path: PathBuf },
+
+    #[error(transparent)]
+    PathRefused(aoa_path_trust::PathTrustError),
 
     /// The log path resolved to something other than a regular file — a FIFO, a
     /// directory, a device node.

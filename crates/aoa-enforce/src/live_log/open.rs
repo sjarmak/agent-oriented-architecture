@@ -69,16 +69,15 @@ mod unix_log {
         .union(Mode::ROTH)
         .union(Mode::WOTH);
 
-    fn trust_error(source: PathTrustError) -> LiveLogError {
+    pub(super) fn trust_error(source: PathTrustError) -> LiveLogError {
         match source {
             PathTrustError::Io { path, source } => LiveLogError::Io {
                 action: IoAction::Open,
                 path,
                 source,
             },
-            refusal => LiveLogError::SymlinkRefused {
-                path: refusal.path().to_path_buf(),
-            },
+            PathTrustError::UnsafePath { path } => LiveLogError::SymlinkRefused { path },
+            refusal => LiveLogError::PathRefused(refusal),
         }
     }
 
@@ -196,6 +195,46 @@ mod tests {
     use aoa_trace::SpanType;
     use serde_json::Map;
     use std::time::Duration;
+
+    #[test]
+    fn a_trust_refusal_keeps_the_reason_it_was_refused_for() {
+        use super::unix_log::trust_error;
+        use aoa_path_trust::PathTrustError;
+        use std::path::PathBuf;
+
+        let path = PathBuf::from("/repo/.aoa/traces");
+
+        let err = trust_error(PathTrustError::TooManyLinks {
+            path: path.clone(),
+            limit: 40,
+        });
+        assert!(
+            matches!(&err, LiveLogError::PathRefused(PathTrustError::TooManyLinks { path: p, limit: 40 }) if *p == path),
+            "{err:?}"
+        );
+        assert!(err.to_string().contains("more than 40 links"), "{err}");
+
+        let err = trust_error(PathTrustError::NotRegularFile { path: path.clone() });
+        assert!(
+            matches!(&err, LiveLogError::PathRefused(PathTrustError::NotRegularFile { path: p }) if *p == path),
+            "{err:?}"
+        );
+
+        let err = trust_error(PathTrustError::UnsafePath { path: path.clone() });
+        assert!(
+            matches!(&err, LiveLogError::SymlinkRefused { path: p } if *p == path),
+            "{err:?}"
+        );
+
+        let err = trust_error(PathTrustError::Io {
+            path: path.clone(),
+            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        });
+        assert!(
+            matches!(&err, LiveLogError::Io { action: IoAction::Open, path: p, source } if *p == path && source.kind() == std::io::ErrorKind::PermissionDenied),
+            "{err:?}"
+        );
+    }
 
     #[test]
     fn an_opened_log_is_closed_on_exec() {
