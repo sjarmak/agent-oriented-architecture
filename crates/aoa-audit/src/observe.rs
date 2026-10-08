@@ -81,9 +81,8 @@ fn validate_trace_name(name: &str) -> Result<(), AuditError> {
 fn install_path_error(source: PathTrustError) -> AuditError {
     match source {
         PathTrustError::Io { path, source } => AuditError::Io { path, source },
-        other => AuditError::UnsafeInstallPath {
-            path: other.path().to_path_buf(),
-        },
+        PathTrustError::Symlink { path } => AuditError::UnsafeInstallPath { path },
+        refusal => AuditError::InstallPathRefused(refusal),
     }
 }
 
@@ -499,11 +498,59 @@ mod tests {
             Path::new("/absolute"),
             Path::new("back\\slash"),
         ] {
-            assert!(matches!(
-                reject_symlinked_path(root.path(), relative),
-                Err(AuditError::UnsafeInstallPath { .. })
-            ));
+            let result = reject_symlinked_path(root.path(), relative);
+            assert!(
+                matches!(
+                    &result,
+                    Err(AuditError::InstallPathRefused(PathTrustError::UnsafeComponent { path }))
+                        if path == &root.path().join(relative)
+                ),
+                "{relative:?} must be refused as a bad component, not as a symlink: {result:?}"
+            );
         }
+    }
+
+    #[test]
+    fn an_install_path_refusal_keeps_the_cause_it_was_refused_for() {
+        let path = PathBuf::from("/repo/.aoa/traces");
+
+        let err = install_path_error(PathTrustError::Symlink { path: path.clone() });
+        assert!(
+            matches!(&err, AuditError::UnsafeInstallPath { path: p } if *p == path),
+            "{err:?}"
+        );
+
+        let err = install_path_error(PathTrustError::UnsafeComponent { path: path.clone() });
+        assert!(
+            matches!(&err, AuditError::InstallPathRefused(PathTrustError::UnsafeComponent { path: p }) if *p == path),
+            "{err:?}"
+        );
+        assert!(!err.to_string().contains("symlink"), "{err}");
+
+        let err = install_path_error(PathTrustError::NotRegularFile { path: path.clone() });
+        assert!(
+            matches!(&err, AuditError::InstallPathRefused(PathTrustError::NotRegularFile { path: p }) if *p == path),
+            "{err:?}"
+        );
+
+        let err = install_path_error(PathTrustError::TooManyLinks {
+            path: path.clone(),
+            limit: 40,
+        });
+        assert!(
+            matches!(&err, AuditError::InstallPathRefused(PathTrustError::TooManyLinks { path: p, limit: 40 }) if *p == path),
+            "{err:?}"
+        );
+        assert!(err.to_string().contains("more than 40 links"), "{err}");
+
+        let err = install_path_error(PathTrustError::Io {
+            path: path.clone(),
+            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        });
+        assert!(
+            matches!(&err, AuditError::Io { path: p, source } if *p == path && source.kind() == std::io::ErrorKind::PermissionDenied),
+            "{err:?}"
+        );
     }
 
     #[cfg(unix)]

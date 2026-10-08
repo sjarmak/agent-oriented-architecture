@@ -18,7 +18,7 @@ pub enum PathTrustError {
     #[error("refusing to follow a symlink at {path}")]
     Symlink { path: PathBuf },
 
-    #[error("refusing {path}: a component of it is not a single relative name")]
+    #[error("refusing {path}: a component of it is not a single relative UTF-8 name")]
     UnsafeComponent { path: PathBuf },
 
     #[error("refusing {path}: it exists but is not a regular file")]

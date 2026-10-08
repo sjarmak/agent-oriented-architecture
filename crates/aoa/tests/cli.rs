@@ -99,7 +99,8 @@ fn require_private_dir(root: &Path) {
             && mode == FIXTURE_ROOT_MODE
             && metadata.uid() == rustix::process::getuid().as_raw(),
         "the fixture root {} exists but is not a directory of mode {FIXTURE_ROOT_MODE:o} owned by \
-         this user (found mode {mode:o}, uid {}); remove it or point TMPDIR elsewhere",
+         this user (found mode {mode:o}, uid {}); remove it or point XDG_RUNTIME_DIR, or TMPDIR \
+         when XDG_RUNTIME_DIR is unset or empty, elsewhere",
         root.display(),
         metadata.uid()
     );
@@ -109,7 +110,8 @@ fn require_private_dir(root: &Path) {
 fn require_private_dir(root: &Path) {
     assert!(
         root.symlink_metadata().map(|m| m.is_dir()).unwrap_or(false),
-        "the fixture root {} exists but is not a directory; remove it or point TMPDIR elsewhere",
+        "the fixture root {} exists but is not a directory; remove it or point XDG_RUNTIME_DIR, or \
+         TMPDIR when XDG_RUNTIME_DIR is unset or empty, elsewhere",
         root.display()
     );
 }
@@ -129,7 +131,8 @@ fn the_fixture_root_sits_under_no_git_marker() {
         markers.is_empty(),
         "the CLI fixtures are created under {} and the repository-root resolver treats every \
          ancestor .git marker as a repository, so {markers:?} would make every fixture a nested \
-         checkout; point TMPDIR at a directory with no .git above it",
+         checkout; point XDG_RUNTIME_DIR, or TMPDIR when XDG_RUNTIME_DIR is unset or empty, at a \
+         directory with no .git above it",
         root.display()
     );
 }

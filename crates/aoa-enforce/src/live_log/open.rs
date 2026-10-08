@@ -225,7 +225,11 @@ mod tests {
             matches!(&err, LiveLogError::SymlinkRefused { path: p } if *p == path),
             "{err:?}"
         );
-        assert!(err.to_string().contains("symlink"), "{err}");
+        assert_eq!(
+            err.to_string(),
+            PathTrustError::Symlink { path: path.clone() }.to_string(),
+            "the two symlink refusals must read the same"
+        );
 
         let err = trust_error(PathTrustError::UnsafeComponent { path: path.clone() });
         assert!(
@@ -233,7 +237,7 @@ mod tests {
             "a non-relative component is not a symlink and must not be reported as one: {err:?}"
         );
         assert!(
-            err.to_string().contains("not a single relative name"),
+            err.to_string().contains("not a single relative UTF-8 name"),
             "{err}"
         );
         assert!(!err.to_string().contains("symlink"), "{err}");

@@ -79,7 +79,7 @@ pub enum LiveLogError {
     // ---- containment: what the payload named must not redirect the write ----
     /// A symlink sat at a component of the log path. Refused rather than
     /// followed, so nothing outside `<base>/.aoa/traces/` can be appended to.
-    #[error("refusing to follow symlink at {}", path.display())]
+    #[error("refusing to follow a symlink at {}", path.display())]
     SymlinkRefused { path: PathBuf },
 
     #[error(transparent)]

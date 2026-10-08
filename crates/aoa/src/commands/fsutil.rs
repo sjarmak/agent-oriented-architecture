@@ -126,10 +126,16 @@ fn write_atomic_as(path: &Path, bytes: &[u8], access: FileAccess) -> Result<()> 
         std::fs::rename(&temporary, path)
             .with_context(|| format!("failed to install {}", path.display()))
     })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
+    let Err(err) = result else {
+        return Ok(());
+    };
+    match std::fs::remove_file(&temporary) {
+        Err(unlink) if unlink.kind() != std::io::ErrorKind::NotFound => Err(err.context(format!(
+            "the temporary file {} was left behind after the failed install: {unlink}",
+            temporary.display()
+        ))),
+        _ => Err(err),
     }
-    result
 }
 
 #[cfg(test)]
@@ -173,5 +179,24 @@ mod tests {
         assert!(err.to_string().contains("failed to read widget list"));
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_failed_install_reports_the_target_and_leaves_no_temporary_sibling() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("report.json");
+        std::fs::create_dir(&target).unwrap();
+
+        let err = write_atomic(&target, b"{}").unwrap_err();
+
+        assert!(
+            format!("{err:#}").contains(&format!("failed to install {}", target.display())),
+            "{err:#}"
+        );
+        let left_behind: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(left_behind, ["report.json"]);
     }
 }

@@ -51,9 +51,12 @@ pub enum AuditError {
     /// otherwise follow straight out of the repo.
     #[error(
         "refusing to install or write through an unsafe path at {path} \
-         (AOA does not follow symlinks or accept non-relative components)"
+         (AOA does not follow symlinks or reuse a node it did not install)"
     )]
     UnsafeInstallPath { path: PathBuf },
+
+    #[error(transparent)]
+    InstallPathRefused(aoa_path_trust::PathTrustError),
 
     #[error(
         "generated-file attributes at {path} exceed the audit's limit of {limit}; \
