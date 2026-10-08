@@ -76,7 +76,7 @@ mod unix_log {
                 path,
                 source,
             },
-            PathTrustError::UnsafePath { path } => LiveLogError::SymlinkRefused { path },
+            PathTrustError::Symlink { path } => LiveLogError::SymlinkRefused { path },
             refusal => LiveLogError::PathRefused(refusal),
         }
     }
@@ -220,11 +220,23 @@ mod tests {
             "{err:?}"
         );
 
-        let err = trust_error(PathTrustError::UnsafePath { path: path.clone() });
+        let err = trust_error(PathTrustError::Symlink { path: path.clone() });
         assert!(
             matches!(&err, LiveLogError::SymlinkRefused { path: p } if *p == path),
             "{err:?}"
         );
+        assert!(err.to_string().contains("symlink"), "{err}");
+
+        let err = trust_error(PathTrustError::UnsafeComponent { path: path.clone() });
+        assert!(
+            matches!(&err, LiveLogError::PathRefused(PathTrustError::UnsafeComponent { path: p }) if *p == path),
+            "a non-relative component is not a symlink and must not be reported as one: {err:?}"
+        );
+        assert!(
+            err.to_string().contains("not a single relative name"),
+            "{err}"
+        );
+        assert!(!err.to_string().contains("symlink"), "{err}");
 
         let err = trust_error(PathTrustError::Io {
             path: path.clone(),

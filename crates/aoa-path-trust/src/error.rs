@@ -15,13 +15,11 @@ pub struct UnsafePathComponent {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum PathTrustError {
-    /// The path contains a component that cannot be joined safely, or a node of
-    /// it already exists as a symlink the caller must not follow.
-    #[error(
-        "refusing to resolve through an unsafe path at {path} \
-         (no symlinks, no non-relative components)"
-    )]
-    UnsafePath { path: PathBuf },
+    #[error("refusing to follow a symlink at {path}")]
+    Symlink { path: PathBuf },
+
+    #[error("refusing {path}: a component of it is not a single relative name")]
+    UnsafeComponent { path: PathBuf },
 
     #[error("refusing {path}: it exists but is not a regular file")]
     NotRegularFile { path: PathBuf },
@@ -43,15 +41,20 @@ impl PathTrustError {
     /// The path the refusal or failure is about.
     pub fn path(&self) -> &std::path::Path {
         match self {
-            Self::UnsafePath { path }
+            Self::Symlink { path }
+            | Self::UnsafeComponent { path }
             | Self::NotRegularFile { path }
             | Self::TooManyLinks { path, .. }
             | Self::Io { path, .. } => path,
         }
     }
 
-    pub(crate) fn unsafe_path(path: impl Into<PathBuf>) -> Self {
-        Self::UnsafePath { path: path.into() }
+    pub(crate) fn symlink(path: impl Into<PathBuf>) -> Self {
+        Self::Symlink { path: path.into() }
+    }
+
+    pub(crate) fn unsafe_component(path: impl Into<PathBuf>) -> Self {
+        Self::UnsafeComponent { path: path.into() }
     }
 
     pub(crate) fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {

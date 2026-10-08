@@ -842,7 +842,7 @@ fn a_symlinked_database_is_refused_and_its_target_left_alone() {
     let err = trace_db_err(parse_trace_db(&trial(link.clone())).unwrap_err());
 
     assert!(
-        matches!(refused(&err), Some(aoa_path_trust::PathTrustError::UnsafePath { path }) if path == &link),
+        matches!(refused(&err), Some(aoa_path_trust::PathTrustError::Symlink { path }) if path == &link),
         "{err}"
     );
     assert_eq!(names_in(dir.path()), ["trace.db"]);
@@ -862,7 +862,7 @@ fn a_symlinked_write_ahead_log_is_refused() {
     let err = trace_db_err(parse_trace_db(&trial).unwrap_err());
 
     assert!(
-        matches!(refused(&err), Some(aoa_path_trust::PathTrustError::UnsafePath { path }) if path == &wal),
+        matches!(refused(&err), Some(aoa_path_trust::PathTrustError::Symlink { path }) if path == &wal),
         "{err}"
     );
 }

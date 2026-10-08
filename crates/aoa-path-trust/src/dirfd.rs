@@ -41,7 +41,7 @@ pub fn map_nofollow_error(
     source: std::io::Error,
 ) -> PathTrustError {
     if source.raw_os_error() == Some(Errno::LOOP.raw_os_error()) || is_symlink_at(parent, name) {
-        PathTrustError::unsafe_path(path)
+        PathTrustError::symlink(path)
     } else {
         PathTrustError::io(path, source)
     }
@@ -68,7 +68,7 @@ fn single_component(name: &OsStr, path: &Path) -> Result<(), PathTrustError> {
     if accepted {
         Ok(())
     } else {
-        Err(PathTrustError::unsafe_path(path))
+        Err(PathTrustError::unsafe_component(path))
     }
 }
 
@@ -159,7 +159,7 @@ mod tests {
             open_dir_at(&root_fd, "linked", &path),
             open_or_create_dir_at(&root_fd, "linked", &path),
         ] {
-            assert!(matches!(result, Err(PathTrustError::UnsafePath { .. })));
+            assert!(matches!(result, Err(PathTrustError::Symlink { .. })));
         }
         assert_eq!(
             std::fs::read_dir(outside.path())
@@ -172,7 +172,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn classifies_a_link_whose_name_is_not_utf8() {
+    fn refuses_a_non_utf8_name_before_opening_even_when_it_is_a_link() {
         use std::os::unix::ffi::OsStrExt;
 
         let root = tempfile::tempdir().expect("create root");
@@ -187,7 +187,10 @@ mod tests {
             open_dir_at(&root_fd, name, &path),
             open_or_create_dir_at(&root_fd, name, &path),
         ] {
-            assert!(matches!(result, Err(PathTrustError::UnsafePath { .. })));
+            assert!(matches!(
+                result,
+                Err(PathTrustError::UnsafeComponent { .. })
+            ));
         }
         assert_eq!(
             std::fs::read_dir(outside.path())
@@ -216,7 +219,7 @@ mod tests {
                 assert!(
                     matches!(
                         &result,
-                        Err(PathTrustError::UnsafePath { path: refused }) if refused == &path
+                        Err(PathTrustError::UnsafeComponent { path: refused }) if refused == &path
                     ),
                     "{name:?} must be refused before anything is opened: {result:?}"
                 );
@@ -281,7 +284,7 @@ mod tests {
             assert!(
                 matches!(
                     &result,
-                    Err(PathTrustError::UnsafePath { path: refused }) if refused == &path
+                    Err(PathTrustError::UnsafeComponent { path: refused }) if refused == &path
                 ),
                 "{name:?} must be refused before anything is opened: {result:?}"
             );

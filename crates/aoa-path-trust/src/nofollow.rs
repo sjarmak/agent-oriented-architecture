@@ -22,7 +22,7 @@ pub fn is_symlink_nofollow(node: &Path) -> Result<bool, PathTrustError> {
 /// Refuse a single node that already exists as a symlink.
 pub fn reject_symlink(node: &Path) -> Result<(), PathTrustError> {
     if is_symlink_nofollow(node)? {
-        return Err(PathTrustError::unsafe_path(node));
+        return Err(PathTrustError::symlink(node));
     }
     Ok(())
 }
@@ -45,13 +45,13 @@ pub fn safe_join_nofollow(root: &Path, relative: &Path) -> Result<PathBuf, PathT
     let mut resolved = root.to_path_buf();
     for component in relative.components() {
         let Component::Normal(part) = component else {
-            return Err(PathTrustError::unsafe_path(root.join(relative)));
+            return Err(PathTrustError::unsafe_component(root.join(relative)));
         };
         let Some(part_name) = part.to_str() else {
-            return Err(PathTrustError::unsafe_path(root.join(relative)));
+            return Err(PathTrustError::unsafe_component(root.join(relative)));
         };
         validate_single_component(part_name)
-            .map_err(|_| PathTrustError::unsafe_path(root.join(relative)))?;
+            .map_err(|_| PathTrustError::unsafe_component(root.join(relative)))?;
         resolved.push(part);
         reject_symlink(&resolved)?;
     }
@@ -65,7 +65,7 @@ pub fn read_regular_file_nofollow(
     use std::io::Read;
 
     let path = directory.join(name);
-    validate_single_component(name).map_err(|_| PathTrustError::unsafe_path(&path))?;
+    validate_single_component(name).map_err(|_| PathTrustError::unsafe_component(&path))?;
     let Some(mut file) = open_regular_file_nofollow(&path)? else {
         return Ok(None);
     };
@@ -78,9 +78,9 @@ pub fn read_regular_file_nofollow(
 pub fn open_regular_file_nofollow(path: &Path) -> Result<Option<File>, PathTrustError> {
     let (Some(directory), Some(name)) = (path.parent(), path.file_name().and_then(OsStr::to_str))
     else {
-        return Err(PathTrustError::unsafe_path(path));
+        return Err(PathTrustError::unsafe_component(path));
     };
-    validate_single_component(name).map_err(|_| PathTrustError::unsafe_path(path))?;
+    validate_single_component(name).map_err(|_| PathTrustError::unsafe_component(path))?;
     let directory = if directory.as_os_str().is_empty() {
         Path::new(".")
     } else {
@@ -111,7 +111,7 @@ fn open_regular_file_in(
         Err(source) => return Err(PathTrustError::io(path, source)),
     };
     if metadata.file_type().is_symlink() {
-        return Err(PathTrustError::unsafe_path(path));
+        return Err(PathTrustError::symlink(path));
     }
     if !metadata.is_file() {
         return Err(PathTrustError::NotRegularFile {
@@ -164,7 +164,7 @@ mod tests {
             assert!(
                 matches!(
                     &result,
-                    Err(PathTrustError::UnsafePath { path }) if path == &root.path().join(name)
+                    Err(PathTrustError::Symlink { path }) if path == &root.path().join(name)
                 ),
                 "{name} must be refused, not followed or read as absent: {result:?}"
             );
@@ -248,7 +248,7 @@ mod tests {
         for path in ["/", ".", "..", ""] {
             let result = open_regular_file_nofollow(Path::new(path));
             assert!(
-                matches!(result, Err(PathTrustError::UnsafePath { .. })),
+                matches!(result, Err(PathTrustError::UnsafeComponent { .. })),
                 "{path:?}: {result:?}"
             );
         }
@@ -277,7 +277,7 @@ mod tests {
             assert!(
                 matches!(
                     &result,
-                    Err(PathTrustError::UnsafePath { path }) if path == &root.join(name)
+                    Err(PathTrustError::UnsafeComponent { path }) if path == &root.join(name)
                 ),
                 "{name:?} must be refused, not resolved beneath or above the root: {result:?}"
             );
@@ -299,7 +299,7 @@ mod tests {
         assert!(
             matches!(
                 &result,
-                Err(PathTrustError::UnsafePath { path })
+                Err(PathTrustError::UnsafeComponent { path })
                     if path == &root.path().join("linked/policy.yaml")
             ),
             "the outside file must not be read through the link: {result:?}"
@@ -320,7 +320,7 @@ mod tests {
         ] {
             assert!(matches!(
                 safe_join_nofollow(root.path(), relative),
-                Err(PathTrustError::UnsafePath { .. })
+                Err(PathTrustError::UnsafeComponent { .. })
             ));
         }
     }
@@ -338,7 +338,7 @@ mod tests {
             .expect_err("walker must reject the planted link");
         assert!(matches!(
             err,
-            PathTrustError::UnsafePath { path } if path == root.path().join("nested")
+            PathTrustError::Symlink { path } if path == root.path().join("nested")
         ));
     }
 
