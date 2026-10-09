@@ -69,9 +69,11 @@ pub fn parse_live_log(raw: &str) -> Result<ShimResult, ShimError> {
 mod tests {
     use super::*;
     use aoa_codeprobe_shim::run_conformance;
+    use aoa_trace::TRACE_SCHEMA;
+    use serde_json::Value;
 
     const LOG: &str = concat!(
-        r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#,
+        r#"{"type":"test.run","source":"native","seq":0,"attributes":{"command":"cargo test"}}"#,
         "\n",
         r#"{"type":"write.attempt","source":"native","seq":1,"attributes":{"path":"src/lib.rs"}}"#,
         "\n",
@@ -89,6 +91,21 @@ mod tests {
             .spans
             .iter()
             .all(|s| s.source == SpanSource::Native));
+    }
+
+    #[test]
+    fn fixture_output_validates_against_the_published_schema() {
+        let result = parse_live_log(LOG).expect("well-formed log");
+        let schema: Value = serde_json::from_str(TRACE_SCHEMA).expect("schema is valid JSON");
+        let validator = jsonschema::draft202012::options()
+            .build(&schema)
+            .expect("schema compiles");
+        let trace = serde_json::to_value(result.trace).expect("trace serializes");
+        let errors: Vec<_> = validator
+            .iter_errors(&trace)
+            .map(|error| error.to_string())
+            .collect();
+        assert!(errors.is_empty(), "schema errors: {errors:?}");
     }
 
     #[test]

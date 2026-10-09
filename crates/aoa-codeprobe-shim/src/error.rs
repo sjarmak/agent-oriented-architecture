@@ -33,9 +33,6 @@ pub enum ShimError {
     #[error("mapped log verb '{verb}' at line {line} has no target")]
     MissingLogTarget { line: usize, verb: String },
 
-    #[error("mapped tool '{tool}' carries no usable '{target}' target")]
-    MissingToolTarget { tool: String, target: &'static str },
-
     #[error(
         "transcript carries no stream-json `assistant` or `user` event \
          ({lines} non-blank line(s) read), so no agent action is observable"

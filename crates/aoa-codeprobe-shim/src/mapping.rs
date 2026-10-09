@@ -91,17 +91,18 @@ pub(crate) fn classify(name: &str, input: &Value) -> Mapping {
             target_fields: &["pattern", "query"],
         },
         "Bash" => {
-            let command = input.get("command").and_then(Value::as_str).unwrap_or("");
-            if bash_runs_tests(command) {
+            let command = input
+                .get("command")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty());
+            if command.is_some_and(|value| !bash_runs_tests(value)) {
+                Mapping::Unknown
+            } else {
                 Mapping::Span {
                     span_type: SpanType::TestRun,
                     target_key: "command",
                     target_fields: &["command"],
                 }
-            } else {
-                // Non-test Bash is out of the 8-span vocabulary; surface it as
-                // unknown so it is logged rather than miscategorised.
-                Mapping::Unknown
             }
         }
         _ if name.to_ascii_lowercase().contains("search") => Mapping::Span {
@@ -173,6 +174,23 @@ mod tests {
             classify("Bash", &json!({"command": "ls -la"})),
             Mapping::Unknown
         );
+    }
+
+    #[test]
+    fn bash_without_a_usable_command_maps_to_an_unresolved_test_run() {
+        for input in [json!({}), json!({"command": null}), json!({"command": " "})] {
+            match classify("Bash", &input) {
+                Mapping::Span {
+                    span_type,
+                    target_key,
+                    ..
+                } => {
+                    assert_eq!(span_type, SpanType::TestRun);
+                    assert_eq!(target_key, "command");
+                }
+                Mapping::Unknown => panic!("targetless Bash should remain observable"),
+            }
+        }
     }
 
     #[test]

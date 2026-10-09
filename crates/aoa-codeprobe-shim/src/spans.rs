@@ -80,14 +80,8 @@ impl SpanBuilder {
                     Some(target) => {
                         attributes.insert(target_key.to_string(), Value::String(target));
                     }
-                    None if span_type == SpanType::WriteAttempt => {
-                        attributes.insert("target_unresolved".to_string(), Value::Bool(true));
-                    }
                     None => {
-                        return Err(ShimError::MissingToolTarget {
-                            tool: name.to_string(),
-                            target: target_key,
-                        });
+                        attributes.insert("target_unresolved".to_string(), Value::Bool(true));
                     }
                 }
                 attributes.insert("tool".to_string(), Value::String(name.to_string()));

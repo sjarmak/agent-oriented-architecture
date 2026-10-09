@@ -189,9 +189,17 @@ fn published_schema_requires_metric_attributes_by_span_type() {
 }
 
 #[test]
-fn published_schema_accepts_only_an_explicit_true_unresolved_target_marker() {
+fn published_schema_accepts_only_an_explicit_true_native_unresolved_target_marker() {
     let validator = schema_validator();
-    for span_type in ["write.attempt", "write.committed", "write.blocked"] {
+    for span_type in [
+        "retrieval.search",
+        "file.read",
+        "symbol.lookup",
+        "write.attempt",
+        "write.committed",
+        "write.blocked",
+        "test.run",
+    ] {
         let unresolved = json!({
             "spans": [{
                 "type": span_type,
@@ -221,15 +229,7 @@ fn published_schema_accepts_only_an_explicit_true_unresolved_target_marker() {
         assert!(!validator.is_valid(&absent), "{span_type}");
     }
 
-    for span_type in [
-        "retrieval.search",
-        "file.read",
-        "symbol.lookup",
-        "write.failed",
-        "write.denied",
-        "test.run",
-        "gateway.invoke",
-    ] {
+    for span_type in ["write.failed", "write.denied", "gateway.invoke"] {
         let unresolved = json!({
             "spans": [{
                 "type": span_type,
@@ -251,20 +251,28 @@ fn published_schema_accepts_only_an_explicit_true_unresolved_target_marker() {
     });
     assert!(!validator.is_valid(&reconstructed));
 
-    let contradictory = json!({
-        "spans": [{
-            "type": "write.blocked",
-            "source": "native",
-            "seq": 0,
-            "attributes": {
-                "path": "src/lib.rs",
-                "policy": "generated_artifact",
-                "source": "src/source.rs",
-                "target_unresolved": true
-            }
-        }]
-    });
-    assert!(!validator.is_valid(&contradictory));
+    for (span_type, target_key, target) in [
+        ("retrieval.search", "query", "needle"),
+        ("file.read", "path", "src/lib.rs"),
+        ("symbol.lookup", "symbol", "main"),
+        ("write.attempt", "path", "src/lib.rs"),
+        ("write.committed", "path", "src/lib.rs"),
+        ("write.blocked", "policy", "reproduction_before_mutation"),
+        ("test.run", "command", "cargo test"),
+    ] {
+        let contradictory = json!({
+            "spans": [{
+                "type": span_type,
+                "source": "native",
+                "seq": 0,
+                "attributes": {
+                    target_key: target,
+                    "target_unresolved": true
+                }
+            }]
+        });
+        assert!(!validator.is_valid(&contradictory), "{span_type}");
+    }
 }
 
 #[test]

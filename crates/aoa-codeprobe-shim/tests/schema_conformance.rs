@@ -53,21 +53,92 @@ fn reconstructed_targetless_mapped_line_names_the_line() {
     }
 }
 
+#[hegel::test]
+fn every_unusable_native_nonwrite_target_is_preserved_as_unresolved(tc: TestCase) {
+    let (name, target_key) = tc.draw(gs::sampled_from(vec![
+        ("Read", "file_path"),
+        ("Grep", "pattern"),
+        ("Bash", "command"),
+    ]));
+    let unusable = match tc.draw(gs::sampled_from(vec![0_u8, 1, 2, 3, 4])) {
+        0 => Value::Null,
+        1 => json!(false),
+        2 => json!(7),
+        3 => json!(""),
+        _ => json!("  "),
+    };
+    let transcript = json!({
+        "type": "assistant",
+        "message": {
+            "content": [{
+                "type": "tool_use",
+                "id": "tool",
+                "name": name,
+                "input": {(target_key): unusable}
+            }]
+        }
+    })
+    .to_string();
+    let result = parse_transcript(&transcript).expect("unusable native target converts");
+    let span = &result.trace.spans[0];
+    let expected = match name {
+        "Read" => SpanType::FileRead,
+        "Grep" => SpanType::RetrievalSearch,
+        "Bash" => SpanType::TestRun,
+        _ => unreachable!(),
+    };
+    assert_eq!(result.trace.spans.len(), 2);
+    assert_eq!(span.span_type, expected);
+    assert_eq!(span.attributes.get("tool"), Some(&json!(name)));
+    assert_eq!(span.attributes.get("target_unresolved"), Some(&json!(true)));
+    assert!(result.warnings.is_empty());
+    assert_schema_valid(&result.trace);
+}
+
 #[test]
-fn native_targetless_nonwrite_tools_fail_loudly() {
-    for (name, input) in [("Read", json!({})), ("Grep", json!({}))] {
-        let transcript = json!({
-            "type": "assistant",
-            "message": {
-                "content": [{"type": "tool_use", "id": "tool", "name": name, "input": input}]
-            }
-        })
-        .to_string();
-        let err = parse_transcript(&transcript).unwrap_err();
-        let rendered = err.to_string();
-        assert!(rendered.contains(name), "{name}: {rendered}");
-        assert!(rendered.contains("target"), "{name}: {rendered}");
+fn targetless_nonwrite_tools_do_not_hide_a_well_formed_write() {
+    let transcript = json!({
+        "type": "assistant",
+        "message": {
+            "content": [
+                {"type": "tool_use", "id": "read", "name": "Read", "input": {}},
+                {"type": "tool_use", "id": "grep", "name": "Grep", "input": {}},
+                {"type": "tool_use", "id": "test", "name": "Bash", "input": {}},
+                {
+                    "type": "tool_use",
+                    "id": "write",
+                    "name": "Write",
+                    "input": {"file_path": "src/lib.rs"}
+                }
+            ]
+        }
+    })
+    .to_string();
+    let result = parse_transcript(&transcript).expect("targetless native tools convert");
+    assert_eq!(result.trace.spans.len(), 4);
+    assert_eq!(
+        result
+            .trace
+            .spans
+            .iter()
+            .map(|span| span.span_type)
+            .collect::<Vec<_>>(),
+        vec![
+            SpanType::FileRead,
+            SpanType::RetrievalSearch,
+            SpanType::TestRun,
+            SpanType::WriteAttempt,
+        ]
+    );
+    assert_eq!(
+        result.trace.spans[3].attributes.get("path"),
+        Some(&json!("src/lib.rs"))
+    );
+    for span in &result.trace.spans[..3] {
+        assert_eq!(span.attributes.get("target_unresolved"), Some(&json!(true)));
     }
+    assert!(result.warnings.is_empty());
+    assert_schema_valid(&result.trace);
 }
 
 #[hegel::test]

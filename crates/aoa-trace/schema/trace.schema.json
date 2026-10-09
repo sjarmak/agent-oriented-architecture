@@ -88,7 +88,7 @@
               "type": "string"
             },
             "target_unresolved": {
-              "description": "True when a native write attempt, commit, or block preserves observed write intent or outcome but its tool call supplied no usable path.",
+              "description": "True when a native span preserves an observed tool call or write outcome whose tool input supplied no usable target.",
               "const": true
             },
             "tool": {
@@ -109,7 +109,12 @@
           "then": {
             "required": ["attributes"],
             "properties": {
-              "attributes": { "required": ["query"] }
+              "attributes": {
+                "anyOf": [
+                  { "required": ["query"] },
+                  { "required": ["target_unresolved"] }
+                ]
+              }
             }
           }
         },
@@ -118,7 +123,6 @@
             "properties": {
               "type": {
                 "enum": [
-                  "file.read",
                   "write.failed",
                   "write.denied"
                 ]
@@ -130,6 +134,25 @@
             "required": ["attributes"],
             "properties": {
               "attributes": { "required": ["path"] }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": { "const": "file.read" }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "required": ["attributes"],
+            "properties": {
+              "attributes": {
+                "anyOf": [
+                  { "required": ["path"] },
+                  { "required": ["target_unresolved"] }
+                ]
+              }
             }
           }
         },
@@ -167,7 +190,12 @@
           "then": {
             "required": ["attributes"],
             "properties": {
-              "attributes": { "required": ["symbol"] }
+              "attributes": {
+                "anyOf": [
+                  { "required": ["symbol"] },
+                  { "required": ["target_unresolved"] }
+                ]
+              }
             }
           }
         },
@@ -204,16 +232,23 @@
                 "not": {
                   "anyOf": [
                     { "required": ["path"] },
-                    { "required": ["policy"] }
+                    { "required": ["policy"] },
+                    { "required": ["query"] },
+                    { "required": ["symbol"] },
+                    { "required": ["command"] }
                   ]
                 }
               },
               "source": { "const": "native" },
               "type": {
                 "enum": [
+                  "retrieval.search",
+                  "file.read",
+                  "symbol.lookup",
                   "write.attempt",
                   "write.committed",
-                  "write.blocked"
+                  "write.blocked",
+                  "test.run"
                 ]
               }
             }
@@ -248,7 +283,12 @@
           "then": {
             "required": ["attributes"],
             "properties": {
-              "attributes": { "required": ["command"] }
+              "attributes": {
+                "anyOf": [
+                  { "required": ["command"] },
+                  { "required": ["target_unresolved"] }
+                ]
+              }
             }
           }
         },
