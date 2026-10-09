@@ -75,14 +75,21 @@ impl SpanBuilder {
                 target_key,
                 target_fields,
             } => {
-                let target = resolve_target(name, target_fields, input).ok_or_else(|| {
-                    ShimError::MissingToolTarget {
-                        tool: name.to_string(),
-                        target: target_key,
-                    }
-                })?;
                 let mut attributes = Map::new();
-                attributes.insert(target_key.to_string(), Value::String(target));
+                match resolve_target(name, target_fields, input) {
+                    Some(target) => {
+                        attributes.insert(target_key.to_string(), Value::String(target));
+                    }
+                    None if span_type == SpanType::WriteAttempt => {
+                        attributes.insert("target_unresolved".to_string(), Value::Bool(true));
+                    }
+                    None => {
+                        return Err(ShimError::MissingToolTarget {
+                            tool: name.to_string(),
+                            target: target_key,
+                        });
+                    }
+                }
                 attributes.insert("tool".to_string(), Value::String(name.to_string()));
 
                 if span_type == SpanType::WriteAttempt {

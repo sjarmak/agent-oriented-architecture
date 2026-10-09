@@ -84,7 +84,16 @@ mod tests {
             .as_object()
             .expect("attribute properties");
         let expected = [
-            "command", "path", "policy", "query", "reason", "results", "source", "symbol", "tool",
+            "command",
+            "path",
+            "policy",
+            "query",
+            "reason",
+            "results",
+            "source",
+            "symbol",
+            "target_unresolved",
+            "tool",
         ];
 
         assert_eq!(properties.len(), expected.len());
@@ -96,5 +105,6 @@ mod tests {
                 .as_str()
                 .is_some_and(|text| !text.is_empty()));
         }
+        assert_eq!(properties["target_unresolved"]["const"], true);
     }
 }

@@ -189,6 +189,85 @@ fn published_schema_requires_metric_attributes_by_span_type() {
 }
 
 #[test]
+fn published_schema_accepts_only_an_explicit_true_unresolved_target_marker() {
+    let validator = schema_validator();
+    for span_type in ["write.attempt", "write.committed", "write.blocked"] {
+        let unresolved = json!({
+            "spans": [{
+                "type": span_type,
+                "source": "native",
+                "seq": 0,
+                "attributes": {"target_unresolved": true}
+            }]
+        });
+        let false_marker = json!({
+            "spans": [{
+                "type": span_type,
+                "source": "native",
+                "seq": 0,
+                "attributes": {"target_unresolved": false}
+            }]
+        });
+        let absent = json!({
+            "spans": [{
+                "type": span_type,
+                "source": "native",
+                "seq": 0,
+                "attributes": {}
+            }]
+        });
+        assert!(validator.is_valid(&unresolved), "{span_type}");
+        assert!(!validator.is_valid(&false_marker), "{span_type}");
+        assert!(!validator.is_valid(&absent), "{span_type}");
+    }
+
+    for span_type in [
+        "retrieval.search",
+        "file.read",
+        "symbol.lookup",
+        "write.failed",
+        "write.denied",
+        "test.run",
+        "gateway.invoke",
+    ] {
+        let unresolved = json!({
+            "spans": [{
+                "type": span_type,
+                "source": "native",
+                "seq": 0,
+                "attributes": {"target_unresolved": true}
+            }]
+        });
+        assert!(!validator.is_valid(&unresolved), "{span_type}");
+    }
+
+    let reconstructed = json!({
+        "spans": [{
+            "type": "write.attempt",
+            "source": "reconstructed",
+            "seq": 0,
+            "attributes": {"target_unresolved": true}
+        }]
+    });
+    assert!(!validator.is_valid(&reconstructed));
+
+    let contradictory = json!({
+        "spans": [{
+            "type": "write.blocked",
+            "source": "native",
+            "seq": 0,
+            "attributes": {
+                "path": "src/lib.rs",
+                "policy": "generated_artifact",
+                "source": "src/source.rs",
+                "target_unresolved": true
+            }
+        }]
+    });
+    assert!(!validator.is_valid(&contradictory));
+}
+
+#[test]
 fn published_schema_preserves_absent_results_as_no_evidence() {
     let retrieval_without_results = json!({
         "spans": [{

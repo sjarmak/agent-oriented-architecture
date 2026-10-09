@@ -1,5 +1,6 @@
 use aoa_codeprobe_shim::{parse_transcript, GenericLogBackend, TraceBackend};
-use aoa_trace::TRACE_SCHEMA;
+use aoa_trace::{SpanType, TRACE_SCHEMA};
+use hegel::{generators as gs, TestCase};
 use serde_json::{json, Value};
 
 fn schema_validator() -> jsonschema::Validator {
@@ -53,18 +54,8 @@ fn reconstructed_targetless_mapped_line_names_the_line() {
 }
 
 #[test]
-fn native_targetless_mapped_tools_fail_loudly() {
-    for (name, input) in [
-        ("Read", json!({})),
-        ("Read", json!({"file_path": null})),
-        ("Read", json!({"file_path": "  "})),
-        ("Grep", json!({})),
-        ("Grep", json!({"pattern": 7})),
-        ("Grep", json!({"pattern": ""})),
-        ("Write", json!({})),
-        ("Write", json!({"file_path": false})),
-        ("Write", json!({"file_path": ""})),
-    ] {
+fn native_targetless_nonwrite_tools_fail_loudly() {
+    for (name, input) in [("Read", json!({})), ("Grep", json!({}))] {
         let transcript = json!({
             "type": "assistant",
             "message": {
@@ -77,6 +68,79 @@ fn native_targetless_mapped_tools_fail_loudly() {
         assert!(rendered.contains(name), "{name}: {rendered}");
         assert!(rendered.contains("target"), "{name}: {rendered}");
     }
+}
+
+#[hegel::test]
+fn every_unusable_native_write_target_is_preserved_as_unresolved(tc: TestCase) {
+    let name = tc.draw(gs::sampled_from(vec![
+        "Edit",
+        "Write",
+        "MultiEdit",
+        "NotebookEdit",
+    ]));
+    let unusable = match tc.draw(gs::sampled_from(vec![0_u8, 1, 2, 3, 4])) {
+        0 => Value::Null,
+        1 => json!(false),
+        2 => json!(7),
+        3 => json!(""),
+        _ => json!("  "),
+    };
+    let transcript = json!({
+        "type": "assistant",
+        "message": {
+            "content": [{
+                "type": "tool_use",
+                "id": "tool",
+                "name": name,
+                "input": {
+                    "file_path": unusable,
+                    "notebook_path": null,
+                    "path": null
+                }
+            }]
+        }
+    })
+    .to_string();
+    let result = parse_transcript(&transcript).expect("unusable native target converts");
+    let span = &result.trace.spans[0];
+    assert_eq!(span.span_type, SpanType::WriteAttempt);
+    assert_eq!(span.attributes.get("tool"), Some(&json!(name)));
+    assert_eq!(span.attributes.get("target_unresolved"), Some(&json!(true)));
+    assert_schema_valid(&result.trace);
+}
+
+#[test]
+fn targetless_write_error_result_preserves_blocked_lifecycle() {
+    assert_targetless_write_result(true, SpanType::WriteBlocked);
+}
+
+#[test]
+fn targetless_write_success_result_preserves_committed_lifecycle() {
+    assert_targetless_write_result(false, SpanType::WriteCommitted);
+}
+
+fn assert_targetless_write_result(is_error: bool, expected: SpanType) {
+    let transcript = format!(
+        "{}\n{}",
+        json!({
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "tool_use", "id": "write", "name": "Write", "input": {}}]
+            }
+        }),
+        json!({
+            "type": "user",
+            "message": {
+                "content": [{"type": "tool_result", "tool_use_id": "write", "is_error": is_error}]
+            }
+        })
+    );
+    let result = parse_transcript(&transcript).expect("targetless write result converts");
+    assert_eq!(result.trace.spans.len(), 1);
+    let span = &result.trace.spans[0];
+    assert_eq!(span.span_type, expected);
+    assert_eq!(span.attributes.get("target_unresolved"), Some(&json!(true)));
+    assert_schema_valid(&result.trace);
 }
 
 #[test]
