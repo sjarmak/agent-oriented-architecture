@@ -21,23 +21,29 @@
     {
       "type": "write.attempt",
       "source": "native",
-      "seq": 2
+      "seq": 2,
+      "attributes": { "path": "src/lib.rs" }
     },
     {
       "type": "write.blocked",
       "source": "native",
       "seq": 2,
-      "attributes": { "reason": "policy" }
+      "attributes": {
+        "policy": "reproduction_before_mutation",
+        "reason": "policy"
+      }
     },
     {
       "type": "test.run",
       "source": "native",
-      "seq": 3
+      "seq": 3,
+      "attributes": { "command": "cargo test" }
     },
     {
       "type": "gateway.invoke",
       "source": "native",
-      "seq": 4
+      "seq": 4,
+      "attributes": { "tool": "mcp__codegraph__search" }
     },
     {
       "type": "abstain",

@@ -1,0 +1,10 @@
+{
+  "spans": [
+    {
+      "type": "file.read",
+      "source": "native",
+      "seq": 0,
+      "attributes": { "filepath": "src/lib.rs" }
+    }
+  ]
+}

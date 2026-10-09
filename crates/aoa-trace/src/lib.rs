@@ -75,4 +75,26 @@ mod tests {
         // Other attribute keys stay unconstrained.
         assert!(attributes["additionalProperties"].is_null());
     }
+
+    #[test]
+    fn embedded_schema_declares_the_attribute_vocabulary() {
+        let schema: serde_json::Value =
+            serde_json::from_str(TRACE_SCHEMA).expect("schema is valid JSON");
+        let properties = schema["$defs"]["span"]["properties"]["attributes"]["properties"]
+            .as_object()
+            .expect("attribute properties");
+        let expected = [
+            "command", "path", "policy", "query", "reason", "results", "source", "symbol", "tool",
+        ];
+
+        assert_eq!(properties.len(), expected.len());
+        for key in expected {
+            let declaration = properties
+                .get(key)
+                .unwrap_or_else(|| panic!("missing {key}"));
+            assert!(declaration["description"]
+                .as_str()
+                .is_some_and(|text| !text.is_empty()));
+        }
+    }
 }
