@@ -129,12 +129,16 @@ fn write_atomic_as(path: &Path, bytes: &[u8], access: FileAccess) -> Result<()> 
     let Err(err) = result else {
         return Ok(());
     };
-    match std::fs::remove_file(&temporary) {
-        Err(unlink) if unlink.kind() != std::io::ErrorKind::NotFound => Err(err.context(format!(
-            "the temporary file {} was left behind after the failed install: {unlink}",
+    Err(finish_failed_atomic_write(err, &temporary))
+}
+
+fn finish_failed_atomic_write(err: anyhow::Error, temporary: &Path) -> anyhow::Error {
+    match std::fs::remove_file(temporary) {
+        Err(unlink) if unlink.kind() != std::io::ErrorKind::NotFound => err.context(format!(
+            "the temporary file {} was left behind after the atomic write failed (removing it failed: {unlink})",
             temporary.display()
-        ))),
-        _ => Err(err),
+        )),
+        _ => err,
     }
 }
 
@@ -198,5 +202,26 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(left_behind, ["report.json"]);
+    }
+
+    #[test]
+    fn failed_cleanup_reports_both_failures_and_the_temporary_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let temporary = dir.path().join("temporary");
+        std::fs::create_dir(&temporary).unwrap();
+        let original = anyhow::anyhow!("original atomic write failure");
+
+        let err = finish_failed_atomic_write(original, &temporary);
+        let rendered = format!("{err:#}");
+
+        assert!(
+            rendered.contains(&temporary.display().to_string()),
+            "{rendered}"
+        );
+        assert!(rendered.contains("removing it failed"), "{rendered}");
+        assert!(
+            rendered.contains("original atomic write failure"),
+            "{rendered}"
+        );
     }
 }

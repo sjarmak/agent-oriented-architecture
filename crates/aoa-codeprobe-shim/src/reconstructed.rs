@@ -83,7 +83,7 @@ pub(crate) fn parse_generic_log(raw: &str) -> Result<ShimResult, ShimError> {
     let mut warnings: Vec<String> = Vec::new();
     let mut seq: u64 = 0;
 
-    for line in raw.lines() {
+    for (line_index, line) in raw.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -95,13 +95,17 @@ pub(crate) fn parse_generic_log(raw: &str) -> Result<ShimResult, ShimError> {
 
         match map_verb(verb) {
             Some((span_type, target_key)) => {
+                if target.is_empty() {
+                    return Err(ShimError::MissingLogTarget {
+                        line: line_index + 1,
+                        verb: verb.to_string(),
+                    });
+                }
                 if spans.len() >= MAX_SPANS {
                     return Err(ShimError::TooManySpans { max: MAX_SPANS });
                 }
                 let mut attributes = Map::new();
-                if !target.is_empty() {
-                    attributes.insert(target_key.to_string(), Value::String(target.to_string()));
-                }
+                attributes.insert(target_key.to_string(), Value::String(target.to_string()));
                 spans.push(Span {
                     span_type,
                     source: SpanSource::Reconstructed,
@@ -123,6 +127,7 @@ pub(crate) fn parse_generic_log(raw: &str) -> Result<ShimResult, ShimError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hegel::{generators as gs, TestCase};
 
     #[test]
     fn maps_each_verb_to_its_span_in_order() {
@@ -179,5 +184,23 @@ mod tests {
         let raw = "read p\n".repeat(MAX_SPANS + 1);
         let err = parse_generic_log(&raw).unwrap_err();
         assert!(matches!(err, ShimError::TooManySpans { max } if max == MAX_SPANS));
+    }
+
+    #[hegel::test]
+    fn every_mapped_verb_without_a_target_is_rejected(tc: TestCase) {
+        let verb = tc.draw(gs::sampled_from(vec![
+            "search",
+            "read",
+            "write",
+            "committed",
+            "blocked",
+            "test",
+            "gateway",
+        ]));
+        let err = parse_generic_log(verb).unwrap_err();
+        assert!(matches!(
+            err,
+            ShimError::MissingLogTarget { line: 1, verb: found } if found == verb
+        ));
     }
 }

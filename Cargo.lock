@@ -179,6 +179,8 @@ version = "0.1.0"
 dependencies = [
  "aoa-path-trust",
  "aoa-trace",
+ "hegeltest",
+ "jsonschema",
  "rusqlite",
  "serde",
  "serde_json",
@@ -750,6 +752,27 @@ name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
+
+[[package]]
+name = "hegeltest"
+version = "0.47.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c8361f5ba09b21e4659d76f262ee3df97bfa292e59b218b075e9453620d71a6"
+dependencies = [
+ "hegeltest-macros",
+ "parking_lot",
+]
+
+[[package]]
+name = "hegeltest-macros"
+version = "0.47.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b767549c4d29cb37ee4baff6d74114b6b6ca3a39e33e22a7f7510addd045a8a1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
 
 [[package]]
 name = "ignore"

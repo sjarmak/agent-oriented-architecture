@@ -51,7 +51,7 @@ pub enum AuditError {
     /// otherwise follow straight out of the repo.
     #[error(
         "refusing to install or write through an unsafe path at {path} \
-         (AOA does not follow symlinks or reuse a node it did not install)"
+         (symlink or unsupported install location)"
     )]
     UnsafeInstallPath { path: PathBuf },
 
@@ -83,4 +83,20 @@ pub enum AuditError {
          refusing to report its pre-commit plane"
     )]
     GitUnresponsive { repo: PathBuf, seconds: u64 },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsafe_install_path_message_does_not_claim_provenance() {
+        let err = AuditError::UnsafeInstallPath {
+            path: PathBuf::from("nested/traces"),
+        };
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("nested/traces"));
+        assert!(!rendered.contains("did not install"));
+    }
 }

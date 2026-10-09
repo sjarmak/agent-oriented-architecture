@@ -6,6 +6,7 @@
 
 # Rust build output
 target/
+.hegel/
 
 # AOA toolkit local state
 .aoa/

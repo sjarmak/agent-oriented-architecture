@@ -75,10 +75,14 @@ impl SpanBuilder {
                 target_key,
                 target_fields,
             } => {
+                let target = resolve_target(name, target_fields, input).ok_or_else(|| {
+                    ShimError::MissingToolTarget {
+                        tool: name.to_string(),
+                        target: target_key,
+                    }
+                })?;
                 let mut attributes = Map::new();
-                if let Some(target) = resolve_target(name, target_fields, input) {
-                    attributes.insert(target_key.to_string(), Value::String(target));
-                }
+                attributes.insert(target_key.to_string(), Value::String(target));
                 attributes.insert("tool".to_string(), Value::String(name.to_string()));
 
                 if span_type == SpanType::WriteAttempt {
@@ -159,6 +163,11 @@ fn resolve_target(name: &str, fields: &[&str], input: &Value) -> Option<String> 
     }
     fields
         .iter()
-        .find_map(|k| input.get(*k).and_then(Value::as_str))
+        .find_map(|k| {
+            input
+                .get(*k)
+                .and_then(Value::as_str)
+                .filter(|target| !target.trim().is_empty())
+        })
         .map(str::to_owned)
 }

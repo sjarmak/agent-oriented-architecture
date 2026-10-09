@@ -14,3 +14,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
 tempfile = "3.10.1"
+
+[dev-dependencies]
+hegeltest = "=0.47.4"
+jsonschema = { version = "0.58.6", default-features = false }
