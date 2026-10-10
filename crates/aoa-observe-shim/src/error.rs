@@ -27,7 +27,6 @@ pub enum ObserveShimError {
         source: ShimError,
     },
 
-    /// A `.json` trace file was not schema-valid trace JSON.
     #[error("trace file {path} is not schema-valid: {source}")]
     Schema {
         path: PathBuf,
@@ -35,9 +34,6 @@ pub enum ObserveShimError {
         source: serde_json::Error,
     },
 
-    /// A parsed trace failed post-parse validation: an unsupported wire-format
-    /// version ([`aoa_trace::TraceEnvelope::into_trace`]) or out-of-order spans
-    /// ([`aoa_trace::validate_trace_value`]).
     #[error("trace {path} failed validation")]
     InvalidTrace {
         path: PathBuf,
