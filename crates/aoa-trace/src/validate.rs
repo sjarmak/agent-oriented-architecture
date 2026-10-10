@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use crate::envelope::TraceEnvelope;
 use crate::error::TraceError;
@@ -13,6 +14,9 @@ use crate::TRACE_SCHEMA;
 /// only trips pathological or hostile input so a crafted file cannot exhaust
 /// memory before the schema parse.
 const MAX_TRACE_BYTES: u64 = 16 * 1024 * 1024;
+
+static PUBLISHED_SCHEMA_VALIDATOR: OnceLock<Result<jsonschema::Validator, String>> =
+    OnceLock::new();
 
 /// Read `path` into a `String`, rejecting anything past `max` bytes.
 ///
@@ -99,15 +103,22 @@ pub fn validate_trace_value(trace: &Trace) -> Result<TraceReport, TraceError> {
     Ok(report)
 }
 
+pub fn validate_stored_trace_value(trace: &Trace) -> Result<TraceReport, TraceError> {
+    validate_trace_content(trace)
+}
+
 fn validate_published_schema(value: &serde_json::Value) -> Result<(), TraceError> {
-    let schema =
-        serde_json::from_str(TRACE_SCHEMA).map_err(|source| TraceError::PublishedSchema {
-            detail: source.to_string(),
-        })?;
-    let validator = jsonschema::draft202012::options()
-        .build(&schema)
-        .map_err(|source| TraceError::PublishedSchema {
-            detail: source.to_string(),
+    let validator = PUBLISHED_SCHEMA_VALIDATOR
+        .get_or_init(|| {
+            let schema: serde_json::Value =
+                serde_json::from_str(TRACE_SCHEMA).map_err(|source| source.to_string())?;
+            jsonschema::draft202012::options()
+                .build(&schema)
+                .map_err(|source| source.to_string())
+        })
+        .as_ref()
+        .map_err(|detail| TraceError::PublishedSchema {
+            detail: detail.clone(),
         })?;
     validator
         .validate(value)

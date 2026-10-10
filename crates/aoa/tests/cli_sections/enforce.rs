@@ -180,7 +180,7 @@ fn enforce_writer_repairs_and_reports_an_unterminated_tail() {
     std::fs::write(
         &log,
         concat!(
-            r#"{"type":"test.run","source":"native","seq":0,"attributes":{"command":"cargo test"}}"#,
+            r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#,
             "\n",
             r#"{"type":"write.attempt""#
         ),

@@ -230,7 +230,7 @@ fn audit_fail_on_tier1_exits_zero_without_tier1_gap() {
     std::fs::create_dir_all(repo.path().join(".aoa/traces")).unwrap();
     std::fs::write(
         repo.path().join(".aoa/traces/live-s1.jsonl"),
-        "{\"type\":\"test.run\",\"source\":\"native\",\"seq\":0,\"attributes\":{\"command\":\"cargo test\"}}\n",
+        "{\"type\":\"test.run\",\"source\":\"native\",\"seq\":0,\"attributes\":{}}\n",
     )
     .unwrap();
 
@@ -239,6 +239,32 @@ fn audit_fail_on_tier1_exits_zero_without_tier1_gap() {
         .arg(repo.path())
         .assert()
         .success();
+}
+
+#[test]
+fn audit_trace_error_detail_is_rendered_once() {
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
+    let traces = repo.path().join(".aoa/traces");
+    std::fs::create_dir_all(&traces).expect("create traces dir");
+    std::fs::write(
+        traces.join("live-out-of-order.jsonl"),
+        concat!(
+            r#"{"type":"test.run","source":"native","seq":2,"attributes":{"command":"cargo test"}}"#,
+            "\n",
+            r#"{"type":"write.attempt","source":"native","seq":1,"attributes":{"path":"src/lib.rs"}}"#,
+            "\n",
+        ),
+    )
+    .expect("write trace");
+
+    let output = aoa()
+        .args(["audit", "--repo"])
+        .arg(repo.path())
+        .output()
+        .expect("run");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(stderr.matches("out of order").count(), 1, "{stderr}");
 }
 
 #[test]

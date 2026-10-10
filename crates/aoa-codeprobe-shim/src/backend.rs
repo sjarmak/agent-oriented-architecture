@@ -214,6 +214,32 @@ mod tests {
         }
     }
 
+    struct SchemaInvalidBackend;
+    impl TraceBackend for SchemaInvalidBackend {
+        fn backend_id(&self) -> &'static str {
+            "schema-invalid"
+        }
+        fn contract_version(&self) -> &'static str {
+            CONTRACT_VERSION
+        }
+        fn provenance(&self) -> SpanSource {
+            SpanSource::Native
+        }
+        fn parse(&self, _raw: &str) -> Result<ShimResult, ShimError> {
+            Ok(ShimResult {
+                trace: Trace {
+                    spans: vec![Span {
+                        span_type: SpanType::FileRead,
+                        source: SpanSource::Native,
+                        seq: 0,
+                        attributes: Default::default(),
+                    }],
+                },
+                warnings: vec![],
+            })
+        }
+    }
+
     #[test]
     fn freshness_gate_rejects_a_stale_backend() {
         let err = run_conformance(&StaleBackend, "").unwrap_err();
@@ -238,6 +264,15 @@ mod tests {
                 found: SpanSource::Reconstructed,
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn conformance_rejects_a_schema_invalid_span() {
+        let err = run_conformance(&SchemaInvalidBackend, "").unwrap_err();
+        assert!(matches!(
+            err,
+            ShimError::InvalidTrace(aoa_trace::TraceError::PublishedSchema { .. })
         ));
     }
 

@@ -19,7 +19,7 @@ pub(super) fn seed_live_sessions(repo: &Path, n: usize) {
         repo,
         n,
         concat!(
-            r#"{"type":"test.run","source":"native","seq":0,"attributes":{"command":"cargo test"}}"#,
+            r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#,
             "\n",
             r#"{"type":"write.attempt","source":"native","seq":1,"attributes":{"path":"src/app.py"}}"#,
             "\n",
@@ -50,7 +50,7 @@ fn attempt_only_sessions_are_not_counted_as_landed_edits() {
         repo.path(),
         10,
         concat!(
-            r#"{"type":"test.run","source":"native","seq":0,"attributes":{"command":"cargo test"}}"#,
+            r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#,
             "\n",
             r#"{"type":"write.attempt","source":"native","seq":1,"attributes":{"path":"src/app.py"}}"#,
             "\n",

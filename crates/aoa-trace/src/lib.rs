@@ -21,7 +21,7 @@ pub use metric_input::{
 pub use model::{Span, Trace};
 pub use report::TraceReport;
 pub use span_type::{SpanSource, SpanType};
-pub use validate::{validate_trace, validate_trace_value};
+pub use validate::{validate_stored_trace_value, validate_trace, validate_trace_value};
 
 /// The published JSON Schema for a trace file, embedded at compile time.
 ///

@@ -23,7 +23,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use aoa_codeprobe_shim::{read_capped, read_capped_framed};
-use aoa_trace::{validate_trace_value, Trace};
+use aoa_trace::{validate_stored_trace_value, Trace};
 use serde_json::Value;
 
 use crate::backend::parse_live_log;
@@ -214,7 +214,7 @@ fn ingest(
                 source,
             })?
     };
-    validate_trace_value(&trace).map_err(|source| ObserveShimError::InvalidTrace {
+    validate_stored_trace_value(&trace).map_err(|source| ObserveShimError::InvalidTrace {
         path: path.to_path_buf(),
         source,
     })?;

@@ -7,8 +7,7 @@ use aoa_codeprobe_shim::{GenericLogBackend, TraceBackend};
 use aoa_observe_shim::{held_out_edits, load_corpus, ObserveShimError};
 use tempfile::TempDir;
 
-const SPAN_TEST_RUN: &str =
-    r#"{"type":"test.run","source":"native","seq":0,"attributes":{"command":"cargo test"}}"#;
+const SPAN_TEST_RUN: &str = r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#;
 /// Intent, logged before the tool runs. On its own it proves nothing landed.
 const SPAN_WRITE: &str =
     r#"{"type":"write.attempt","source":"native","seq":1,"attributes":{"path":"src/lib.rs"}}"#;
@@ -279,7 +278,7 @@ fn a_partially_written_final_line_ingests_as_the_committed_prefix() {
 #[test]
 fn out_of_order_trace_fails_validation() {
     let repo = TempDir::new().expect("tempdir");
-    let reversed = r#"{"type":"test.run","source":"native","seq":5,"attributes":{"command":"cargo test"}}
+    let reversed = r#"{"type":"test.run","source":"native","seq":5,"attributes":{}}
 {"type":"write.attempt","source":"native","seq":1,"attributes":{"path":"a.rs"}}"#;
     std::fs::write(
         traces_dir(repo.path()).join("live-ooo.jsonl"),

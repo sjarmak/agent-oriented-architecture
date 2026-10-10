@@ -868,7 +868,7 @@ fn seed_edit_sessions(repo: &Path, n: usize) {
     // what attests the edit landed. Only the latter makes the session count as
     // a held-out observation.
     let spans = concat!(
-        r#"{"type":"test.run","source":"native","seq":0,"attributes":{"command":"cargo test"}}"#,
+        r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#,
         "\n",
         r#"{"type":"write.attempt","source":"native","seq":1,"attributes":{"path":"src/lib.rs"}}"#,
         "\n",
@@ -1046,8 +1046,7 @@ fn edit_free_sessions_do_not_satisfy_the_behavioral_window() {
     let repo = fixture_repo();
     let traces = repo.path().join(".aoa").join("traces");
     std::fs::create_dir_all(&traces).expect("create traces dir");
-    let span =
-        r#"{"type":"test.run","source":"native","seq":0,"attributes":{"command":"cargo test"}}"#;
+    let span = r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#;
     for i in 0..MIN_HELD_OUT_OBSERVATIONS {
         std::fs::write(traces.join(format!("live-s{i}.jsonl")), format!("{span}\n"))
             .expect("write live log");
