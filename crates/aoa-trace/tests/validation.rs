@@ -89,13 +89,23 @@ fn in_memory_ordering_failure_is_path_free() {
                 span_type: SpanType::TestRun,
                 source: SpanSource::Native,
                 seq: 5,
-                attributes: serde_json::Map::new(),
+                attributes: [(
+                    "command".to_string(),
+                    Value::String("cargo test".to_string()),
+                )]
+                .into_iter()
+                .collect(),
             },
             Span {
                 span_type: SpanType::TestRun,
                 source: SpanSource::Native,
                 seq: 2,
-                attributes: serde_json::Map::new(),
+                attributes: [(
+                    "command".to_string(),
+                    Value::String("cargo test".to_string()),
+                )]
+                .into_iter()
+                .collect(),
             },
         ],
     };
@@ -118,12 +128,13 @@ fn schema_invalid_trace_is_rejected() {
 
 #[test]
 fn published_schema_rejects_a_file_read_without_path() {
-    let value: Value = serde_json::from_str(
-        &std::fs::read_to_string(fixture("missing_path_attribute.json")).expect("fixture reads"),
-    )
-    .expect("fixture is JSON");
+    let path = fixture("missing_path_attribute.json");
+    let value: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("fixture reads"))
+            .expect("fixture is JSON");
 
     assert!(!schema_validator().is_valid(&value));
+    assert!(validate_trace(&path).is_err());
 }
 
 #[test]
@@ -353,13 +364,23 @@ fn versioned_trace_round_trips_through_disk() {
                 span_type: SpanType::RetrievalSearch,
                 source: SpanSource::Native,
                 seq: 0,
-                attributes: serde_json::Map::new(),
+                attributes: [(
+                    "query".to_string(),
+                    Value::String("validate_trace".to_string()),
+                )]
+                .into_iter()
+                .collect(),
             },
             Span {
                 span_type: SpanType::TestRun,
                 source: SpanSource::Native,
                 seq: 1,
-                attributes: serde_json::Map::new(),
+                attributes: [(
+                    "command".to_string(),
+                    Value::String("cargo test".to_string()),
+                )]
+                .into_iter()
+                .collect(),
             },
         ],
     };
@@ -430,13 +451,23 @@ fn equal_seq_is_allowed() {
                 span_type: SpanType::TestRun,
                 source: SpanSource::Native,
                 seq: 4,
-                attributes: serde_json::Map::new(),
+                attributes: [(
+                    "command".to_string(),
+                    Value::String("cargo test".to_string()),
+                )]
+                .into_iter()
+                .collect(),
             },
             Span {
                 span_type: SpanType::TestRun,
                 source: SpanSource::Native,
                 seq: 4,
-                attributes: serde_json::Map::new(),
+                attributes: [(
+                    "command".to_string(),
+                    Value::String("cargo test".to_string()),
+                )]
+                .into_iter()
+                .collect(),
             },
         ],
     };

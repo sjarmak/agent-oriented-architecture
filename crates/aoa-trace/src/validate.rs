@@ -7,6 +7,7 @@ use crate::error::TraceError;
 use crate::model::Trace;
 use crate::report::TraceReport;
 use crate::span_type::SpanSource;
+use crate::TRACE_SCHEMA;
 
 /// Largest trace file read into memory. Trace files are small by nature; the cap
 /// only trips pathological or hostile input so a crafted file cannot exhaust
@@ -67,18 +68,22 @@ pub fn validate_trace(path: &Path) -> Result<TraceReport, TraceError> {
             source,
         })?;
 
-    // Version-check the envelope before trusting the spans: a mismatch means a
-    // producer-side format change, so fail fast rather than mis-parse. Both
-    // content checks are path-free, so one tagging covers them — which is also
-    // what keeps the wrapper depth-1: there is a single place it is built, and
-    // it only ever wraps an unwrapped inner failure.
-    envelope
+    let report = envelope
         .into_trace()
-        .and_then(|trace| validate_trace_value(&trace))
+        .and_then(|trace| validate_trace_content(&trace))
         .map_err(|source| TraceError::InvalidFile {
             path: path.to_path_buf(),
             source: Box::new(source),
-        })
+        })?;
+    let value = serde_json::from_str(&raw).map_err(|source| TraceError::Schema {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    validate_published_schema(&value).map_err(|source| TraceError::InvalidFile {
+        path: path.to_path_buf(),
+        source: Box::new(source),
+    })?;
+    Ok(report)
 }
 
 /// Validate an already-parsed [`Trace`], producing a report.
@@ -86,6 +91,32 @@ pub fn validate_trace(path: &Path) -> Result<TraceReport, TraceError> {
 /// Separated from disk IO so callers holding a `Trace` in memory can reuse the
 /// ordering checks and reporting.
 pub fn validate_trace_value(trace: &Trace) -> Result<TraceReport, TraceError> {
+    let report = validate_trace_content(trace)?;
+    let value = serde_json::to_value(trace).map_err(|source| TraceError::PublishedSchema {
+        detail: source.to_string(),
+    })?;
+    validate_published_schema(&value)?;
+    Ok(report)
+}
+
+fn validate_published_schema(value: &serde_json::Value) -> Result<(), TraceError> {
+    let schema =
+        serde_json::from_str(TRACE_SCHEMA).map_err(|source| TraceError::PublishedSchema {
+            detail: source.to_string(),
+        })?;
+    let validator = jsonschema::draft202012::options()
+        .build(&schema)
+        .map_err(|source| TraceError::PublishedSchema {
+            detail: source.to_string(),
+        })?;
+    validator
+        .validate(value)
+        .map_err(|source| TraceError::PublishedSchema {
+            detail: source.to_string(),
+        })
+}
+
+fn validate_trace_content(trace: &Trace) -> Result<TraceReport, TraceError> {
     let mut counts: BTreeMap<crate::span_type::SpanType, usize> = BTreeMap::new();
     let mut has_reconstructed = false;
     let mut previous: Option<u64> = None;

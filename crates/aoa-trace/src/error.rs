@@ -23,6 +23,9 @@ pub enum TraceError {
         source: serde_json::Error,
     },
 
+    #[error("trace violates the published schema: {detail}")]
+    PublishedSchema { detail: String },
+
     /// The trace envelope declared a wire-format version this build cannot
     /// parse. Fails fast so a producer-side format change surfaces loudly
     /// instead of silently mis-parsing into the current span shape.

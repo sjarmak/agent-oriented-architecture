@@ -4,7 +4,8 @@
     {
       "type": "test.run",
       "source": "native",
-      "seq": 0
+      "seq": 0,
+      "attributes": { "command": "cargo test" }
     }
   ]
 }

@@ -22,6 +22,17 @@ fn validate_trace_invalid_exits_non_zero() {
         .failure();
 }
 
+#[test]
+fn validate_trace_schema_contract_exits_non_zero() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../aoa-trace/tests/fixtures/missing_path_attribute.json");
+    aoa()
+        .args(["eval", "validate-trace"])
+        .arg(path)
+        .assert()
+        .failure();
+}
+
 #[cfg(unix)]
 #[test]
 fn cli_error_boundary_neutralises_terminal_controls_from_paths() {

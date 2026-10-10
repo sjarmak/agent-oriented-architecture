@@ -618,7 +618,12 @@ mod tests {
                     span_type: SpanType::FileRead,
                     source: SpanSource::Native,
                     seq: 0,
-                    attributes: serde_json::Map::new(),
+                    attributes: [(
+                        "path".to_string(),
+                        serde_json::Value::String("src/lib.rs".to_string()),
+                    )]
+                    .into_iter()
+                    .collect(),
                 }],
             }
         }

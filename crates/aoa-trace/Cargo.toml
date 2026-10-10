@@ -7,9 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+jsonschema = { version = "0.58.6", default-features = false }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-
-[dev-dependencies]
-jsonschema = { version = "0.58.6", default-features = false }

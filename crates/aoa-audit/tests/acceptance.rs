@@ -10,7 +10,6 @@ use aoa_corpus::{score_repo, CriterionStatus, PRECOMMIT_HOOK_MARKERS};
 use aoa_metrics::{IndexQuality, SymbolGraph};
 use aoa_trace::{Span, SpanSource, SpanType, Trace};
 
-use serde_json::Map;
 use tempfile::TempDir;
 
 /// Build a small fixture repo in a temp dir with a couple of tracked-style
@@ -77,17 +76,22 @@ fn assert_only_aoa_added(before: &HashSet<PathBuf>, after: &HashSet<PathBuf>) {
 }
 
 fn valid_trace() -> Trace {
-    let span = |span_type, seq| Span {
+    let span = |span_type, seq, key: &str, value: &str| Span {
         span_type,
         source: SpanSource::Native,
         seq,
-        attributes: Map::new(),
+        attributes: [(
+            key.to_string(),
+            serde_json::Value::String(value.to_string()),
+        )]
+        .into_iter()
+        .collect(),
     };
     Trace {
         spans: vec![
-            span(SpanType::RetrievalSearch, 0),
-            span(SpanType::FileRead, 1),
-            span(SpanType::WriteAttempt, 2),
+            span(SpanType::RetrievalSearch, 0, "query", "validate_trace"),
+            span(SpanType::FileRead, 1, "path", "src/lib.rs"),
+            span(SpanType::WriteAttempt, 2, "path", "src/lib.rs"),
         ],
     }
 }
@@ -864,7 +868,7 @@ fn seed_edit_sessions(repo: &Path, n: usize) {
     // what attests the edit landed. Only the latter makes the session count as
     // a held-out observation.
     let spans = concat!(
-        r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#,
+        r#"{"type":"test.run","source":"native","seq":0,"attributes":{"command":"cargo test"}}"#,
         "\n",
         r#"{"type":"write.attempt","source":"native","seq":1,"attributes":{"path":"src/lib.rs"}}"#,
         "\n",
@@ -1042,7 +1046,8 @@ fn edit_free_sessions_do_not_satisfy_the_behavioral_window() {
     let repo = fixture_repo();
     let traces = repo.path().join(".aoa").join("traces");
     std::fs::create_dir_all(&traces).expect("create traces dir");
-    let span = r#"{"type":"test.run","source":"native","seq":0,"attributes":{}}"#;
+    let span =
+        r#"{"type":"test.run","source":"native","seq":0,"attributes":{"command":"cargo test"}}"#;
     for i in 0..MIN_HELD_OUT_OBSERVATIONS {
         std::fs::write(traces.join(format!("live-s{i}.jsonl")), format!("{span}\n"))
             .expect("write live log");

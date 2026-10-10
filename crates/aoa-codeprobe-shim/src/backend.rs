@@ -161,7 +161,7 @@ pub fn run_conformance(
 mod tests {
     use super::*;
     use aoa_trace::{Span, SpanType, Trace};
-    use serde_json::Map;
+    use serde_json::Value;
 
     /// A backend stamped with a stale contract version, used to exercise the
     /// freshness gate.
@@ -204,7 +204,9 @@ mod tests {
                         span_type: SpanType::FileRead,
                         source: SpanSource::Reconstructed,
                         seq: 0,
-                        attributes: Map::new(),
+                        attributes: [("path".to_string(), Value::String("src/lib.rs".to_string()))]
+                            .into_iter()
+                            .collect(),
                     }],
                 },
                 warnings: vec![],
