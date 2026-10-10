@@ -58,7 +58,6 @@ fn every_unusable_native_nonwrite_target_is_preserved_as_unresolved(tc: TestCase
     let (name, target_key) = tc.draw(gs::sampled_from(vec![
         ("Read", "file_path"),
         ("Grep", "pattern"),
-        ("Bash", "command"),
     ]));
     let unusable = match tc.draw(gs::sampled_from(vec![0_u8, 1, 2, 3, 4])) {
         0 => Value::Null,
@@ -84,7 +83,6 @@ fn every_unusable_native_nonwrite_target_is_preserved_as_unresolved(tc: TestCase
     let expected = match name {
         "Read" => SpanType::FileRead,
         "Grep" => SpanType::RetrievalSearch,
-        "Bash" => SpanType::TestRun,
         _ => unreachable!(),
     };
     assert_eq!(result.trace.spans.len(), 2);
@@ -115,7 +113,7 @@ fn targetless_nonwrite_tools_do_not_hide_a_well_formed_write() {
     })
     .to_string();
     let result = parse_transcript(&transcript).expect("targetless native tools convert");
-    assert_eq!(result.trace.spans.len(), 4);
+    assert_eq!(result.trace.spans.len(), 3);
     assert_eq!(
         result
             .trace
@@ -126,18 +124,20 @@ fn targetless_nonwrite_tools_do_not_hide_a_well_formed_write() {
         vec![
             SpanType::FileRead,
             SpanType::RetrievalSearch,
-            SpanType::TestRun,
             SpanType::WriteAttempt,
         ]
     );
     assert_eq!(
-        result.trace.spans[3].attributes.get("path"),
+        result.trace.spans[2].attributes.get("path"),
         Some(&json!("src/lib.rs"))
     );
-    for span in &result.trace.spans[..3] {
+    for span in &result.trace.spans[..2] {
         assert_eq!(span.attributes.get("target_unresolved"), Some(&json!(true)));
     }
-    assert!(result.warnings.is_empty());
+    assert_eq!(
+        result.warnings,
+        vec!["unmapped tool 'Bash' (no span emitted)"]
+    );
     assert_schema_valid(&result.trace);
 }
 

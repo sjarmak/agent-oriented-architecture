@@ -249,10 +249,13 @@ fn report_repair(log: &LiveLog, repair: Option<TornTailRepair>) {
 /// PostToolUse: append a `test.run` span iff the Bash command ran tests. Never
 /// blocks.
 fn run_record(event: &HookEvent) -> Result<i32> {
-    if let Some(span_type) = recorded_span_type(event) {
+    if let Some(command) = recorded_test_command(event) {
         let base = resolve_base(event)?;
         let log = LiveLog::for_session(&base, &event.session_id);
-        report_repair(&log, log.append(span_type, Map::new())?);
+        let attributes = [("command".to_string(), Value::String(command.to_string()))]
+            .into_iter()
+            .collect();
+        report_repair(&log, log.append(SpanType::TestRun, attributes)?);
     }
     Ok(0)
 }
@@ -376,15 +379,12 @@ fn load_policy(base: &Path) -> Result<Option<Policy>> {
         .transpose()
 }
 
-/// Which span (if any) a recorded tool event maps to. Today only the
-/// reproduction signal matters, classified by the same detector the offline
-/// shim uses so the two paths never diverge.
-fn recorded_span_type(event: &HookEvent) -> Option<SpanType> {
+fn recorded_test_command(event: &HookEvent) -> Option<&str> {
     if !HookScope::Bash.selects(&event.tool_name) {
         return None;
     }
     let command = event.tool_input.get("command").and_then(Value::as_str)?;
-    bash_runs_tests(command).then_some(SpanType::TestRun)
+    bash_runs_tests(command).then_some(command)
 }
 
 /// Resolve the repository trust root for the hook payload.
@@ -411,6 +411,8 @@ fn resolve_base(event: &HookEvent) -> Result<PathBuf> {
 mod tests {
     use super::scope::{init_git_repo, repositories_enclosing};
     use super::*;
+    use aoa_observe_shim::parse_live_log;
+    use aoa_trace::TRACE_SCHEMA;
 
     fn event(tool: &str, command: Option<&str>) -> HookEvent {
         let mut tool_input = Map::new();
@@ -428,11 +430,35 @@ mod tests {
     #[test]
     fn records_test_run_only_for_test_commands() {
         assert_eq!(
-            recorded_span_type(&event("Bash", Some("cargo test --all"))),
-            Some(SpanType::TestRun)
+            recorded_test_command(&event("Bash", Some("cargo test --all"))),
+            Some("cargo test --all")
         );
-        assert_eq!(recorded_span_type(&event("Bash", Some("ls -la"))), None);
-        assert_eq!(recorded_span_type(&event("Write", None)), None);
+        assert_eq!(recorded_test_command(&event("Bash", Some("ls -la"))), None);
+        assert_eq!(recorded_test_command(&event("Write", None)), None);
+    }
+
+    #[test]
+    fn recorded_test_run_round_trips_through_the_published_schema() {
+        let repo = tempfile::tempdir().unwrap();
+        init_git_repo(repo.path());
+        let mut hook = event("Bash", Some("cargo test --workspace"));
+        hook.cwd = repo.path().to_string_lossy().into_owned();
+
+        assert_eq!(run_record(&hook).unwrap(), 0);
+
+        let raw =
+            std::fs::read_to_string(LiveLog::for_session(repo.path(), &hook.session_id).path())
+                .unwrap();
+        let result = parse_live_log(&raw).unwrap();
+        let schema: Value = serde_json::from_str(TRACE_SCHEMA).unwrap();
+        let validator = jsonschema::draft202012::options().build(&schema).unwrap();
+        let trace = serde_json::to_value(result.trace).unwrap();
+        let errors: Vec<_> = validator
+            .iter_errors(&trace)
+            .map(|error| error.to_string())
+            .collect();
+
+        assert!(errors.is_empty(), "schema errors: {errors:?}");
     }
 
     /// The adapter's own rule, and the only one it still owns: a payload path

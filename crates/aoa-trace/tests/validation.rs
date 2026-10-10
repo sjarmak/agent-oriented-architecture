@@ -194,11 +194,9 @@ fn published_schema_accepts_only_an_explicit_true_native_unresolved_target_marke
     for span_type in [
         "retrieval.search",
         "file.read",
-        "symbol.lookup",
         "write.attempt",
         "write.committed",
         "write.blocked",
-        "test.run",
     ] {
         let unresolved = json!({
             "spans": [{
@@ -229,7 +227,13 @@ fn published_schema_accepts_only_an_explicit_true_native_unresolved_target_marke
         assert!(!validator.is_valid(&absent), "{span_type}");
     }
 
-    for span_type in ["write.failed", "write.denied", "gateway.invoke"] {
+    for span_type in [
+        "write.failed",
+        "write.denied",
+        "symbol.lookup",
+        "test.run",
+        "gateway.invoke",
+    ] {
         let unresolved = json!({
             "spans": [{
                 "type": span_type,
@@ -254,11 +258,9 @@ fn published_schema_accepts_only_an_explicit_true_native_unresolved_target_marke
     for (span_type, target_key, target) in [
         ("retrieval.search", "query", "needle"),
         ("file.read", "path", "src/lib.rs"),
-        ("symbol.lookup", "symbol", "main"),
         ("write.attempt", "path", "src/lib.rs"),
         ("write.committed", "path", "src/lib.rs"),
         ("write.blocked", "policy", "reproduction_before_mutation"),
-        ("test.run", "command", "cargo test"),
     ] {
         let contradictory = json!({
             "spans": [{

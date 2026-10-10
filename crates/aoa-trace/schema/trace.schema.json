@@ -191,10 +191,7 @@
             "required": ["attributes"],
             "properties": {
               "attributes": {
-                "anyOf": [
-                  { "required": ["symbol"] },
-                  { "required": ["target_unresolved"] }
-                ]
+                "required": ["symbol"]
               }
             }
           }
@@ -244,11 +241,9 @@
                 "enum": [
                   "retrieval.search",
                   "file.read",
-                  "symbol.lookup",
                   "write.attempt",
                   "write.committed",
-                  "write.blocked",
-                  "test.run"
+                  "write.blocked"
                 ]
               }
             }
@@ -284,10 +279,7 @@
             "required": ["attributes"],
             "properties": {
               "attributes": {
-                "anyOf": [
-                  { "required": ["command"] },
-                  { "required": ["target_unresolved"] }
-                ]
+                "required": ["command"]
               }
             }
           }

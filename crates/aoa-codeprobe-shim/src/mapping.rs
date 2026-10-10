@@ -95,14 +95,14 @@ pub(crate) fn classify(name: &str, input: &Value) -> Mapping {
                 .get("command")
                 .and_then(Value::as_str)
                 .filter(|value| !value.trim().is_empty());
-            if command.is_some_and(|value| !bash_runs_tests(value)) {
-                Mapping::Unknown
-            } else {
+            if command.is_some_and(bash_runs_tests) {
                 Mapping::Span {
                     span_type: SpanType::TestRun,
                     target_key: "command",
                     target_fields: &["command"],
                 }
+            } else {
+                Mapping::Unknown
             }
         }
         _ if name.to_ascii_lowercase().contains("search") => Mapping::Span {
@@ -177,19 +177,9 @@ mod tests {
     }
 
     #[test]
-    fn bash_without_a_usable_command_maps_to_an_unresolved_test_run() {
+    fn bash_without_a_usable_command_is_unknown() {
         for input in [json!({}), json!({"command": null}), json!({"command": " "})] {
-            match classify("Bash", &input) {
-                Mapping::Span {
-                    span_type,
-                    target_key,
-                    ..
-                } => {
-                    assert_eq!(span_type, SpanType::TestRun);
-                    assert_eq!(target_key, "command");
-                }
-                Mapping::Unknown => panic!("targetless Bash should remain observable"),
-            }
+            assert_eq!(classify("Bash", &input), Mapping::Unknown);
         }
     }
 
