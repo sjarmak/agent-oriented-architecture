@@ -88,6 +88,7 @@ use crate::commands::generated::generated_rules;
 use crate::output::eprint_human;
 
 const POLICY_ROOT_ATTRIBUTE: &str = "policy_root";
+const REDACTED_COMMAND: &str = "<redacted>";
 const POLICY_FILE: &str = "aoa-policy.yaml";
 
 /// The subset of a Claude Code hook payload this gate needs. Unknown fields are
@@ -249,12 +250,15 @@ fn report_repair(log: &LiveLog, repair: Option<TornTailRepair>) {
 /// PostToolUse: append a `test.run` span iff the Bash command ran tests. Never
 /// blocks.
 fn run_record(event: &HookEvent) -> Result<i32> {
-    if let Some(command) = recorded_test_command(event) {
+    if recorded_test_command(event).is_some() {
         let base = resolve_base(event)?;
         let log = LiveLog::for_session(&base, &event.session_id);
-        let attributes = [("command".to_string(), Value::String(command.to_string()))]
-            .into_iter()
-            .collect();
+        let attributes = [(
+            "command".to_string(),
+            Value::String(REDACTED_COMMAND.to_string()),
+        )]
+        .into_iter()
+        .collect();
         report_repair(&log, log.append(SpanType::TestRun, attributes)?);
     }
     Ok(0)
@@ -441,7 +445,10 @@ mod tests {
     fn recorded_test_run_round_trips_through_the_published_schema() {
         let repo = tempfile::tempdir().unwrap();
         init_git_repo(repo.path());
-        let mut hook = event("Bash", Some("cargo test --workspace"));
+        let mut hook = event(
+            "Bash",
+            Some("API_TOKEN=super-secret cargo test --workspace"),
+        );
         hook.cwd = repo.path().to_string_lossy().into_owned();
 
         assert_eq!(run_record(&hook).unwrap(), 0);
@@ -449,7 +456,12 @@ mod tests {
         let raw =
             std::fs::read_to_string(LiveLog::for_session(repo.path(), &hook.session_id).path())
                 .unwrap();
+        assert!(!raw.contains("super-secret"), "{raw}");
         let result = parse_live_log(&raw).unwrap();
+        assert_eq!(
+            result.trace.spans[0].attributes["command"],
+            REDACTED_COMMAND
+        );
         let schema: Value = serde_json::from_str(TRACE_SCHEMA).unwrap();
         let validator = jsonschema::draft202012::options().build(&schema).unwrap();
         let trace = serde_json::to_value(result.trace).unwrap();
