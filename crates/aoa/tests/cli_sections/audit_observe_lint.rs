@@ -230,7 +230,7 @@ fn audit_fail_on_tier1_exits_zero_without_tier1_gap() {
     std::fs::create_dir_all(repo.path().join(".aoa/traces")).unwrap();
     std::fs::write(
         repo.path().join(".aoa/traces/live-s1.jsonl"),
-        "{\"type\":\"test.run\",\"source\":\"native\",\"seq\":0,\"attributes\":{}}\n",
+        "{\"type\":\"test.run\",\"source\":\"native\",\"seq\":0,\"attributes\":{\"command\":\"cargo test\"}}\n",
     )
     .unwrap();
 
