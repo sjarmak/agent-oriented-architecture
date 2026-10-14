@@ -114,6 +114,7 @@ dependencies = [
  "aoa-trace",
  "assert_cmd",
  "clap",
+ "hegeltest",
  "jsonschema",
  "predicates",
  "rusqlite",
