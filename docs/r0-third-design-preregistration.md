@@ -587,3 +587,98 @@ Nothing was mined. No agent trial ran. No spend occurred. Every command in this
 document reads artifacts that already existed, plus one `git ls-remote` that
 transferred no repository content. No run directory was written to, and the
 protected `falsification.k3.json` was not modified.
+
+---
+
+# Candidate-pool criteria addendum
+
+Written 2026-10-14 for `aoa-1wso7`, after the two rulings required above.
+Branch B is authoritative: the preserved five repositories are ineligible and
+do not vote. Stephanie authorized five new repositories, so `N = M = 5` and the
+unchanged strict-majority rule requires 3 of 5 proceed votes.
+
+This commit fixes the candidate universe and its total order only. It names no
+candidate, resolves no checkout to an upstream repository, and applies none of
+C1 through C5. The application belongs in a later commit so its diff and commit
+timestamp remain evidence that this rule preceded the choice.
+
+## The committed candidate universe
+
+The universe is every immediate, non-symlink child directory with a `.git`
+entry under the existing `r0-repos` directory alongside the codeprobe checkouts
+at this commit. Pool membership supplies candidates. Every entry must still
+prove held-out status by passing C1 against both scan-independent enumerations
+above; the exposure scan cannot substitute for them.
+
+The candidate identities remain undisclosed in this criteria commit. Instead,
+this command commits to a bytewise-sorted, NUL-delimited manifest. Each entry
+contains the child name, its `origin` URL, and its current full `HEAD` SHA:
+
+`R0_REPOS` points at that `r0-repos` directory:
+
+```bash
+set -o pipefail
+: "${R0_REPOS:?export R0_REPOS as the path to the r0-repos directory}"
+find "$R0_REPOS" -mindepth 1 -maxdepth 1 -type d \
+  -exec test -e '{}/.git' \; -print0 \
+  | LC_ALL=C sort -z \
+  | while IFS= read -r -d '' dir; do
+      name=${dir##*/}
+      origin=$(git -C "$dir" remote get-url origin) || exit 1
+      head_sha=$(git -C "$dir" rev-parse --verify HEAD) || exit 1
+      printf '%s\0%s\0%s\0' "$name" "$origin" "$head_sha"
+    done \
+  | sha256sum
+```
+
+The committed manifest has 38 entries and SHA-256
+`49c80cf3ea89ac02235b7c8c5e165840bcd147823928fe1d4bf67349fc9aeb5b`.
+The NUL delimiters make the commitment independent of whitespace in a field.
+The command read only checkout identity metadata; it displayed none of the
+fields and read no repository content.
+
+The application commit must materialize the complete manifest before opening a
+candidate, reproduce both the count and digest, and publish the manifest. A
+mismatch stops selection. An entry whose `origin` or `HEAD` has changed is a
+mismatch, not an invitation to update the commitment. Entries may not be added,
+omitted, renamed, or substituted to repair it.
+
+## The fixed order and stopping rule
+
+The `LC_ALL=C` bytewise order of the committed child names is the total
+tie-break. Candidates are considered in exactly that order. For each entry, the
+application converts the committed `origin` to a canonical upstream repository,
+treats the committed `HEAD` as the proposed full baseline SHA, then applies C1,
+C2, C3, and C5 in their existing order. A missing or ambiguous upstream identity
+is a recorded rejection. If two entries resolve to the same canonical upstream
+repository, only the earlier entry remains in the pool and the later one is
+recorded as a duplicate rejection.
+
+Only the committed `origin` remote determines identity. It must have exactly one
+of these forms, with no query, fragment, credentials, or extra path component:
+`https://github.com/<owner>/<repo>[.git]`,
+`git@github.com:<owner>/<repo>[.git]`, or
+`ssh://git@github.com/<owner>/<repo>[.git]`. Remove one trailing `.git`, lowercase
+the owner and repository, and prefix `github.com/`; the result is the canonical
+identity. Any other form is rejected rather than repaired from another remote or
+project metadata.
+
+C4 is solely the post-mining admission gate. An entry that passes the pre-mining
+criteria is admitted only if its mined corpus clears the unchanged
+`min_holdout=7` and seed-1 pair-yield `>= 0.80` floors. A C4 rejection advances
+to the next committed entry; it cannot lower either floor. Selection stops when
+the first five repositories in the fixed order have passed every criterion. C6
+records every entry examined and every rejection before the five admitted
+repositories.
+
+If the committed pool is exhausted before five repositories are admitted, the
+design stops as inconclusive. There is no second pool, discretionary reorder,
+or replacement after an experimental arm outcome is visible.
+
+## Confirmation
+
+This addendum was written before any candidate was named or examined. Only the
+pool root, child count, checkout names, `origin` values, and `HEAD` SHAs were
+processed into the undisclosed manifest commitment. C1 was not run, no index or
+corpus was built, no task was mined, no agent trial ran, and no campaign spend
+occurred.
