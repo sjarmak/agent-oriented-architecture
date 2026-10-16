@@ -682,3 +682,169 @@ pool root, child count, checkout names, `origin` values, and `HEAD` SHAs were
 processed into the undisclosed manifest commitment. C1 was not run, no index or
 corpus was built, no task was mined, no agent trial ran, and no campaign spend
 occurred.
+
+---
+
+# Candidate-pool application through the zero-spend boundary
+
+Applied 2026-10-15 in the committed bytewise order. This section is the C6
+record. It stops before seed 1.
+
+## Commitment reproduction and C1 inputs
+
+Before any candidate checkout was opened or changed, the committed manifest
+command ran exactly as written with `R0_REPOS` set to the existing pool. It
+returned 38 entries and SHA-256
+`49c80cf3ea89ac02235b7c8c5e165840bcd147823928fe1d4bf67349fc9aeb5b`.
+Both scan-independent C1 enumerations were then rerun, before candidate
+inspection, migration, or mining. A and B each returned, in order, `gunicorn`,
+`httpie`, `isort`, `marshmallow`, `requests`, `rich`, `sqlparse`, and
+`websockets`; neither returned a ninth repository. This is the time-bounded C1
+snapshot used for selection. The later `schedule` corpus necessarily makes a
+post-application rerun of B include `schedule`; that new application artifact
+does not retroactively change the pre-application C1 result.
+
+The manifest fields are below with one presentation substitution. Nine
+non-conforming local origins contain an operator home directory in their raw
+Git remote value. They are rendered by replacing the pool-path prefix with the
+literal string `$R0_REPOS` to comply with the repository's operator-path
+prohibition. This command computes the displayed manifest:
+
+```bash
+find "$R0_REPOS" -mindepth 1 -maxdepth 1 -type d \
+  -exec test -e '{}/.git' \; -print0 \
+  | LC_ALL=C sort -z \
+  | while IFS= read -r -d '' dir; do
+      name=${dir##*/}
+      origin=$(git -C "$dir" remote get-url origin) || exit 1
+      head_sha=$(git -C "$dir" rev-parse --verify HEAD) || exit 1
+      case "$origin" in
+        "$R0_REPOS"/*)
+          suffix=${origin#"$R0_REPOS"/}
+          origin=$(printf '$R0_REPOS/%s' "$suffix")
+          ;;
+      esac
+      printf '%s\0%s\0%s\0' "$name" "$origin" "$head_sha"
+    done \
+  | sha256sum
+```
+
+It returned 38 entries and display SHA-256
+`feb635690e4a59ac3ed5cfe2db4e7b49a09b2ca1fad6829eb5b494840e321e27`,
+which is reproducible from the table alone. The raw count and digest above were
+computed from the unmodified origin values before substitution and independently
+reproduced by the operator and the project lead; those runs attest the link
+between the raw commitment and this public display.
+
+| # | Child | Origin | Full `HEAD` SHA |
+| ---: | --- | --- | --- |
+| 1 | `arrow` | `https://github.com/arrow-py/arrow` | `2224255c4acc594d734cef0bbc83360452a67983` |
+| 2 | `attrs` | `https://github.com/python-attrs/attrs` | `ae37edd71a691b8ca797a0a53d0248543abfe12b` |
+| 3 | `click` | `https://github.com/pallets/click` | `16fc00e2f4a2717a521084f193709a6058afc693` |
+| 4 | `eza` | `https://github.com/eza-community/eza` | `247fb8ed07b57063175b01fcaab1181214306ca3` |
+| 5 | `fd` | `https://github.com/sharkdp/fd` | `fb1486f210885ae663338ebfab4e70210abc4809` |
+| 6 | `flask` | `https://github.com/pallets/flask` | `36e4a824f340fdee7ed50937ba8e7f6bc7d17f81` |
+| 7 | `gunicorn` | `https://github.com/benoitc/gunicorn` | `a8283bbf5e1416d0dd13f994f71ec2761988aeab` |
+| 8 | `gunicorn-migrated` | `$R0_REPOS/gunicorn` | `84ded7ae0e5b9531a87ab0bd615cfb5ed3233837` |
+| 9 | `httpie` | `https://github.com/httpie/cli` | `5b604c37c6c67e18e7c3e9aee6c88a8c22b98345` |
+| 10 | `httpie-migrated` | `$R0_REPOS/httpie` | `7530c5c902b22d52a136f0b0f37e1fcf6ce6c830` |
+| 11 | `httpx` | `https://github.com/encode/httpx` | `b5addb64f0161ff6bfe94c124ef76f6a1fba5254` |
+| 12 | `hyperfine` | `https://github.com/sharkdp/hyperfine` | `f12f3d9f86f3643b3b7deace5e160b1f0f44d2b7` |
+| 13 | `isort` | `https://github.com/PyCQA/isort` | `fd8bd075176d074af69aa6acae7ed89a6a89bb05` |
+| 14 | `isort-migrated` | `$R0_REPOS/isort` | `8ae28846672a09461cec5c3d1856532969c81a6d` |
+| 15 | `jinja` | `https://github.com/pallets/jinja` | `5ef70112a1ff19c05324ff889dd30405b1002044` |
+| 16 | `just` | `https://github.com/casey/just` | `7715e4e30b356915587976c24c6b307274118cb5` |
+| 17 | `just-migrated` | `$R0_REPOS/just` | `29e4c4cef61975f33e96698ecd2d7143d1191358` |
+| 18 | `marshmallow` | `https://github.com/marshmallow-code/marshmallow` | `cd3cda8b1a9ae740d439538cee7aa8faea58d6b9` |
+| 19 | `marshmallow-migrated` | `$R0_REPOS/marshmallow` | `ec613fbaaa84ea3c8d09314ac5d5c1bef9dfeabe` |
+| 20 | `paramiko` | `https://github.com/paramiko/paramiko` | `d60d5c17d78f344b51ed651e796d2931133a9b22` |
+| 21 | `pexpect` | `https://github.com/pexpect/pexpect` | `fc8f062518b40bd0862aae870cdedf5d9c0c7fc3` |
+| 22 | `prompt_toolkit` | `https://github.com/prompt-toolkit/python-prompt-toolkit` | `236bfb7c15c62e921dc81bac5aefcabb16450f0c` |
+| 23 | `pygments` | `https://github.com/pygments/pygments` | `076a676155ad62beccf582b29ab1af03d28c717f` |
+| 24 | `requests` | `https://github.com/psf/requests` | `23953c0c875219a715f081cf3de7c149a7629ccf` |
+| 25 | `requests-migrated` | `$R0_REPOS/requests` | `5682d9bd11babcd39521de80c2e1a74b5bd2afb9` |
+| 26 | `rich` | `https://github.com/Textualize/rich` | `9d8f9a372cc5916fd4781fec207ced7ddac2f08f` |
+| 27 | `rich-migrated` | `$R0_REPOS/rich` | `6da6e92a8f0afd20bf9aaf857faea51bea543c73` |
+| 28 | `schedule` | `https://github.com/dbader/schedule` | `82a43db1b938d8fdf60103bd41f329e06c8d3651` |
+| 29 | `sqlparse` | `https://github.com/andialbrecht/sqlparse` | `f80af6a4007f11ada847218df8c29dc859238290` |
+| 30 | `sqlparse-migrated` | `$R0_REPOS/sqlparse` | `d93eaa0659e7716bbec8dfe8c8d1b99d3180ae00` |
+| 31 | `starlette` | `https://github.com/encode/starlette` | `5174d4c8358a6f06aa8056bafd14c2272dab8dd1` |
+| 32 | `tornado` | `https://github.com/tornadoweb/tornado` | `b689e0e20adb4345f5b207893820e40de7b3bf70` |
+| 33 | `tqdm` | `https://github.com/tqdm/tqdm` | `9aff6090b6fa98c88a2dbff8bd9e2a68d9a99c1b` |
+| 34 | `typer` | `https://github.com/fastapi/typer` | `73c8a41cc1a5d682dd0231c113612c1375f63fb0` |
+| 35 | `uvicorn` | `https://github.com/encode/uvicorn` | `1bf3ab42e3aba1cf4acd1ef0c29d8ad9a599d333` |
+| 36 | `websockets` | `https://github.com/python-websockets/websockets` | `ff4869ba468129f3e85b08c2a8a03ec45cf26537` |
+| 37 | `websockets-migrated` | `$R0_REPOS/websockets` | `fcfdcdc9330c855e408562a4dc7237a9e50ecdd4` |
+| 38 | `werkzeug` | `https://github.com/pallets/werkzeug` | `1b00618e787f40dfb21eba29caf8f8be7c8e1d93` |
+
+## Ordered C6 record
+
+`Pass` under C2 means the committed `HEAD` was exactly 40 hexadecimal
+characters and became the proposed baseline without following a branch. An
+empty migration plan is a C3 rejection: the established preparation protocol
+requires a non-empty code-layer treatment, because a no-op cannot instantiate
+the preregistered repo delta. `Not reached` means an earlier criterion rejected
+the entry.
+
+| # | Child | Canonical identity or identity rejection | C1 | C2 | C3 | C5 | Zero-spend C4 | Result |
+| ---: | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `arrow` | `github.com/arrow-py/arrow` | Pass | Pass | Reject: empty AOA migration plan after 21 Python files | Not reached | Not reached | C3 rejection |
+| 2 | `attrs` | `github.com/python-attrs/attrs` | Pass | Pass | Reject: empty plan after 54 Python files | Not reached | Not reached | C3 rejection |
+| 3 | `click` | `github.com/pallets/click` | Pass | Pass | Reject: empty plan after 63 Python files | Not reached | Not reached | C3 rejection |
+| 4 | `eza` | `github.com/eza-community/eza` | Pass | Pass | Reject: isolated offline build lacked `git2` | Not reached | Not reached | C3 rejection |
+| 5 | `fd` | `github.com/sharkdp/fd` | Pass | Pass | Reject: isolated offline build lacked `etcetera` | Not reached | Not reached | C3 rejection |
+| 6 | `flask` | `github.com/pallets/flask` | Pass | Pass | Reject: empty plan after 83 Python files | Not reached | Not reached | C3 rejection |
+| 7 | `gunicorn` | `github.com/benoitc/gunicorn` | Reject: present in A and B, and in the exclusion table | Not reached | Not reached | Not reached | Not reached | C1 rejection |
+| 8 | `gunicorn-migrated` | Reject: local path is not an allowed GitHub origin form | Not reached | Not reached | Not reached | Not reached | Not reached | Identity rejection |
+| 9 | `httpie` | `github.com/httpie/cli` | Reject: present in A and B, and partially exposed in the exclusion table | Not reached | Not reached | Not reached | Not reached | C1 rejection |
+| 10 | `httpie-migrated` | Reject: local path is not an allowed GitHub origin form | Not reached | Not reached | Not reached | Not reached | Not reached | Identity rejection |
+| 11 | `httpx` | `github.com/encode/httpx` | Pass | Pass | Reject: empty plan after 60 Python files | Not reached | Not reached | C3 rejection |
+| 12 | `hyperfine` | `github.com/sharkdp/hyperfine` | Pass | Pass | Reject: isolated offline build could not download `anstream` | Not reached | Not reached | C3 rejection |
+| 13 | `isort` | `github.com/pycqa/isort` | Reject: present in A and B, and in the exclusion table | Not reached | Not reached | Not reached | Not reached | C1 rejection |
+| 14 | `isort-migrated` | Reject: local path is not an allowed GitHub origin form | Not reached | Not reached | Not reached | Not reached | Not reached | Identity rejection |
+| 15 | `jinja` | `github.com/pallets/jinja` | Pass | Pass | Reject: empty plan after 60 Python files | Not reached | Not reached | C3 rejection |
+| 16 | `just` | `github.com/casey/just` | Pass | Pass | Reject: isolated offline build could not download `arrayref` | Not reached | Not reached | C3 rejection |
+| 17 | `just-migrated` | Reject: local path is not an allowed GitHub origin form | Not reached | Not reached | Not reached | Not reached | Not reached | Identity rejection |
+| 18 | `marshmallow` | `github.com/marshmallow-code/marshmallow` | Reject: present in A and B, and in the exclusion table | Not reached | Not reached | Not reached | Not reached | C1 rejection |
+| 19 | `marshmallow-migrated` | Reject: local path is not an allowed GitHub origin form | Not reached | Not reached | Not reached | Not reached | Not reached | Identity rejection |
+| 20 | `paramiko` | `github.com/paramiko/paramiko` | Pass | Pass | Reject: empty plan after 69 Python files | Not reached | Not reached | C3 rejection |
+| 21 | `pexpect` | `github.com/pexpect/pexpect` | Pass | Pass | Reject: the pinned tree did not parse cleanly under isolated Ruff | Not reached | Not reached | C3 rejection |
+| 22 | `prompt_toolkit` | `github.com/prompt-toolkit/python-prompt-toolkit` | Pass | Pass | Reject: empty plan after 298 Python files | Not reached | Not reached | C3 rejection |
+| 23 | `pygments` | `github.com/pygments/pygments` | Pass | Pass | Reject: the pinned tree did not parse cleanly under isolated Ruff | Not reached | Not reached | C3 rejection |
+| 24 | `requests` | `github.com/psf/requests` | Reject: present in A and B, and in the exclusion table | Not reached | Not reached | Not reached | Not reached | C1 rejection |
+| 25 | `requests-migrated` | Reject: local path is not an allowed GitHub origin form | Not reached | Not reached | Not reached | Not reached | Not reached | Identity rejection |
+| 26 | `rich` | `github.com/textualize/rich` | Reject: present in A and B, and in the exclusion table | Not reached | Not reached | Not reached | Not reached | C1 rejection |
+| 27 | `rich-migrated` | Reject: local path is not an allowed GitHub origin form | Not reached | Not reached | Not reached | Not reached | Not reached | Identity rejection |
+| 28 | `schedule` | `github.com/dbader/schedule` | Pass | Pass | Pass: `dead-imports-python` removed one unused import; migrated commit `813b5d2b933dc051ff7885b7d0923fe382e1e265` | Pass: the fixed models, tool restriction, seeds, thresholds, and conventions apply unchanged | Reject: 4 admitted dual tasks, below 7 | C4 rejection |
+| 29 | `sqlparse` | `github.com/andialbrecht/sqlparse` | Reject: present in A and B, and in the exclusion table | Not reached | Not reached | Not reached | Not reached | C1 rejection |
+| 30 | `sqlparse-migrated` | Reject: local path is not an allowed GitHub origin form | Not reached | Not reached | Not reached | Not reached | Not reached | Identity rejection |
+| 31 | `starlette` | `github.com/encode/starlette` | Pass | Pass | Reject: empty plan after 67 Python files | Not reached | Not reached | C3 rejection |
+| 32 | `tornado` | `github.com/tornadoweb/tornado` | Pass | Pass | Reject: empty plan after 107 Python files | Not reached | Not reached | C3 rejection |
+| 33 | `tqdm` | `github.com/tqdm/tqdm` | Pass | Pass | Reject: the pinned tree did not parse cleanly under isolated Ruff | Not reached | Not reached | C3 rejection |
+| 34 | `typer` | `github.com/fastapi/typer` | Pass | Pass | Reject: empty plan after 634 Python files | Not reached | Not reached | C3 rejection |
+| 35 | `uvicorn` | `github.com/encode/uvicorn` | Pass | Pass | Reject: empty plan after 79 Python files | Not reached | Not reached | C3 rejection |
+| 36 | `websockets` | `github.com/python-websockets/websockets` | Reject: present in A and B, and in the exclusion table | Not reached | Not reached | Not reached | Not reached | C1 rejection |
+| 37 | `websockets-migrated` | Reject: local path is not an allowed GitHub origin form | Not reached | Not reached | Not reached | Not reached | Not reached | Identity rejection |
+| 38 | `werkzeug` | `github.com/pallets/werkzeug` | Pass | Pass | Reject: empty plan after 138 Python files | Not reached | Not reached | C3 rejection |
+
+## Zero-spend artifacts and stopping result
+
+All migration, mining, and indexing work used separate clones pinned to the
+manifest SHA; no pool checkout was modified. The AOA executable came from
+`7260d7ab69e42dbc1a8791ce5cc643c78f7f7586`. Mining used a clean detached
+Codeprobe checkout at `fd9ff15e01b69dd71ee539006fea3631c4062cb7` with
+`--no-llm`. Its terminal envelope records zero model calls, zero tokens, and
+zero cost.
+
+`schedule` was the only entry to reach C4. Its four admitted dual tasks live at
+`codeprobe/runs/r0-third-design/schedule/corpus/tasks`, and its migrated-state
+index lives at
+`codeprobe/runs/r0-third-design/schedule/index-migrated.aoa.json`. The tasks
+name `schedule` as their repository, and the index has 4 documents and 423
+writable symbols. Because 4 is below `min_holdout=7`, `schedule` is rejected
+and seed 1 was not launched.
+
+The pool is exhausted with no pre-seed admissions, short of the required five.
+Under the fixed stopping rule the selection is inconclusive. No codeprobe
+`run`, agent trial, or paid model call occurred, and the protected
+`falsification.k3.json` was not modified.
