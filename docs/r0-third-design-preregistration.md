@@ -848,3 +848,51 @@ The pool is exhausted with no pre-seed admissions, short of the required five.
 Under the fixed stopping rule the selection is inconclusive. No codeprobe
 `run`, agent trial, or paid model call occurred, and the protected
 `falsification.k3.json` was not modified.
+
+---
+
+# Amendment dated 2026-10-17: repair and rescreen
+
+Stephanie ruled for dec-ybmbq option b, repair and rescreen. This amendment is
+written before any candidate is rescreened. It fixes the repaired instrument
+and the complete rescreen procedure; it records no new candidate result.
+
+The rescreen uses the same committed 38-entry manifest in the same `LC_ALL=C`
+bytewise order. Before inspecting or changing a work clone, it reproduces the
+raw manifest and requires SHA-256
+`49c80cf3ea89ac02235b7c8c5e165840bcd147823928fe1d4bf67349fc9aeb5b`.
+A count or digest mismatch stops the rescreen.
+
+Identity, C1, and C2 carry forward from the application dated 2026-10-15.
+Identity and C2 are properties of the unchanged committed manifest. C1 carries
+forward from the time-bounded snapshot already recorded above because this
+repair changes only the C3 instrument; rerunning C1 now would include the
+application's own `schedule` artifacts and would therefore measure a
+contaminated history rather than reproduce the selection boundary.
+
+Every manifest entry that passed C1 and C2 is rerun from C3 onward. This
+includes all 13 entries whose earlier migration plan was empty, all seven
+entries rejected by the earlier C3 instrument, and `schedule`. No candidate is
+selected for rerun by its earlier C3 result.
+
+The repaired C3 instrument is fixed as follows:
+
+- The AOA executable is built from
+  `30fff738d3bdc18cc60f2a3edbd5200d02fe1d78`.
+- A Rust candidate is processed only in its separate work clone. Before AOA
+  planning, that clone runs `cargo fetch --locked`; a failed fetch is recorded
+  as a C3 rejection. AOA's existing isolated `cargo check --all-features
+  --all-targets --offline` rule remains unchanged. Neither command runs in the
+  committed pool checkout.
+- A Python candidate uses AOA's opt-in baseline-unparseable exclusion. The
+  exclusion set is exactly the whole files reported with Ruff
+  `invalid-syntax` diagnostics by the same isolated, configuration-blind
+  baseline invocation. Those files are excluded from both the clean check and
+  the F401 fix pass, and the relative excluded-file list is published for that
+  entry. No name, path pattern, or operator judgment may add an exclusion.
+
+An empty migration plan remains a C3 rejection. C4, C5, C6, every other
+criterion, `min_holdout = 7`, the manifest order, and the stopping rule remain
+unchanged. Selection stops after five pre-seed admissions or after manifest
+exhaustion, which is inconclusive. Mining remains `--no-llm` and zero-spend.
+The rescreen stops before seed 1; it performs no agent trial or paid model call.
