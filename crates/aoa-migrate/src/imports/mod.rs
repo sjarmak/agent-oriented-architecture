@@ -67,6 +67,7 @@ pub(crate) struct SubtractedFile {
 pub(crate) struct Subtraction {
     pub examined: usize,
     pub files: Vec<SubtractedFile>,
+    pub excluded_paths: Vec<PathBuf>,
 }
 
 /// One language's dead-import treatment. The engine ([`DeadImportFix`]) owns
@@ -125,7 +126,13 @@ impl DeadImportFix {
     /// `ruff check --select F401 --fix`.
     pub fn python() -> Self {
         Self {
-            adapter: Box::new(python::PythonImportAdapter),
+            adapter: Box::new(python::PythonImportAdapter::strict()),
+        }
+    }
+
+    pub fn python_excluding_baseline_unparseable() -> Self {
+        Self {
+            adapter: Box::new(python::PythonImportAdapter::excluding_baseline_unparseable()),
         }
     }
 
@@ -172,11 +179,16 @@ impl CodeFix for DeadImportFix {
         copy_tree(repo, work.path())?;
 
         let subtraction = self.adapter.subtract_imports(work.path())?;
+        let Subtraction {
+            examined,
+            files,
+            excluded_paths,
+        } = subtraction;
 
-        Ok(FixRun::examined(
-            finalize_changes(subtraction.files, work.path(), repo)?,
-            subtraction.examined,
-        ))
+        Ok(
+            FixRun::examined(finalize_changes(files, work.path(), repo)?, examined)
+                .with_excluded_paths(excluded_paths),
+        )
     }
 
     fn provenance(&self, repo: &Path) -> Result<Option<FixProvenance>, MigrateError> {

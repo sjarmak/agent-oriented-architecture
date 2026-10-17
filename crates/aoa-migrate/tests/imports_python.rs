@@ -236,3 +236,40 @@ fn syntactically_broken_python_is_a_loud_repo_does_not_check() {
         "a tree that does not parse is a LOUD error, not an empty plan; got {err:?}"
     );
 }
+
+#[test]
+fn baseline_unparseable_exclusion_is_file_local_and_preserves_excluded_bytes() {
+    require_ruff!("baseline_unparseable_exclusion_is_file_local");
+    let clean = py_pkg_with_unused_import("valid.py");
+    let expected = MigrationPlan::build(clean.path(), &[&DeadImportFix::python()]).unwrap();
+
+    let mixed = py_pkg_with_unused_import("valid.py");
+    let invalid = mixed.path().join("fixtures/invalid.py");
+    let invalid_notebook = mixed.path().join("fixtures/invalid.ipynb");
+    fs::create_dir_all(invalid.parent().unwrap()).unwrap();
+    let invalid_bytes = b"def broken(:\n";
+    let invalid_notebook_bytes = b"{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"metadata\":{},\"outputs\":[],\"source\":[\"def broken(:\\n\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n";
+    fs::write(&invalid, invalid_bytes).unwrap();
+    fs::write(&invalid_notebook, invalid_notebook_bytes).unwrap();
+
+    let plan = MigrationPlan::build(
+        mixed.path(),
+        &[&DeadImportFix::python_excluding_baseline_unparseable()],
+    )
+    .unwrap();
+
+    assert_eq!(plan.changes.len(), 1);
+    assert_eq!(expected.changes.len(), 1);
+    assert_eq!(plan.changes[0].new_content, expected.changes[0].new_content);
+    assert_eq!(
+        plan.reports[0].excluded_paths,
+        [
+            std::path::PathBuf::from("fixtures/invalid.ipynb"),
+            std::path::PathBuf::from("fixtures/invalid.py")
+        ]
+    );
+
+    apply(mixed.path(), &plan).unwrap();
+    assert_eq!(fs::read(&invalid).unwrap(), invalid_bytes);
+    assert_eq!(fs::read(&invalid_notebook).unwrap(), invalid_notebook_bytes);
+}

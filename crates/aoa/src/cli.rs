@@ -192,6 +192,13 @@ pub struct MigrateArgs {
     #[arg(long = "fix", value_name = "ID", conflicts_with = "rollback")]
     pub fix: Vec<String>,
 
+    #[arg(
+        long,
+        conflicts_with = "rollback",
+        help = "Exclude exactly the files Ruff reports as invalid syntax at the Python baseline"
+    )]
+    pub exclude_baseline_unparseable_python: bool,
+
     /// Emit the structured JSON rendering instead of human text.
     #[arg(long)]
     pub json: bool,

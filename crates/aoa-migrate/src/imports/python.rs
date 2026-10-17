@@ -18,7 +18,8 @@
 //! internally — reimplementing that conflict resolution would be a second, weaker
 //! analyzer. The shared engine then diffs the touched files back to the real repo.
 
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::Value;
@@ -48,9 +49,31 @@ pub(crate) const PYTHON_DEAD_IMPORT_ELIGIBILITY: &str = "ruff F401 (unused-impor
 (3) the tree parses cleanly — a file ruff cannot parse is a LOUD RepoDoesNotCheck error, never a silent empty plan. \
 Only F401 is selected, so unused locals (F841) and import sorting (I001) are out of scope by construction.";
 
+const PYTHON_DEAD_IMPORT_EXCLUSION_ELIGIBILITY: &str = "ruff F401 (unused-import) removal is a construct-valid, reproducible code-layer treatment only when: \
+(1) the unused-import determination is reproducible under the recorded ruff version — `--isolated` ignores any in-repo ruff/pyproject config, so the result depends ONLY on the source and the version captured in provenance; \
+(2) imports used only via channels ruff's resolver cannot see remain an UNCHECKED exclusion; \
+(3) whole files excluded from both validation and fixing are exactly the files the same isolated baseline invocation reports as invalid-syntax, and their relative paths are recorded; F401 is file-local, so an excluded file cannot affect another file's verdict. \
+Only F401 is selected, so unused locals (F841) and import sorting (I001) are out of scope by construction.";
+
 /// Removes ruff-certified F401 unused imports via an isolated, config-blind
 /// `ruff check --select F401 --fix`.
-pub(crate) struct PythonImportAdapter;
+pub(crate) struct PythonImportAdapter {
+    exclude_baseline_unparseable: bool,
+}
+
+impl PythonImportAdapter {
+    pub(crate) fn strict() -> Self {
+        Self {
+            exclude_baseline_unparseable: false,
+        }
+    }
+
+    pub(crate) fn excluding_baseline_unparseable() -> Self {
+        Self {
+            exclude_baseline_unparseable: true,
+        }
+    }
+}
 
 impl ImportAdapter for PythonImportAdapter {
     fn id(&self) -> &'static str {
@@ -62,7 +85,11 @@ impl ImportAdapter for PythonImportAdapter {
     }
 
     fn eligibility_note(&self) -> &'static str {
-        PYTHON_DEAD_IMPORT_ELIGIBILITY
+        if self.exclude_baseline_unparseable {
+            PYTHON_DEAD_IMPORT_EXCLUSION_ELIGIBILITY
+        } else {
+            PYTHON_DEAD_IMPORT_ELIGIBILITY
+        }
     }
 
     fn is_eligible(&self, repo: &Path) -> bool {
@@ -79,13 +106,26 @@ impl ImportAdapter for PythonImportAdapter {
 
     fn subtract_imports(&self, work: &Path) -> Result<Subtraction, MigrateError> {
         let files = collect_files(work, &is_python_file)?;
-        // 1) Classify the tree against the same single-lint selection. A parse
-        // failure here is a LOUD RepoDoesNotCheck before we touch anything.
-        classify(work)?;
+        let excluded_paths = classify(work, self.exclude_baseline_unparseable)?;
+
+        let included_files: Vec<PathBuf> = files
+            .iter()
+            .filter(|path| !excluded_paths.contains(path))
+            .cloned()
+            .collect();
+        let subtracted = if excluded_paths.is_empty() {
+            subtract_via_inplace_fix(work, &included_files, || run_ruff_fix(work))?
+        } else {
+            without_excluded_files(work, &excluded_paths, || {
+                classify(work, false)?;
+                subtract_via_inplace_fix(work, &included_files, || run_ruff_fix(work))
+            })?
+        };
 
         Ok(Subtraction {
             examined: files.len(),
-            files: subtract_via_inplace_fix(work, &files, || run_ruff_fix(work))?,
+            files: subtracted,
+            excluded_paths,
         })
     }
 
@@ -105,10 +145,7 @@ fn is_python_file(path: &Path) -> bool {
     path.extension().is_some_and(|e| e == "py")
 }
 
-/// Run `ruff check --select F401 --output-format json` (no `--fix`) over the
-/// isolated copy and classify the outcome into the shared error taxonomy. Returns
-/// `Ok(())` when the tree parses and the only findings (if any) are F401.
-fn classify(work: &Path) -> Result<(), MigrateError> {
+fn classify(work: &Path, exclude_baseline_unparseable: bool) -> Result<Vec<PathBuf>, MigrateError> {
     let output = Command::new("ruff")
         .current_dir(work)
         .args([
@@ -149,15 +186,132 @@ fn classify(work: &Path) -> Result<(), MigrateError> {
     };
 
     // A file ruff cannot parse cannot be certified subtractive.
-    if diagnostics
-        .iter()
-        .any(|d| d.get("code").and_then(Value::as_str) == Some(INVALID_SYNTAX))
-    {
+    let excluded_paths = invalid_syntax_paths(work, &diagnostics)?;
+    if !excluded_paths.is_empty() && !exclude_baseline_unparseable {
         return Err(MigrateError::RepoDoesNotCheck {
             stderr: "ruff reported invalid-syntax; the tree does not parse cleanly".to_string(),
         });
     }
 
+    Ok(excluded_paths)
+}
+
+fn invalid_syntax_paths(work: &Path, diagnostics: &[Value]) -> Result<Vec<PathBuf>, MigrateError> {
+    let root = std::fs::canonicalize(work).map_err(|source| MigrateError::Io {
+        path: work.to_path_buf(),
+        source,
+    })?;
+    let mut paths = BTreeSet::new();
+    for diagnostic in diagnostics
+        .iter()
+        .filter(|value| value.get("code").and_then(Value::as_str) == Some(INVALID_SYNTAX))
+    {
+        paths.insert(diagnostic_relative_path(work, &root, diagnostic)?);
+    }
+    Ok(paths.into_iter().collect())
+}
+
+fn diagnostic_relative_path(
+    work: &Path,
+    root: &Path,
+    diagnostic: &Value,
+) -> Result<PathBuf, MigrateError> {
+    let filename = diagnostic
+        .get("filename")
+        .and_then(Value::as_str)
+        .ok_or_else(|| MigrateError::FixCompute {
+            message: "ruff invalid-syntax diagnostic did not contain a filename".to_string(),
+        })?;
+    let reported = Path::new(filename);
+    let absolute = if reported.is_absolute() {
+        reported.to_path_buf()
+    } else {
+        work.join(reported)
+    };
+    let canonical = std::fs::canonicalize(&absolute).map_err(|source| MigrateError::Io {
+        path: absolute,
+        source,
+    })?;
+    let relative = canonical
+        .strip_prefix(root)
+        .map_err(|_| MigrateError::PathOutsideRepo {
+            path: canonical.clone(),
+            repo: root.to_path_buf(),
+        })?;
+    if !canonical.is_file() {
+        return Err(MigrateError::FixCompute {
+            message: format!(
+                "ruff invalid-syntax diagnostic named a non-file path: {}",
+                relative.display()
+            ),
+        });
+    }
+    Ok(relative.to_path_buf())
+}
+
+fn without_excluded_files<T>(
+    work: &Path,
+    excluded_paths: &[PathBuf],
+    action: impl FnOnce() -> Result<T, MigrateError>,
+) -> Result<T, MigrateError> {
+    let storage = tempfile::Builder::new()
+        .prefix("aoa-ruff-excluded-")
+        .tempdir()
+        .map_err(|source| MigrateError::Io {
+            path: work.to_path_buf(),
+            source,
+        })?;
+    let moved = stage_excluded_files(work, storage.path(), excluded_paths)?;
+
+    let result = action();
+    let restoration = restore_excluded_files(&moved);
+    match (result, restoration) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+        (Err(error), Err(restore_error)) => Err(MigrateError::FixCompute {
+            message: format!(
+                "ruff exclusion run failed: {error}; restoration also failed: {restore_error}"
+            ),
+        }),
+    }
+}
+
+fn stage_excluded_files(
+    work: &Path,
+    storage: &Path,
+    excluded_paths: &[PathBuf],
+) -> Result<Vec<(PathBuf, PathBuf)>, MigrateError> {
+    let mut moved = Vec::with_capacity(excluded_paths.len());
+    for (index, relative) in excluded_paths.iter().enumerate() {
+        let source_path = work.join(relative);
+        let stored_path = storage.join(index.to_string());
+        if let Err(source) = std::fs::rename(&source_path, &stored_path) {
+            if let Err(restore_error) = restore_excluded_files(&moved) {
+                return Err(MigrateError::FixCompute {
+                    message: format!(
+                        "failed to exclude {}: {source}; restoration also failed: {restore_error}",
+                        relative.display()
+                    ),
+                });
+            }
+            return Err(MigrateError::Io {
+                path: source_path,
+                source,
+            });
+        }
+        moved.push((stored_path, source_path));
+    }
+    Ok(moved)
+}
+
+fn restore_excluded_files(moved: &[(PathBuf, PathBuf)]) -> Result<(), MigrateError> {
+    for (stored_path, source_path) in moved.iter().rev() {
+        std::fs::rename(stored_path, source_path).map_err(|source| MigrateError::Io {
+            path: source_path.clone(),
+            source,
+        })?;
+    }
     Ok(())
 }
 
@@ -219,7 +373,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("a.py"), "import os\n").unwrap();
         // No pyproject.toml/setup.py/setup.cfg => ineligible.
-        assert!(!PythonImportAdapter.is_eligible(dir.path()));
+        assert!(!PythonImportAdapter::strict().is_eligible(dir.path()));
     }
 
     #[test]
@@ -228,7 +382,7 @@ mod tests {
             let dir = TempDir::new().unwrap();
             fs::write(dir.path().join(marker), "").unwrap();
             assert!(
-                PythonImportAdapter.is_eligible(dir.path()),
+                PythonImportAdapter::strict().is_eligible(dir.path()),
                 "{marker} should make the tree eligible"
             );
         }

@@ -72,6 +72,7 @@ impl ImportAdapter for RustImportAdapter {
         Ok(Subtraction {
             examined,
             files: compute_subtracted(&diagnostics, work)?,
+            excluded_paths: Vec::new(),
         })
     }
 

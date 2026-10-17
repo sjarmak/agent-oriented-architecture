@@ -28,7 +28,14 @@ pub fn run(args: &MigrateArgs) -> Result<i32> {
 /// An unknown id is a hard error (never silently ignored) so a campaign's pinned
 /// treatment set is exactly what runs.
 fn build_plan(args: &MigrateArgs) -> Result<MigrationPlan> {
-    let registry = aoa_migrate::all_fixes();
+    let mut registry = aoa_migrate::all_fixes();
+    if args.exclude_baseline_unparseable_python {
+        let python = registry
+            .iter_mut()
+            .find(|fix| fix.id() == "dead-imports-python")
+            .expect("dead-imports-python is registered");
+        *python = Box::new(aoa_migrate::DeadImportFix::python_excluding_baseline_unparseable());
+    }
     let known: Vec<&str> = registry.iter().map(|f| f.id()).collect();
     for id in &args.fix {
         if !known.contains(&id.as_str()) {
@@ -227,10 +234,18 @@ fn render_fix_reports(reports: &[FixReport]) -> String {
                 Some(reason) => format!("\n[fix:{}] {coverage}: {reason}\n", r.fix_id),
                 None => format!("\n[fix:{}] {coverage}\n", r.fix_id),
             };
-            match &r.warning {
+            let mut rendered = match &r.warning {
                 Some(warning) => format!("{line}[fix:{}] warning: {warning}\n", r.fix_id),
                 None => line,
+            };
+            for path in &r.excluded_paths {
+                rendered.push_str(&format!(
+                    "[fix:{}] excluded baseline-unparseable path: {}\n",
+                    r.fix_id,
+                    path.display()
+                ));
             }
+            rendered
         })
         .collect()
 }

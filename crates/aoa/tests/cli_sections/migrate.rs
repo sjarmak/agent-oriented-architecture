@@ -241,3 +241,108 @@ fn migrate_apply_reports_every_fix_when_nothing_was_planned() {
     assert_eq!(v["fix_reports"].as_array().expect("fix_reports").len(), 4);
     assert!(!repo.path().join(".aoa").exists());
 }
+
+#[test]
+fn migrate_python_exclusions_are_recorded_in_plan_and_apply_json() {
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
+    std::fs::write(
+        repo.path().join("pyproject.toml"),
+        "[project]\nname = \"fixture\"\nversion = \"0\"\n",
+    )
+    .unwrap();
+    std::fs::write(repo.path().join("valid.py"), "import os\nvalue = 1\n").unwrap();
+    std::fs::write(repo.path().join("invalid.py"), "def broken(:\n").unwrap();
+
+    for mode in [None, Some("--apply")] {
+        let mut command = aoa();
+        command.args([
+            "migrate",
+            "--json",
+            "--fix",
+            "dead-imports-python",
+            "--exclude-baseline-unparseable-python",
+        ]);
+        if let Some(mode) = mode {
+            command.arg(mode);
+        }
+        let assert = command.args(["--repo"]).arg(repo.path()).assert().success();
+        let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8");
+        let value: Value = serde_json::from_str(&stdout).expect("json");
+        assert_eq!(
+            value["fix_reports"][0]["excluded_paths"],
+            serde_json::json!(["invalid.py"])
+        );
+    }
+
+    assert_eq!(
+        std::fs::read(repo.path().join("invalid.py")).unwrap(),
+        b"def broken(:\n"
+    );
+}
+
+#[test]
+fn migrate_python_exclusions_are_recorded_in_plan_and_apply_human_output() {
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
+    std::fs::write(
+        repo.path().join("pyproject.toml"),
+        "[project]\nname = \"fixture\"\nversion = \"0\"\n",
+    )
+    .unwrap();
+    std::fs::write(repo.path().join("valid.py"), "import os\nvalue = 1\n").unwrap();
+    std::fs::write(repo.path().join("invalid.py"), "def broken(:\n").unwrap();
+
+    for mode in [None, Some("--apply")] {
+        let mut command = aoa();
+        command.args([
+            "migrate",
+            "--fix",
+            "dead-imports-python",
+            "--exclude-baseline-unparseable-python",
+        ]);
+        if let Some(mode) = mode {
+            command.arg(mode);
+        }
+        command
+            .args(["--repo"])
+            .arg(repo.path())
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(
+                "[fix:dead-imports-python] excluded baseline-unparseable path: invalid.py",
+            ));
+    }
+}
+
+#[test]
+fn migrate_python_exclusions_are_recorded_when_plan_is_empty() {
+    let repo = TempDir::new_in(fixture_root()).expect("tempdir");
+    std::fs::write(
+        repo.path().join("pyproject.toml"),
+        "[project]\nname = \"fixture\"\nversion = \"0\"\n",
+    )
+    .unwrap();
+    std::fs::write(repo.path().join("valid.py"), "value = 1\n").unwrap();
+    std::fs::write(repo.path().join("invalid.py"), "def broken(:\n").unwrap();
+
+    let assert = aoa()
+        .args([
+            "migrate",
+            "--apply",
+            "--json",
+            "--fix",
+            "dead-imports-python",
+            "--exclude-baseline-unparseable-python",
+            "--repo",
+        ])
+        .arg(repo.path())
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8");
+    let value: Value = serde_json::from_str(&stdout).expect("json");
+    assert_eq!(value["files_written"], 0);
+    assert_eq!(
+        value["fix_reports"][0]["excluded_paths"],
+        serde_json::json!(["invalid.py"])
+    );
+    assert!(!repo.path().join(".aoa").exists());
+}

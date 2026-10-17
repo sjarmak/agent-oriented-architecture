@@ -89,6 +89,7 @@ impl ImportAdapter for TsImportAdapter {
         Ok(Subtraction {
             examined: files.len(),
             files: subtracted,
+            excluded_paths: Vec::new(),
         })
     }
 

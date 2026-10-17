@@ -83,6 +83,7 @@ pub struct FixRun {
     pub(crate) changes: Vec<PlannedChange>,
     pub(crate) coverage: Coverage,
     pub(crate) warning: Option<String>,
+    pub(crate) excluded_paths: Vec<PathBuf>,
 }
 
 impl FixRun {
@@ -91,6 +92,7 @@ impl FixRun {
             changes,
             coverage: Coverage::Examined { count },
             warning: None,
+            excluded_paths: Vec::new(),
         }
     }
 
@@ -101,6 +103,7 @@ impl FixRun {
                 reason: reason.into(),
             },
             warning: None,
+            excluded_paths: Vec::new(),
         }
     }
 
@@ -110,6 +113,13 @@ impl FixRun {
 
     pub fn with_warning(self, warning: Option<String>) -> Self {
         Self { warning, ..self }
+    }
+
+    pub(crate) fn with_excluded_paths(self, excluded_paths: Vec<PathBuf>) -> Self {
+        Self {
+            excluded_paths,
+            ..self
+        }
     }
 }
 
@@ -122,6 +132,7 @@ pub struct FixReport {
     pub changes: usize,
     pub no_change_reason: Option<String>,
     pub warning: Option<String>,
+    pub excluded_paths: Vec<PathBuf>,
 }
 
 impl FixReport {
@@ -144,6 +155,7 @@ impl FixReport {
             changes: run.changes.len(),
             no_change_reason: run.changes.is_empty().then_some(idle_reason),
             warning: run.warning.clone(),
+            excluded_paths: run.excluded_paths.clone(),
         }
     }
 }
