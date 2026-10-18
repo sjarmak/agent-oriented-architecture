@@ -896,3 +896,90 @@ criterion, `min_holdout = 7`, the manifest order, and the stopping rule remain
 unchanged. Selection stops after five pre-seed admissions or after manifest
 exhaustion, which is inconclusive. Mining remains `--no-llm` and zero-spend.
 The rescreen stops before seed 1; it performs no agent trial or paid model call.
+
+## Rescreen under the repaired instrument
+
+Applied 2026-10-18 in the committed bytewise order. This section is the C6
+record for the repaired C3 instrument and stops at the preregistered pre-seed
+boundary.
+
+Before any rescreen work clone was opened or changed, the raw manifest command
+above was rerun against the unchanged pool. It returned 38 entries and SHA-256
+`49c80cf3ea89ac02235b7c8c5e165840bcd147823928fe1d4bf67349fc9aeb5b`.
+Identity, C1, C2, and every pinned baseline SHA therefore carry forward from
+the application dated 2026-10-15.
+
+The AOA executable was built from
+`30fff738d3bdc18cc60f2a3edbd5200d02fe1d78`. Mining used a clean detached
+Codeprobe checkout at `fd9ff15e01b69dd71ee539006fea3631c4062cb7` with
+`--goal navigation --dual-verify --count 20 --no-interactive --no-llm`.
+Each C1-and-C2-passing entry used separate baseline and migrated work clones,
+both detached at the manifest SHA. The four Rust migrated clones ran
+`cargo fetch --locked` successfully before AOA planning. AOA then performed
+its unchanged isolated offline check.
+
+In the table, `[]` is the complete Python invalid-syntax exclusion set for
+that entry, not an omitted result. `N/A` denotes a Rust entry. `Not run` means
+the carried identity or C1 result excluded the entry before repaired C3.
+
+| # | Child | Carried identity, C1, C2 | Repaired C3 | Python exclusions | C5 | Zero-spend C4 | Result |
+| ---: | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `arrow` | Pass | Reject: empty plan after 21 Python files | `[]` | Not reached | Not reached | C3 rejection |
+| 2 | `attrs` | Pass | Reject: empty plan after 54 Python files | `[]` | Not reached | Not reached | C3 rejection |
+| 3 | `click` | Pass | Reject: empty plan after 63 Python files | `[]` | Not reached | Not reached | C3 rejection |
+| 4 | `eza` | Pass | Fetch pass; reject: empty plan after 68 Rust files | N/A | Not reached | Not reached | C3 rejection |
+| 5 | `fd` | Pass | Fetch pass; reject: empty plan after 24 Rust files | N/A | Not reached | Not reached | C3 rejection |
+| 6 | `flask` | Pass | Reject: empty plan after 83 Python files | `[]` | Not reached | Not reached | C3 rejection |
+| 7 | `gunicorn` | C1 reject: prior R0 exposure | Not reached | Not run | Not reached | Not reached | C1 rejection |
+| 8 | `gunicorn-migrated` | Identity reject: local origin | Not reached | Not run | Not reached | Not reached | Identity rejection |
+| 9 | `httpie` | C1 reject: prior R0 exposure | Not reached | Not run | Not reached | Not reached | C1 rejection |
+| 10 | `httpie-migrated` | Identity reject: local origin | Not reached | Not run | Not reached | Not reached | Identity rejection |
+| 11 | `httpx` | Pass | Reject: empty plan after 60 Python files | `[]` | Not reached | Not reached | C3 rejection |
+| 12 | `hyperfine` | Pass | Fetch pass; reject: empty plan after 41 Rust files | N/A | Not reached | Not reached | C3 rejection |
+| 13 | `isort` | C1 reject: prior R0 exposure | Not reached | Not run | Not reached | Not reached | C1 rejection |
+| 14 | `isort-migrated` | Identity reject: local origin | Not reached | Not run | Not reached | Not reached | Identity rejection |
+| 15 | `jinja` | Pass | Reject: empty plan after 60 Python files | `[]` | Not reached | Not reached | C3 rejection |
+| 16 | `just` | Pass | Fetch pass; 3 `navigability-anchor` changes; migrated `c2f76e5ffc614203fb499c54fb3decb53ef1c950` | N/A | Pass | Reject: pinned miner returned terminal `UNSUPPORTED_LANGUAGE` for Rust; 0 tasks | C4 rejection |
+| 17 | `just-migrated` | Identity reject: local origin | Not reached | Not run | Not reached | Not reached | Identity rejection |
+| 18 | `marshmallow` | C1 reject: prior R0 exposure | Not reached | Not run | Not reached | Not reached | C1 rejection |
+| 19 | `marshmallow-migrated` | Identity reject: local origin | Not reached | Not run | Not reached | Not reached | Identity rejection |
+| 20 | `paramiko` | Pass | Reject: empty plan after 69 Python files | `[]` | Not reached | Not reached | C3 rejection |
+| 21 | `pexpect` | Pass | 9 `dead-imports-python` changes; migrated `3d3850401f474a3a5d528de56691d3202f2f0023` | `notes/my_forkpty.py`; `tests/platform_checks/check.py`; `tests/platform_checks/check2.py`; `tests/platform_checks/check_control_terminal.py`; `tests/platform_checks/check_handler.py`; `tests/platform_checks/check_read.py`; `tests/platform_checks/check_signals.py`; `tests/ticker.py` | Pass | 10 admitted dual tasks, floor met | Pre-seed admission |
+| 22 | `prompt_toolkit` | Pass | Reject: empty plan after 298 Python files | `[]` | Not reached | Not reached | C3 rejection |
+| 23 | `pygments` | Pass | 1 `dead-imports-python` change; migrated `5b0081129b776f30d982a7d598d7d0d39490fcaf` | `tests/examplefiles/python/switch_case.py`; `tests/examplefiles/python/unicodedoc.py` | Pass | 13 admitted dual tasks, floor met | Pre-seed admission |
+| 24 | `requests` | C1 reject: prior R0 exposure | Not reached | Not run | Not reached | Not reached | C1 rejection |
+| 25 | `requests-migrated` | Identity reject: local origin | Not reached | Not run | Not reached | Not reached | Identity rejection |
+| 26 | `rich` | C1 reject: prior R0 exposure | Not reached | Not run | Not reached | Not reached | C1 rejection |
+| 27 | `rich-migrated` | Identity reject: local origin | Not reached | Not run | Not reached | Not reached | Identity rejection |
+| 28 | `schedule` | Pass | 1 `dead-imports-python` change; migrated `0ac479826ffebe58e785c4ae5e8b4c7133ab38cd` | `[]` | Pass | Reject: 4 admitted dual tasks, below 7 | C4 rejection |
+| 29 | `sqlparse` | C1 reject: prior R0 exposure | Not reached | Not run | Not reached | Not reached | C1 rejection |
+| 30 | `sqlparse-migrated` | Identity reject: local origin | Not reached | Not run | Not reached | Not reached | Identity rejection |
+| 31 | `starlette` | Pass | Reject: empty plan after 67 Python files | `[]` | Not reached | Not reached | C3 rejection |
+| 32 | `tornado` | Pass | Reject: empty plan after 107 Python files | `[]` | Not reached | Not reached | C3 rejection |
+| 33 | `tqdm` | Pass | Reject: empty plan after 68 Python files | `DEMO.ipynb` | Not reached | Not reached | C3 rejection |
+| 34 | `typer` | Pass | Reject: empty plan after 634 Python files | `[]` | Not reached | Not reached | C3 rejection |
+| 35 | `uvicorn` | Pass | Reject: empty plan after 79 Python files | `[]` | Not reached | Not reached | C3 rejection |
+| 36 | `websockets` | C1 reject: prior R0 exposure | Not reached | Not run | Not reached | Not reached | C1 rejection |
+| 37 | `websockets-migrated` | Identity reject: local origin | Not reached | Not run | Not reached | Not reached | Identity rejection |
+| 38 | `werkzeug` | Pass | Reject: empty plan after 138 Python files | `[]` | Not reached | Not reached | C3 rejection |
+
+The per-entry plan, apply, fetch, mining, and status artifacts live under
+`codeprobe/runs/r0-third-design-rescreen/<child>/`. The admitted corpora live
+under each admitted entry's `corpus/tasks` subtree. Codeprobe's structural
+validator passed all 10 `pexpect` tasks, all 13 `pygments` tasks, and all four
+rejected `schedule` tasks. Each successful mining terminal envelope records
+zero model calls, zero input or output tokens, and zero cost.
+
+The admitted migrated-state indexes are:
+
+- `codeprobe/runs/r0-third-design-rescreen/pexpect/index-migrated.aoa.json`,
+  built at migrated SHA `3d3850401f474a3a5d528de56691d3202f2f0023`,
+  with 98 documents and 2,238 writable symbols.
+- `codeprobe/runs/r0-third-design-rescreen/pygments/index-migrated.aoa.json`,
+  built at migrated SHA `5b0081129b776f30d982a7d598d7d0d39490fcaf`,
+  with 403 documents and 11,449 writable symbols.
+
+The pool is exhausted with two pre-seed admissions, short of the required
+five. Under the fixed stopping rule the rescreen is inconclusive. Seed 1 was
+not launched. No `codeprobe run`, agent trial, or paid model call occurred, no
+pool checkout was modified, and `falsification.k3.json` was not modified.
