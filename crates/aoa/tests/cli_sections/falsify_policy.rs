@@ -62,7 +62,30 @@ fn policy_compile_unknown_forge_fails_loudly() {
 }
 
 #[test]
-fn policy_compile_known_forge_succeeds() {
+fn policy_compile_gitlab_fails_before_writing_artifacts() {
+    let repo = TempDir::new_in(fixture_root()).unwrap();
+    std::fs::write(repo.path().join("aoa-policy.yaml"), "protected_paths: []\n").unwrap();
+
+    aoa()
+        .args([
+            "policy",
+            "compile",
+            "--repo",
+            repo.path().to_str().unwrap(),
+            "--forge",
+            "gitlab-ci",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unsupported forge 'gitlab-ci'"));
+
+    assert!(!repo.path().join(".github").exists());
+    assert!(!repo.path().join(".pre-commit-config.yaml").exists());
+    assert!(!repo.path().join(".github/CODEOWNERS").exists());
+}
+
+#[test]
+fn policy_compile_github_actions_writes_matching_workflow() {
     let repo = TempDir::new_in(fixture_root()).unwrap();
     std::fs::write(repo.path().join("aoa-policy.yaml"), "protected_paths: []\n").unwrap();
     aoa()
@@ -76,6 +99,10 @@ fn policy_compile_known_forge_succeeds() {
         ])
         .assert()
         .success();
+
+    let workflow =
+        std::fs::read_to_string(repo.path().join(".github/workflows/aoa-policy.yml")).unwrap();
+    assert!(workflow.contains("uses: actions/checkout@v4"));
 }
 
 // A known forge but no aoa-policy.yaml fails loud — compiling from a missing
