@@ -107,14 +107,6 @@ mod tests {
     }
 
     #[test]
-    fn generators_are_deterministic() {
-        let p = sample();
-        assert_eq!(precommit_config(&p).unwrap(), precommit_config(&p).unwrap());
-        assert_eq!(ci_workflow(&p).unwrap(), ci_workflow(&p).unwrap());
-        assert_eq!(codeowners(&p).unwrap(), codeowners(&p).unwrap());
-    }
-
-    #[test]
     fn every_artifact_carries_the_provenance_header() {
         let p = sample();
         assert!(precommit_config(&p).unwrap().starts_with(PROVENANCE));

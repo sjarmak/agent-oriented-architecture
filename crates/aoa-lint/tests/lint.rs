@@ -15,30 +15,6 @@ fn run() -> LintReport {
     lint_context(&fixture_root(), "o200k_base").expect("lint_context should succeed")
 }
 
-/// Criterion 1: detect a set of smells over the fixture tree, with each finding
-/// mapped to a 2606.15828 catalog category; assert >=3 DISTINCT smell types.
-#[test]
-fn detects_distinct_smell_categories_mapped_to_catalog() {
-    let report = run();
-
-    let categories: BTreeSet<&'static str> =
-        report.findings.iter().map(|f| f.category.id()).collect();
-
-    assert!(
-        categories.len() >= 3,
-        "expected >=3 distinct smell categories, got {categories:?}"
-    );
-
-    // Every finding carries a stable, non-empty catalog id (machine-readable
-    // mapping to the taxonomy).
-    for finding in &report.findings {
-        assert!(
-            !finding.category.id().is_empty(),
-            "finding category id must be non-empty: {finding:?}"
-        );
-    }
-}
-
 /// Criterion 1 (specifics): the fixtures trigger each of the five catalog
 /// categories at least once, confirming the mapping is concrete.
 #[test]

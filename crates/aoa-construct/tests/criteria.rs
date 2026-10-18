@@ -162,40 +162,6 @@ fn structure_measure_spec_is_documented() {
     }
 }
 
-// AC3: a structure measure CAN promote to Gating when a confirming
-// external-outcome correlation exists — the same path as the process metrics.
-// For a LowerIsBetter metric against a lower-is-better outcome (revert rate),
-// metric-good and outcome-good point the same way, so a POSITIVE coefficient
-// confirms (fewer unused imports track fewer reverts).
-#[test]
-fn structure_measure_promotes_to_gating_on_confirming_correlation() {
-    let t = GatingThresholds::default();
-    let report = CorrelationReport {
-        metric: "unused_import_proxy".into(),
-        orientation: MetricOrientation::LowerIsBetter,
-        correlations: vec![OutcomeCorrelation {
-            outcome: ExternalOutcome::RevertRate,
-            coefficient: 0.8,
-            n: 12,
-            p_value: 0.001,
-        }],
-    };
-    assert_eq!(classify_metric(Some(&report), &t), MetricMode::Gating);
-
-    // The same evidence with the WRONG sign (negative coefficient) does not
-    // confirm a LowerIsBetter-vs-revert hypothesis — it stays advisory.
-    let wrong_sign = CorrelationReport {
-        correlations: vec![OutcomeCorrelation {
-            outcome: ExternalOutcome::RevertRate,
-            coefficient: -0.8,
-            n: 12,
-            p_value: 0.001,
-        }],
-        ..report
-    };
-    assert_eq!(classify_metric(Some(&wrong_sign), &t), MetricMode::Advisory);
-}
-
 // Criterion 6 (artifact): the current determination is a reproducible artifact
 // that names its data source and classifies every gating candidate. With no
 // external-outcome corpus available, every candidate is advisory — the

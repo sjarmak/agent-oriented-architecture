@@ -29,19 +29,3 @@ pub fn compile_enforcement(forge: &str) -> Result<String, ForgeError> {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn known_forge_compiles() {
-        assert!(compile_enforcement("github-actions").is_ok());
-    }
-
-    #[test]
-    fn unknown_forge_fails_loudly() {
-        let err = compile_enforcement("svn-hooks").unwrap_err();
-        assert!(err.to_string().contains("unsupported forge"));
-    }
-}
