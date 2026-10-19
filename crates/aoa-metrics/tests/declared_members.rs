@@ -119,7 +119,11 @@ fn gradle_settings_do_not_change_the_subtree_partition() {
 #[test]
 fn a_malformed_manifest_costs_only_its_own_ecosystem_its_members() {
     let dir = TempDir::new().unwrap();
-    write(dir.path(), "package.json", "{ \"name\": \"x\", }");
+    write(
+        dir.path(),
+        "package.json",
+        "{\"workspaces\":[\"packages/core\",false]}",
+    );
     write(dir.path(), "settings.gradle", "include ':tools'\n");
     write(dir.path(), "go.work", "use ./services/api\n");
 

@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use hegel::{generators as gs, TestCase};
 use serde_json::{json, Map, Value};
 use tempfile::TempDir;
 
@@ -93,6 +94,82 @@ fn malformed_cargo_workspace_manifest_errors() {
         err.to_string().contains("Cargo.toml"),
         "error names the manifest: {err}"
     );
+}
+
+#[test]
+fn non_string_workspace_member_entries_are_malformed() {
+    let cases = [
+        (
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"crates/core\", true]\n",
+            "workspace.members entry 1",
+        ),
+        (
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"crates/core\"]\nexclude = [false]\n",
+            "workspace.exclude entry 0",
+        ),
+        (
+            "Cargo.toml",
+            "[workspace]\nmembers = []\nexclude = [false]\n",
+            "workspace.exclude entry 0",
+        ),
+        (
+            "pnpm-workspace.yaml",
+            "packages:\n  - 'packages/core'\n  - true\n",
+            "packages entry 1",
+        ),
+        (
+            "package.json",
+            r#"{"workspaces":["packages/core",null]}"#,
+            "workspaces entry 1",
+        ),
+        (
+            "package.json",
+            r#"{"workspaces":{"packages":["packages/core",{}]}}"#,
+            "workspaces.packages entry 1",
+        ),
+    ];
+
+    for (manifest, contents, offending_entry) in cases {
+        let dir = TempDir::new().unwrap();
+        write(dir.path(), manifest, contents);
+
+        let err = discover_partition(dir.path()).unwrap_err();
+        assert!(matches!(err, aoa_metrics::SubtreeError::Manifest { .. }));
+        assert!(err.to_string().contains(manifest), "{err}");
+        assert!(err.to_string().contains(offending_entry), "{err}");
+    }
+}
+
+#[hegel::test]
+fn every_generated_non_string_workspace_member_is_rejected(tc: TestCase) {
+    let ecosystem = tc.draw(gs::sampled_from(vec![0_u8, 1, 2, 3]));
+    let invalid = tc.draw(gs::sampled_from(vec!["true", "7", "{}", "[]"]));
+    let (manifest, contents) = match ecosystem {
+        0 => (
+            "Cargo.toml",
+            format!("[workspace]\nmembers = [\"member\", {invalid}]\n"),
+        ),
+        1 => (
+            "pnpm-workspace.yaml",
+            format!("packages:\n  - member\n  - {invalid}\n"),
+        ),
+        2 => (
+            "package.json",
+            format!(r#"{{"workspaces":["member",{invalid}]}}"#),
+        ),
+        _ => (
+            "package.json",
+            format!(r#"{{"workspaces":{{"packages":["member",{invalid}]}}}}"#),
+        ),
+    };
+    let dir = TempDir::new().unwrap();
+    write(dir.path(), manifest, &contents);
+
+    let err = discover_partition(dir.path()).unwrap_err();
+    assert!(matches!(err, aoa_metrics::SubtreeError::Manifest { .. }));
+    assert!(err.to_string().contains(manifest), "{err}");
 }
 
 // --- discovery: npm / pnpm / go ----------------------------------------------

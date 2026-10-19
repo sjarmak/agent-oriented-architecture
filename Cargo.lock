@@ -286,6 +286,7 @@ version = "0.1.0"
 dependencies = [
  "aoa-trace",
  "globset",
+ "hegeltest",
  "serde",
  "serde_json",
  "serde_norway",

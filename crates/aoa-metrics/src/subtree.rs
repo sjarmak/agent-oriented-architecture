@@ -273,24 +273,32 @@ fn cargo_members(root: &Path) -> Result<Option<Vec<String>>, SubtreeError> {
     let Some(workspace) = value.get("workspace") else {
         return Ok(None); // a plain package manifest, not a workspace
     };
-    let patterns = toml_string_array(workspace.get("members"));
+    let patterns = toml_string_array(&path, "workspace.members", workspace.get("members"))?;
+    let excludes = toml_string_array(&path, "workspace.exclude", workspace.get("exclude"))?;
     if patterns.is_empty() {
         return Ok(None);
     }
-    let excludes = toml_string_array(workspace.get("exclude"));
     let members = expand_members(root, &path, &patterns, &excludes, "Cargo.toml")?;
     Ok((!members.is_empty()).then_some(members))
 }
 
-fn toml_string_array(value: Option<&toml::Value>) -> Vec<String> {
-    value
-        .and_then(toml::Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-                .collect()
+fn toml_string_array(
+    path: &Path,
+    field: &str,
+    value: Option<&toml::Value>,
+) -> Result<Vec<String>, SubtreeError> {
+    let Some(values) = value.and_then(toml::Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            value.as_str().map(str::to_string).ok_or_else(|| {
+                manifest_err(path, format!("{field} entry {index} must be a string"))
+            })
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 /// `go.work` `use` directives: `use ./dir` or a `use ( ... )` block.
@@ -468,14 +476,21 @@ fn pnpm_members(root: &Path) -> Result<Option<Vec<String>>, SubtreeError> {
     };
     let value: serde_norway::Value =
         serde_norway::from_str(&raw).map_err(|e| manifest_err(&path, e))?;
-    let patterns: Vec<String> = value
+    let patterns = value
         .get("packages")
         .and_then(serde_norway::Value::as_sequence)
-        .map(|seq| {
-            seq.iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
+        .map(|values| {
+            values
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    value.as_str().map(str::to_string).ok_or_else(|| {
+                        manifest_err(&path, format!("packages entry {index} must be a string"))
+                    })
+                })
                 .collect()
         })
+        .transpose()?
         .unwrap_or_default();
     expand_npm_style(root, &path, patterns)
 }
@@ -488,19 +503,25 @@ fn npm_members(root: &Path) -> Result<Option<Vec<String>>, SubtreeError> {
     };
     let value: serde_json::Value =
         serde_json::from_str(&raw).map_err(|e| manifest_err(&path, e))?;
-    let workspaces = match value.get("workspaces") {
-        Some(serde_json::Value::Array(arr)) => arr.as_slice(),
+    let (field, workspaces) = match value.get("workspaces") {
+        Some(serde_json::Value::Array(arr)) => ("workspaces", arr.as_slice()),
         Some(serde_json::Value::Object(obj)) => obj
             .get("packages")
             .and_then(|p| p.as_array())
             .map(Vec::as_slice)
-            .unwrap_or_default(),
+            .map(|packages| ("workspaces.packages", packages))
+            .unwrap_or(("workspaces.packages", &[])),
         _ => return Ok(None),
     };
-    let patterns: Vec<String> = workspaces
+    let patterns = workspaces
         .iter()
-        .filter_map(|v| v.as_str().map(str::to_string))
-        .collect();
+        .enumerate()
+        .map(|(index, value)| {
+            value.as_str().map(str::to_string).ok_or_else(|| {
+                manifest_err(&path, format!("{field} entry {index} must be a string"))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     expand_npm_style(root, &path, patterns)
 }
 
