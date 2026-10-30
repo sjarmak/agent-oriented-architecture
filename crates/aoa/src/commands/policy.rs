@@ -12,7 +12,7 @@ use crate::cli::{PolicyArgs, PolicyCommand};
 use crate::commands::enforce::install_enforce_hooks;
 use crate::commands::generated::write_gitattributes_plane;
 use crate::commands::git;
-use crate::forge::compile_enforcement;
+use crate::forge::validate_forge;
 use crate::output::{eprint_human, print_human, print_json};
 
 /// The repo-relative CODEOWNERS location both `compile` and `infer-owners`
@@ -43,7 +43,7 @@ struct CompileView {
 /// byte-identical content (idempotent).
 fn compile(repo: &Path, forge: &str, json: bool) -> Result<i32> {
     // Fail loud on an unsupported forge before writing anything (R-silent).
-    compile_enforcement(forge).context("cannot compile the CI plane")?;
+    validate_forge(forge).context("cannot compile the CI plane")?;
 
     let policy = load_policy(repo)?;
 

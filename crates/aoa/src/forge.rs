@@ -15,13 +15,9 @@ pub enum ForgeError {
     Unsupported { forge: String, supported: String },
 }
 
-/// Compile the enforcement plane for `forge`.
-///
-/// Returns the adapter identifier on success and a loud [`ForgeError`] for any
-/// forge without an adapter — it never returns `Ok` for an unknown forge.
-pub fn compile_enforcement(forge: &str) -> Result<String, ForgeError> {
+pub fn validate_forge(forge: &str) -> Result<(), ForgeError> {
     if forge == SUPPORTED_FORGE {
-        Ok(format!("compiled enforcement plane for {forge}"))
+        Ok(())
     } else {
         Err(ForgeError::Unsupported {
             forge: forge.to_string(),
@@ -36,9 +32,9 @@ mod tests {
 
     #[test]
     fn only_github_actions_has_an_enforcement_adapter() {
-        assert!(compile_enforcement("github-actions").is_ok());
+        assert_eq!(validate_forge("github-actions"), Ok(()));
         assert!(matches!(
-            compile_enforcement("gitlab-ci"),
+            validate_forge("gitlab-ci"),
             Err(ForgeError::Unsupported { forge, .. }) if forge == "gitlab-ci"
         ));
     }
