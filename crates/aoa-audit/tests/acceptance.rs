@@ -852,6 +852,25 @@ fn audit_warns_and_degrades_for_a_non_string_workspace_member() {
     assert!(warning.contains("pnpm-workspace.yaml"), "{warning}");
 }
 
+#[test]
+fn audit_warns_and_degrades_for_a_non_array_workspace_container() {
+    let repo = tempfile::tempdir().expect("temp repo");
+    std::fs::write(repo.path().join("pnpm-workspace.yaml"), "packages: false\n")
+        .expect("write malformed manifest");
+    std::fs::write(repo.path().join("main.rs"), "fn main() {}\n").expect("write source");
+
+    let report = audit(repo.path(), &AuditConfig::default()).expect("audit must not abort");
+
+    assert!(!report.items.is_empty());
+    assert!(report.items.iter().all(|item| item.subtree.is_none()));
+    let warning = report
+        .subtree_discovery_warning
+        .as_deref()
+        .expect("malformed container must be surfaced");
+    assert!(warning.contains("pnpm-workspace.yaml"), "{warning}");
+    assert!(warning.contains("packages must be an array"), "{warning}");
+}
+
 // The same degrade contract for a symlinked manifest (rejected, never
 // followed): the punch list survives with the failure surfaced.
 #[cfg(unix)]

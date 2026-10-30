@@ -142,6 +142,47 @@ fn non_string_workspace_member_entries_are_malformed() {
     }
 }
 
+#[test]
+fn non_array_workspace_member_containers_are_malformed() {
+    let cases = [
+        (
+            "Cargo.toml",
+            "[workspace]\nmembers = false\n",
+            "workspace.members must be an array",
+        ),
+        (
+            "Cargo.toml",
+            "[workspace]\nmembers = []\nexclude = 7\n",
+            "workspace.exclude must be an array",
+        ),
+        (
+            "pnpm-workspace.yaml",
+            "packages: false\n",
+            "packages must be an array",
+        ),
+        (
+            "package.json",
+            r#"{"workspaces":null}"#,
+            "workspaces must be an array or object",
+        ),
+        (
+            "package.json",
+            r#"{"workspaces":{"packages":false}}"#,
+            "workspaces.packages must be an array",
+        ),
+    ];
+
+    for (manifest, contents, expected) in cases {
+        let dir = TempDir::new().unwrap();
+        write(dir.path(), manifest, contents);
+
+        let err = discover_partition(dir.path()).unwrap_err();
+        assert!(matches!(err, aoa_metrics::SubtreeError::Manifest { .. }));
+        assert!(err.to_string().contains(manifest), "{err}");
+        assert!(err.to_string().contains(expected), "{err}");
+    }
+}
+
 #[hegel::test]
 fn every_generated_non_string_workspace_member_is_rejected(tc: TestCase) {
     let ecosystem = tc.draw(gs::sampled_from(vec![0_u8, 1, 2, 3]));
@@ -162,6 +203,31 @@ fn every_generated_non_string_workspace_member_is_rejected(tc: TestCase) {
         _ => (
             "package.json",
             format!(r#"{{"workspaces":{{"packages":["member",{invalid}]}}}}"#),
+        ),
+    };
+    let dir = TempDir::new().unwrap();
+    write(dir.path(), manifest, &contents);
+
+    let err = discover_partition(dir.path()).unwrap_err();
+    assert!(matches!(err, aoa_metrics::SubtreeError::Manifest { .. }));
+    assert!(err.to_string().contains(manifest), "{err}");
+}
+
+#[hegel::test]
+fn every_generated_non_array_workspace_container_is_rejected(tc: TestCase) {
+    let ecosystem = tc.draw(gs::sampled_from(vec![0_u8, 1, 2, 3, 4]));
+    let invalid = tc.draw(gs::sampled_from(vec!["true", "7"]));
+    let (manifest, contents) = match ecosystem {
+        0 => ("Cargo.toml", format!("[workspace]\nmembers = {invalid}\n")),
+        1 => (
+            "Cargo.toml",
+            format!("[workspace]\nmembers = []\nexclude = {invalid}\n"),
+        ),
+        2 => ("pnpm-workspace.yaml", format!("packages: {invalid}\n")),
+        3 => ("package.json", format!(r#"{{"workspaces":{invalid}}}"#)),
+        _ => (
+            "package.json",
+            format!(r#"{{"workspaces":{{"packages":{invalid}}}}}"#),
         ),
     };
     let dir = TempDir::new().unwrap();

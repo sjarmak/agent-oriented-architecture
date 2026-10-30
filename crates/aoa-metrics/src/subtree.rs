@@ -287,8 +287,11 @@ fn toml_string_array(
     field: &str,
     value: Option<&toml::Value>,
 ) -> Result<Vec<String>, SubtreeError> {
-    let Some(values) = value.and_then(toml::Value::as_array) else {
+    let Some(value) = value else {
         return Ok(Vec::new());
+    };
+    let Some(values) = value.as_array() else {
+        return Err(manifest_err(path, format!("{field} must be an array")));
     };
     values
         .iter()
@@ -476,10 +479,12 @@ fn pnpm_members(root: &Path) -> Result<Option<Vec<String>>, SubtreeError> {
     };
     let value: serde_norway::Value =
         serde_norway::from_str(&raw).map_err(|e| manifest_err(&path, e))?;
-    let patterns = value
-        .get("packages")
-        .and_then(serde_norway::Value::as_sequence)
-        .map(|values| {
+    let patterns = match value.get("packages") {
+        None => Vec::new(),
+        Some(value) => {
+            let values = value
+                .as_sequence()
+                .ok_or_else(|| manifest_err(&path, "packages must be an array"))?;
             values
                 .iter()
                 .enumerate()
@@ -488,10 +493,9 @@ fn pnpm_members(root: &Path) -> Result<Option<Vec<String>>, SubtreeError> {
                         manifest_err(&path, format!("packages entry {index} must be a string"))
                     })
                 })
-                .collect()
-        })
-        .transpose()?
-        .unwrap_or_default();
+                .collect::<Result<Vec<_>, _>>()?
+        }
+    };
     expand_npm_style(root, &path, patterns)
 }
 
@@ -505,13 +509,19 @@ fn npm_members(root: &Path) -> Result<Option<Vec<String>>, SubtreeError> {
         serde_json::from_str(&raw).map_err(|e| manifest_err(&path, e))?;
     let (field, workspaces) = match value.get("workspaces") {
         Some(serde_json::Value::Array(arr)) => ("workspaces", arr.as_slice()),
-        Some(serde_json::Value::Object(obj)) => obj
-            .get("packages")
-            .and_then(|p| p.as_array())
-            .map(Vec::as_slice)
-            .map(|packages| ("workspaces.packages", packages))
-            .unwrap_or(("workspaces.packages", &[])),
-        _ => return Ok(None),
+        Some(serde_json::Value::Object(obj)) => match obj.get("packages") {
+            Some(serde_json::Value::Array(packages)) => {
+                ("workspaces.packages", packages.as_slice())
+            }
+            Some(_) => {
+                return Err(manifest_err(&path, "workspaces.packages must be an array"));
+            }
+            None => ("workspaces.packages", &[] as &[serde_json::Value]),
+        },
+        Some(_) => {
+            return Err(manifest_err(&path, "workspaces must be an array or object"));
+        }
+        None => return Ok(None),
     };
     let patterns = workspaces
         .iter()
